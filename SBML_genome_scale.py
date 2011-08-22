@@ -57,61 +57,60 @@ def write_resource_file(model, outfile):
 			outf.write(ret + "\n")
 
 
+def IDdict(model):
+	""" Create a corresponence between species type designation and ID """
+	name_corr = dict()
+	listSpecies = model.getListOfSpecies()
+	for lst in listSpecies:
+		name_corr[lst.getId()] = lst.getSpeciesType()
+	return name_corr
+
 ### MAIN ###
 
-if __name__ == "__main__":
-	xmlfile = sys.argv[1]
-	outfile = sys.argv[2]
-	reader = SBMLReader()
-	doc = reader.readSBML(xmlfile)
-	model = doc.getModel()
-	write_resource_file(model, outfile)
+#if __name__ == "__main__":
+#	xmlfile = sys.argv[1]
+#	outfile = sys.argv[2]
+#	reader = SBMLReader()
+#	doc = reader.readSBML(xmlfile)
+#	model = doc.getModel()
+#	write_resource_file(model, outfile)
+
+
+
+xmlfile = sys.argv[1]
+reader = SBMLReader()
+doc = reader.readSBML(xmlfile)
+model = doc.getModel()
+
+listrxn = model.getListOfReactions() 
+for rxn in listrxn:
+	print rxn.getName()
+
+	### Get the reactants and products and their stoichiometries, along with any rxn modifiers
 	
-
-#	if numAnnot == 1:
-#		print dir(ele.getAnnotation().getChild(0))
-#		annot = ele.getAnnotation().getChild(0)
-#		print annot.getNumChildren()
-#		level3 = annot.getChild(0)
-#		print level3.getNumChildren()
-#		print level3.getName()
-		
-#		break
-	#print dir(RDFAnnotationParser.parseRDFAnnotation(ele.getAnnotation()))
+	for lst in rxn.getListOfReactants():
+		print [lst.getSpecies(), lst.getStoichiometry()*-1]
+	for lst in rxn.getListOfProducts():
+		print [lst.getSpecies(), lst.getStoichiometry()]
+	print [m.getSpecies() for m in rxn.getListOfModifiers()]
 	
-
-
-#species = model.getListOfSpecies()
-
-#i = 1
-#print dir(list_species())
-
-
-
-
-#listo = model.getListOfSpecies()
-#print "\n".join(dir(model))
-#listrxn = model.getListOfReactions() 
-
-
+	### Get The parameters of the rxn ###
 	
-#i = 1	
-#for rxn in listrxn:
-	#for lst in (rxn.getListOfReactants(), rxn.getListOfProducts()):
-	#	print "\t", [(r.getSpecies(), r.getStoichiometry()) for r in lst]
-	#print list(rxn.getListOfModifiers())
-	#print [m.getSpecies() for m in rxn.getListOfModifiers()]
-#	parameters = list(rxn.getKineticLaw().getListOfParameters())
-#	if len(parameters) > 0:
-#		print [(p.getId(), p.getValue(), p.getUnits()) for p in parameters]
-#		break
-	#print dir(kin)
-	#break
+	parameters = list(rxn.getKineticLaw().getListOfParameters())
+	if len(parameters) > 0:
+		print [(p.getId(), p.getValue(), p.getUnits()) for p in parameters]
+	print rxn.getKineticLaw().getFormula()
+	break
+
+
+
+
+listParams = model.getListOfParameters()
+for par in listParams:
+	print "\t", [par.getId(), par.getValue(), par.getUnits()]
 	
 	
-#	i += 1
-#	if i > 10:
-#		break
+
 	
 		
 	
