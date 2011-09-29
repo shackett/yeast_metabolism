@@ -42,9 +42,6 @@ def write_resource_file(model, outfile):
 	outf = open(outfile, "w")
 	speciesT = model.getListOfSpeciesTypes()
 	for ele in speciesT:
-		#print dir(ele.getAnnotation())
-		#.getAttrURI()
-		#print "\n".join(dir(ele.getAnnotation().getChild()))
 		annotation = ele.getAnnotation()
 		if annotation == None:
 			print "No annotation:", ele.getName()
@@ -65,6 +62,53 @@ def IDdict(model):
 		name_corr[lst.getId()] = lst.getSpeciesType()
 	return name_corr
 
+def write_rxn(model, outfile, modifiers = "TRUE"):
+
+	listrxn = model.getListOfReactions()
+	listspecT = model.getListOfSpeciesTypes()
+	listspec = model.getListOfSpecies()
+
+	rxn_outfile = "".join(("rxn_", outfile, ".tsv"))
+	#rxn_par_outfile = "".join(("rxn_par_", outfile, ".tsv"))
+	spec_outfile = "".join(("spec_", outfile, ".tsv"))
+
+	rxn_outf = open(rxn_outfile, 'w')
+	rxn_outf.write("%s\t%s\t%s\t%s\n" % ("Reaction", "ReactionID", "Metabolite", "StoiCoef"))
+	rxn_outf.close()	
+
+	#par_outf = open(rxn_par_outfile, 'w')
+	#par_outf.write("%s\t%s\t%s\t%s\n" % ("ReactionID", "ParID", "Value", "Units"))
+	#par_outf.close()
+
+	spec_outf = open(spec_outfile, 'w')
+	spec_outf.write("%s\t%s\t%s\t%s\n" % ("SpeciesID", "SpeciesName", "SpeciesType", "Compartment"))
+	spec_outf.close()
+
+
+	met_namedict = dict()
+	for spect in listspecT:
+		met_namedict[spect.getId()] = spect.getName()
+
+	spec_outf = open(spec_outfile, 'a')	
+	for spec in listspec:
+		spec_outf.write("%s\t%s\t%s\t%s\n" % (spec.getId(), met_namedict[spec.getSpeciesType()], spec.getSpeciesType(), spec.getCompartment()))
+	spec_outf.close()	
+
+	for rxn in listrxn:
+	
+	### Get the reactants and products and their stoichiometries, along with any rxn modifiers
+	
+		rxn_outf = open(rxn_outfile, 'a')
+		for lst in rxn.getListOfReactants():
+			rxn_outf.write("%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), lst.getSpecies(), 
+			lst.getStoichiometry()*-1))
+		for lst in rxn.getListOfProducts():
+			rxn_outf.write("%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), lst.getSpecies(), 
+			lst.getStoichiometry()))
+		for lst in rxn.getListOfModifiers():
+			rxn_outf.write("%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), lst.getSpecies()))
+		rxn_outf.close()
+		
 ### MAIN ###
 
 #if __name__ == "__main__":
@@ -83,47 +127,14 @@ reader = SBMLReader()
 doc = reader.readSBML(xmlfile)
 model = doc.getModel()
 
-#reaction_species_write(model, spec_outfile, rxn_outfile)
+species_par_outfile = "".join(("species_par_", outfile, ".tsv"))
+write_resource_file(model, species_par_outfile)
 
-listrxn = model.getListOfReactions() 
+write_rxn(model, outfile, modifiers = "TRUE")
 
-rxn_outfile = "".join(("rxn_", outfile, ".txt"))
-rxn_par_outfile = "".join(("rxn_par_", outfile, ".txt"))
-
-
-rxn_outf = open(rxn_outfile, 'w')
-rxn_outf.close()	
-par_outf = open(rxn_par_outfile, 'w')
-par_outf.close()
-
-for rxn in listrxn:
-	
-	### Get the reactants and products and their stoichiometries, along with any rxn modifiers
-	
-	rxn_outf = open(rxn_outfile, 'a')
-	for lst in rxn.getListOfReactants():
-		rxn_outf.write("%s\t%s\t%s\n" % (rxn.getName(), lst.getSpecies(), 
-		lst.getStoichiometry()*-1))
-	for lst in rxn.getListOfProducts():
-		rxn_outf.write("%s\t%s\t%s\n" % (rxn.getName(), lst.getSpecies(), 
-		lst.getStoichiometry()))
-	rxn_outf.close()
-	
-	par_outf = open(rxn_par_outfile, 'a')
-	parameters = list(rxn.getKineticLaw().getListOfParameters())
-	if len(parameters) > 0:
-		for p in parameters:
-			par_outf.write("%s\t%s\t%s\t%s\n" % (rxn.getName(), p.getId(), p.getValue(), p.getUnits()))
-	par_outf.close()
 	
 	
-
-
-
-
-#listParams = model.getListOfParameters()
-#for par in listParams:
-#	print "\t", [par.getId(), par.getValue(), par.getUnits()]
+	
 	
 	
 
