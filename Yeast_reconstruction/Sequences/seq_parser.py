@@ -105,42 +105,58 @@ def CHEBIparser(metabolites, METAoutf, write_ele_comp):
 		if not (formula_dict.has_key(line)):
 			formula_dict[line] = "$$NA$$"
 	
-	all_elements = []
-	for line in formula_dict.keys():
-		all_elements.extend(elements_formula(formula_dict[line], determine_comp = "TRUE"))
-		print set(all_elements)
-
-
-	outf = open(METAoutf, "w")
-	outf.write("ID\tName\n")	
+	if write_ele_comp == 'FALSE':
+		outf = open(METAoutf, "w")
+		outf.write("ID\tName\n")	
 			
-	for meta in meta_dict.keys():
-		outf.write("%s\t%s\t%s\n" % (meta, meta_dict[meta], formula_dict[meta]))
-
-	outf.close()
-
-def elements_formula(formula, determine_comp = "FALSE", *elements):
-
-	#remove formulas that are either missing ("$"), have adducts (".") or are polymers (")n")	
-	if formula[0] == '$':
-		sys.exit(0)
-	add = re.compile('[.]')
-	poly = re.compile('[)n]')
-	print add
-	print poly
-	print add == "none"
-	print poly == "none"
+		for meta in meta_dict.keys():
+			outf.write("%s\t%s\t%s\n" % (meta, meta_dict[meta], formula_dict[meta]))
 	
-	if (add.search(formula)) | (poly.search(formula)):
-		sys.exit(0)
-
-
-	# seperate elements and counts
+		outf.close()
 	
+	elif write_ele_comp == 'TRUE':
+		all_elements = set()
+		elements_each = {}
+		for ID, formula in formula_dict.items():
+			elements_each[ID] = elements_formula(formula)
+			all_elements.update(elements_each[ID].keys())
+		print all_elements
+
+		sorted_elements = sorted(set(all_elements))
+
+		outf = open(METAoutf, "w")
+		outf.write("ID\tName\t" + "\t".join(sorted_elements) + "\n")
+		for ID, formuladict in elements_each.items():
+			print ID, formuladict
+			outf.write(ID + "\t" + meta_dict[ID] + "\t" +
+						"\t".join([str(formuladict[e]) if e in formuladict else "0"
+											for e in sorted_elements]) + "\n")
+		
+		outf.close()
+		
+
+def elements_formula(formula, determine_comp = "TRUE", outfile = "none", *elements):
+
 	lc = re.compile('[a-z]')
 	uc = re.compile('[A-Z]')
 	alpha = re.compile('[A-Za-z]')
 	num = re.compile('[0-9]+')
+
+	# remove formulas that are either missing ("$"), have adducts (".") are polymers (")n")
+	# or begin with a digit ("\d")
+	if formula[0] == '$':
+		return {}
+	add = re.compile('[.]')
+	poly = re.compile('[)n]')
+	if add.search(formula):
+		return {}
+	if poly.search(formula):
+		return {}
+	if num.match(formula):
+		return {}
+	
+	# seperate elements and counts
+	
 	char_type = []
 	character = []
 	for char in formula:
@@ -179,27 +195,16 @@ def elements_formula(formula, determine_comp = "FALSE", *elements):
 		if alpha.search(i):
 			element = i
 		elif num.search(i):
-			el_comp[element] = i	
+			el_comp[element] = i
 		else:
 			print i
 	if not el_comp.has_key(element):
-		el_comp[element] = 1
+		el_comp[element] = "1"
 	
-	# conditionally write out the elements found in the compound. Otherwise use a list of all
-	# elements found in the dataset and write out counts of each as tsv.
-	
-	if determine_comp == "TRUE":
-		return el_comp.keys()
+	return el_comp
 		
 		
 		
-
-
-#form = "C10O12ZHe3P"
-#ele = elements_formula(form, determine_comp = "TRUE")
-
-
-
 
 ####### Main ##########
 
@@ -212,7 +217,7 @@ def elements_formula(formula, determine_comp = "FALSE", *elements):
 #ORFfile_Parse(protein, PROToutf)
 
 metabolites = open('ChEBI_complete.sdf','r')
-METAoutf = 'METAdict.tsv'
+METAoutf = 'METeleComp.tsv'
 CHEBIparser(metabolites, METAoutf, write_ele_comp = "TRUE")
 
 
