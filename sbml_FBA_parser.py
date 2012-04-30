@@ -76,7 +76,7 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 	
 	rxn_outfile = "".join(("rxn_", outfile, ".tsv"))
 	rxn_outf = open(rxn_outfile, 'w')
-	rxn_outf.write("%s\t%s\t%s\t%s\n" % ("Reaction", "ReactionID", "Metabolite", 
+	rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % ("Reaction", "ReactionID", "Compartment", "Metabolite", "MetName", 
 	"StoiCoef"))
 	rxn_outf.close()	
 	
@@ -97,13 +97,18 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 		kin_outf.write("%s\t%s\t%s\n" % ("ReactionID", "ParID", "Formula"))
 		kin_outf.close()
 	
-	
+	#correspondence between internal name and a common name
 	met_namedict = dict()
 	for spect in listspecT:
 		met_namedict[spect.getId()] = spect.getName()
 	
+	#correspondence between internal name, unique chemical name and compartment
+	comp_dict = dict()
+	name_trans = dict()
 	spec_outf = open(spec_outfile, 'a')	
 	for spec in listspec:
+		comp_dict[spec.getId()] = spec.getCompartment()
+		name_trans[spec.getId()] = spec.getSpeciesType()
 		spec_outf.write("%s\t%s\t%s\t%s\n" % (spec.getId(), 
 		met_namedict[spec.getSpeciesType()], spec.getSpeciesType(), spec.getCompartment()))
 	spec_outf.close()	
@@ -111,25 +116,27 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 	for rxn in listrxn:
 		
 	### Get the reactants and products and their stoichiometries, along with any rxn modifiers
+		rxn_location = reaction_class(rxn, comp_dict)
 		
 		rxn_outf = open(rxn_outfile, 'a')
 		for lst in rxn.getListOfReactants():
-			rxn_outf.write("%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), lst.getSpecies(), 
-			lst.getStoichiometry()*-1))
+			rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), 
+			met_namedict[name_trans[lst.getSpecies()]], lst.getStoichiometry()*-1))
+			
 		for lst in rxn.getListOfProducts():
-			rxn_outf.write("%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), lst.getSpecies(), 
-			lst.getStoichiometry()))
+			rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), 
+			met_namedict[name_trans[lst.getSpecies()]], lst.getStoichiometry()))
 		
 		if use_modifiers == "TRUE":
 			for lst in rxn.getListOfModifiers():
-				rxn_outf.write("%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), lst.getSpecies()))
-			rxn_outf.close()	
-		
+				rxn_outf.write("%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), met_namedict[name_trans[lst.getSpecies()]]))
+		rxn_outf.close()	
+				
 		if rxn_par_found == "TRUE":
 		
 			parameters = list(rxn.getKineticLaw().getListOfParameters())
 			if len(parameters) > 0:
-				par_outf = open(rxn_par_outfile, 'w')
+				par_outf = open(rxn_par_outfile, 'a')
 				for p in parameters:
 					par_outf.write("%s\t%s\t%s\t%s\n" % (rxn.getId(), p.getId(), 
 					p.getValue(), p.getUnits()))
@@ -140,7 +147,25 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 			kin_outf.close()
 			
 
-		
+def reaction_class(rxn, comp_dict):
+	
+	spec_list = [el.getSpecies() for el in rxn.getListOfReactants()]
+	spec_list.extend([el.getSpecies() for el in rxn.getListOfProducts()])
+	comp = [comp_dict[el] for el in spec_list]
+	
+	if len(unique_list(comp)) == 1:
+		return unique_list(comp)[0]
+	else:
+		return "exchange"
+	
+	
+	
+def unique_list(seq):
+    keys = {}
+    for e in seq:
+        keys[e] = 1
+    return keys.keys()	
+	
 ### MAIN ###
 
 #if __name__ == "__main__":
@@ -162,8 +187,11 @@ model = doc.getModel()
 species_par_outfile = "".join(("species_par_", outfile, ".tsv"))
 write_resource_file(model, species_par_outfile)
 
-write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
-, use_modifiers = "TRUE")
+write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE", 
+use_modifiers = "TRUE")
+
+
+ 
 
 	
 	
