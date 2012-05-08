@@ -9,12 +9,40 @@ inputFilebase = "yeast"
 
 
 rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""))
-#rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE)
+rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE)
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""))
+compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""))
+
+compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
+nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
+rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
+
+######### treatment ###########
+
+dilution_rates <- seq(0.05, 0.3, 0.05)
+
+treatment_par <- list()
+
+for(i in 1:length(nutrientFile[1,])){
+	for(j in 1:length(dilution_rates)){
+	treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["nutrients"]] <- data.frame(nutrient = rownames(nutrientFile), conc_per_t = nutrientFile[,i]*dilution_rates[j], stringsAsFactors = FALSE)
+	
+	#leu2
+	if(colnames(nutrientFile)[i] == "Leucine"){
+		treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID))
+		}
+	#ura3
+	if(colnames(nutrientFile)[i] == "Uracil"){
+		treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))		}
+	if(is.null(treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["auxotrophies"]])){
+		treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["auxotrophies"]] <- NA
+		}
+	
+	}}
 
 #load or write stoichiometry matrix of reactions and their altered metabolites
 
@@ -22,13 +50,133 @@ if(file.exists("yeast_stoi.R")){
 	load("yeast_stoi.R")
 	} else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
 
+############ preserving compartmentation ############
+
+#reactions = unique(rxnFile$ReactionID)
+
+#reactions are compartment specific
+
+compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$ReactionID == x][1]})
+
+#extract the metabolite ID corresponding to the extracellular introduction of nutrients
+
+sources <- c("D-glucose", "ammonium", "phosphate", "sulphate", "uracil", "L-leucine")
+
+perfect.match <- function(source, query, corrFile){
+all_char <- "[[:graph:][:space:]]"
+	
+tmp <- corrFile[grep(source, query)[!(grep(source, query) %in% union(grep(paste(all_char, source, sep = ""), query), grep(paste(source, all_char, sep = ""), query)))],]
+if(length(tmp[,1]) == 0){tmp <- corrFile[grep(source, query, fixed = TRUE),]}
+tmp
+	}
+	
+	
+
+resource_matches <- lapply(sources, perfect.match, query = as.character(corrFile$SpeciesName), corrFile = corrFile)
+
+boundary_met <- NULL
+for(x in 1:length(sources)){
+boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
+}
+
+#extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass
+
+sinks <- compositionFile$AltName
+
+resource_matches <- lapply(sinks, perfect.match, query = as.character(corrFile$SpeciesName), corrFile = corrFile)
+
+comp_met <- NULL
+for(x in 1:length(sinks)){
+comp_met <- rbind(comp_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "cytoplasm"],])
+}
+
+#freely exchanging metabolites through extracellular compartment
+
+free_flux <- c("carbon dioxide", "oxygen", "water")
+
+resource_matches <- lapply(free_flux, perfect.match, query = as.character(corrFile$SpeciesName), corrFile = corrFile)
+
+freeExchange_met <- NULL
+for(x in 1:length(free_flux)){
+freeExchange_met <- rbind(freeExchange_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
+}
+
+
+#corrFile[grep("water", as.character(corrFile$SpeciesName)),]
+
+
+
+
+
+comp_met$SpeciesID
+
+
+#Set up the linear equations for FBA
+
+S = stoiMat
+
+#added reactions for boundary fluxes
+
+##### Nutrient Influx #####
+##### Unconstrained Chemical Influx #####
+
+influx_rxns <- c(1:length(metabolites))[metabolites %in% c(as.character(boundary_met$SpeciesID), as.character(freeExchange_met$SpeciesID))]
+
+influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
+for(i in 1:length(influx_rxns)){
+	influxS[influx_rxns[i],i] <- -1
+	}
+	
+##### Composition fxn #####
+
+compVec <- rep(0, times = length(metabolites))
+for(i in 1:length(comp_met$SpeciesID)){
+	compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
+	}
+	
+S <- cbind(stoiMat, influxS, compVec)		
+colnames(S) <- c(colnames(stoiMat), sapply(c(as.character(boundary_met$SpeciesName), as.character(freeExchange_met$SpeciesName)), function(x){paste(x, "boundary")}), "composition")
+
+
+#dim nconst x nrxns
+#the reactions corresponding to the boundary fluxes added in influx reactions for nutrients are given a value of -1.
+
+influxG <- matrix(0, ncol = length(S[1,]), nrow = length(boundary_met$SpeciesID))
+
+c(1:length(S[1,]))[colnames(S) %in% sapply(as.character(boundary_met$SpeciesName), function(x){paste(x, "boundary")})]
+
+
+
+influxH <- rep(0, times = length(boundary_met$SpeciesID))
+
+c(1:length(metabolites))[metabolites %in% as.character(boundary_met$SpeciesID)]
+
+
+
+#Gv >= h
+
+
+
+
+
+
+
+
+
+linp(E = S, F = f, G = G, H = h, Cost = -1*(A[,1] - A[,2] - A[,3]), ispos = FALSE)
+
+
+
+
+
+
+
 
 
 
 
 
 ######### approximate the concentrations of source nutrients as a function of the rate of compounds accumulating and their composition.
-
 
 accumulants <- data.frame(ID = rownames(stoiMat)[stoiMat[,colnames(stoiMat) == "R_biomass"] != 0], S_name = NA, ChEBI_name = NA, common_name = NA, values = stoiMat[,colnames(stoiMat) == "R_biomass"][stoiMat[,colnames(stoiMat) == "R_biomass"] != 0])
 
