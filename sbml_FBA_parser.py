@@ -53,6 +53,23 @@ def write_resource_file(model, outfile):
 							 c.getAttributes().getValue("rdf:resource")))
 			outf.write(ret + "\n")
 
+def write_compartment_file(model, outfile):
+	"""
+	write a tab delimited file where each line is one resource, in the form
+	CompartmentID\tComparmentName
+	"""
+
+	comp_outfile = "".join(("comp_", outfile, ".tsv"))
+	comp_outf = open(comp_outfile, 'w')
+	comp_outf.write("%s\t%s\n" % ("compID", "compName"))
+	comp_outf.close()
+
+	compT = model.getListOfCompartments()
+	comp_outf = open(comp_outfile, 'a')
+	for ele in compT:
+		comp_outf.write("%s\t%s\n" % (ele.getId(), ele.getName()))
+	comp_outf.close()
+
 
 def IDdict(model):
 	""" Create a correspondence between species type designation and ID """
@@ -73,6 +90,7 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 	listrxn = model.getListOfReactions()
 	listspecT = model.getListOfSpeciesTypes()
 	listspec = model.getListOfSpecies()
+	listcomp = model.getListOfCompartments()
 	
 	rxn_outfile = "".join(("rxn_", outfile, ".tsv"))
 	rxn_outf = open(rxn_outfile, 'w')
@@ -186,6 +204,7 @@ model = doc.getModel()
 
 species_par_outfile = "".join(("species_par_", outfile, ".tsv"))
 write_resource_file(model, species_par_outfile)
+write_compartment_file(model, outfile)
 
 write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE", 
 use_modifiers = "TRUE")
