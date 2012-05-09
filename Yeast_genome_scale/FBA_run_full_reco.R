@@ -8,10 +8,10 @@ source("FBA_lib.R")
 inputFilebase = "yeast"
 
 
-rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""))
-rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE)
-corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""))
-compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""))
+rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
+rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE, stringsAsFactors = FALSE)
+corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
+compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
 compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
@@ -20,6 +20,29 @@ rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
+
+######### fxns to convert between IDs and species ######
+
+metIDtoSpec <- function(meta){
+	sapply(meta, function(x){
+		corrFile$SpeciesName[corrFile$SpeciesID == x]
+		})}
+
+rxnIDtoEnz <- function(rxn){
+	sapply(rxn, function(x){
+		rxnFile$Reaction[rxnFile$ReactionID == x][1]
+		})}
+
+
+
+
+
+
+
+
+
+
+
 
 ######### treatment ###########
 
@@ -72,7 +95,7 @@ tmp
 	
 	
 
-resource_matches <- lapply(sources, perfect.match, query = as.character(corrFile$SpeciesName), corrFile = corrFile)
+resource_matches <- lapply(sources, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
 boundary_met <- NULL
 for(x in 1:length(sources)){
@@ -83,7 +106,7 @@ boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$
 
 sinks <- compositionFile$AltName
 
-resource_matches <- lapply(sinks, perfect.match, query = as.character(corrFile$SpeciesName), corrFile = corrFile)
+resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
 comp_met <- NULL
 for(x in 1:length(sinks)){
@@ -94,7 +117,7 @@ comp_met <- rbind(comp_met, resource_matches[[x]][resource_matches[[x]]$Compartm
 
 free_flux <- c("carbon dioxide", "oxygen", "water")
 
-resource_matches <- lapply(free_flux, perfect.match, query = as.character(corrFile$SpeciesName), corrFile = corrFile)
+resource_matches <- lapply(free_flux, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
 freeExchange_met <- NULL
 for(x in 1:length(free_flux)){
@@ -102,25 +125,55 @@ freeExchange_met <- rbind(freeExchange_met, resource_matches[[x]][resource_match
 }
 
 
-#corrFile[grep("water", as.character(corrFile$SpeciesName)),]
+#### search for un-balanced rxns ######
+
+is.unbalanced <- rep(NA, times = length(stoiMat[1,]))
+
+for(i in 1:length(stoiMat[1,])){
+	is.unbalanced[i] <- ifelse((length(stoiMat[,i][stoiMat[,i] > 0]) != 0) & (length(stoiMat[,i][stoiMat[,i] < 0]) != 0), FALSE, TRUE)
+	}
+
+rem.unbalanced <- colnames(stoiMat)[is.unbalanced]
+
+
+boundary_put <- stoiMat[,is.unbalanced][apply(abs(stoiMat[,is.unbalanced]), 1, sum) != 0,]
+
+rownames(boundary_put) <- metIDtoSpec(rownames(boundary_put))
+colnames(boundary_put) <- rxnIDtoEnz(colnames(boundary_put))
+
+all_rxns <- rxnIDtoEnz(colnames(stoiMat))
+#all_rxns[grep("biomass", all_rxns)]
+
+stoiMat[colnames(stoiMat) %in% "r_1812"][stoiMat[colnames(stoiMat) %in% "r_1812"] != 0]
+metIDtoSpec(rownames(stoiMat)[stoiMat[colnames(stoiMat) %in% "r_1812"] != 0])
 
 
 
 
 
-comp_met$SpeciesID
 
 
-#Set up the linear equations for FBA
 
-S = stoiMat
+
+
+
+
+growth_rate <- data.frame(limit = sapply(names(treatment_par), function(x){unlist(strsplit(x, " "))[1]}), dr = sapply(names(treatment_par), function(x){unlist(strsplit(x, " "))[2]}), growth = NA)
+
+flux_vectors <- list()
+######################## Set up the linear equations for FBA #######################
+
+for(treatment in 1:length(names(treatment_par))){
+
+#remove reactions which are defective (such 
+S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrophies, rem.unbalanced))]
 
 #added reactions for boundary fluxes
 
 ##### Nutrient Influx #####
 ##### Unconstrained Chemical Influx #####
 
-influx_rxns <- c(1:length(metabolites))[metabolites %in% c(as.character(boundary_met$SpeciesID), as.character(freeExchange_met$SpeciesID))]
+influx_rxns <- c(1:length(metabolites))[metabolites %in% c(boundary_met$SpeciesID, freeExchange_met$SpeciesID)]
 
 influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
 for(i in 1:length(influx_rxns)){
@@ -134,17 +187,50 @@ for(i in 1:length(comp_met$SpeciesID)){
 	compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
 	}
 	
-S <- cbind(stoiMat, influxS, compVec)		
-colnames(S) <- c(colnames(stoiMat), sapply(c(as.character(boundary_met$SpeciesName), as.character(freeExchange_met$SpeciesName)), function(x){paste(x, "boundary")}), "composition")
+S <- cbind(S_rxns, influxS, compVec)		
+colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
+
+################ F - flux balance ############
+
+Fzero <- rep(0, times = length(S[,1]))
 
 
 #dim nconst x nrxns
 #the reactions corresponding to the boundary fluxes added in influx reactions for nutrients are given a value of -1.
 
 influxG <- matrix(0, ncol = length(S[1,]), nrow = length(boundary_met$SpeciesID))
+influxh <- NULL
 
-c(1:length(S[1,]))[colnames(S) %in% sapply(as.character(boundary_met$SpeciesName), function(x){paste(x, "boundary")})]
+for(i in 1:length(boundary_met$SpeciesName)){
+influxG[i, c(1:length(S[1,]))[colnames(S) %in% paste(as.character(boundary_met$SpeciesName)[i], "boundary")]] <- -1
+influxh	<- c(influxh, -1*treatment_par[[treatment]]$nutrients$conc_per_t[treatment_par[[treatment]]$nutrients$nutrient %in% boundary_met$SpeciesName[i]])
+	
+	}
 
+############### costFxn - indicates the final rxn in S ######
+
+costFxn = c(rep(0, times = length(S[1,]) -1), 1)
+
+######## use linear programming to maximize biomass #######
+
+linp_solution <- linp(E = S, F = Fzero, G = influxG, H = influxh, Cost = costFxn, ispos = FALSE)
+
+
+flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X
+
+growth_rate$growth[treatment] <- linp_solution$solutionNorm
+
+}
+
+
+v <- linp(E = S, F = Fzero, G = influxG, H = influxh, Cost = costFxn, ispos = FALSE)$X
+v[v!=0]
+
+
+v <- rep(1, times = length(S[1,]))
+
+influxG%*%v >= influxh
+v%*%costFxn
 
 
 influxH <- rep(0, times = length(boundary_met$SpeciesID))
@@ -160,11 +246,7 @@ c(1:length(metabolites))[metabolites %in% as.character(boundary_met$SpeciesID)]
 
 
 
-
-
-
-linp(E = S, F = f, G = G, H = h, Cost = -1*(A[,1] - A[,2] - A[,3]), ispos = FALSE)
-
+}
 
 
 
@@ -259,6 +341,8 @@ solver = linp(G=G, H=H, Cost = Cost, ispos = FALSE)
 ex = solver$X
 
 G %*% ex >= 0
+
+
 
 
 #solver$X %*% source_comp
