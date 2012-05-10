@@ -84,23 +84,35 @@ compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$Reactio
 #extract the metabolite ID corresponding to the extracellular introduction of nutrients
 
 sources <- c("D-glucose", "ammonium", "phosphate", "sulphate", "uracil", "L-leucine")
-
-perfect.match <- function(source, query, corrFile){
-all_char <- "[[:graph:][:space:]]"
-	
-tmp <- corrFile[grep(source, query)[!(grep(source, query) %in% union(grep(paste(all_char, source, sep = ""), query), grep(paste(source, all_char, sep = ""), query)))],]
-if(length(tmp[,1]) == 0){tmp <- corrFile[grep(source, query, fixed = TRUE),]}
-tmp
-	}
-	
-	
-
+		
 resource_matches <- lapply(sources, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
 boundary_met <- NULL
 for(x in 1:length(sources)){
 boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
 }
+
+#extrate the IDs of excreted metabolites
+
+excreted <- c("acetate", "ethanol", "succinate(2-)", "(R)-lactate", "L-alanine", "L-glutamate")
+
+resource_matches <- lapply(excreted, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
+
+excreted_met <- NULL
+for(x in 1:length(excreted)){
+excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
+}
+
+
+
+#tmp <- stoiMat[metIDtoSpec(rownames(stoiMat)) == "(S)-lactate",]
+#tmp2 <- tmp[,apply(tmp != 0, 2, sum) != 0]
+#rownames(tmp2) <- metIDtoSpec(rownames(tmp2)); colnames(tmp2) <- rxnIDtoEnz(colnames(tmp2))
+#grep("lactate", rxnIDtoEnz(colnames(stoiMat)), value = TRUE)
+
+
+
+
 
 #extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass
 
@@ -144,8 +156,8 @@ colnames(boundary_put) <- rxnIDtoEnz(colnames(boundary_put))
 all_rxns <- rxnIDtoEnz(colnames(stoiMat))
 #all_rxns[grep("biomass", all_rxns)]
 
-stoiMat[colnames(stoiMat) %in% "r_1812"][stoiMat[colnames(stoiMat) %in% "r_1812"] != 0]
-metIDtoSpec(rownames(stoiMat)[stoiMat[colnames(stoiMat) %in% "r_1812"] != 0])
+#stoiMat[colnames(stoiMat) %in% "r_1812"][stoiMat[colnames(stoiMat) %in% "r_1812"] != 0]
+#metIDtoSpec(rownames(stoiMat)[stoiMat[colnames(stoiMat) %in% "r_1812"] != 0])
 
 
 
@@ -172,7 +184,15 @@ S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrop
 
 ##### Nutrient Influx #####
 ##### Unconstrained Chemical Influx #####
+##### Excreted Metabolite Efflux #####
 
+#influx_rxns <- c(1:length(metabolites))[metabolites %in% c(boundary_met$SpeciesID, freeExchange_met$SpeciesID, excreted_met$SpeciesID)]
+
+#influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
+#for(i in 1:length(influx_rxns)){
+#	influxS[influx_rxns[i],i] <- -1
+#	}
+	
 influx_rxns <- c(1:length(metabolites))[metabolites %in% c(boundary_met$SpeciesID, freeExchange_met$SpeciesID)]
 
 influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
@@ -180,15 +200,22 @@ for(i in 1:length(influx_rxns)){
 	influxS[influx_rxns[i],i] <- -1
 	}
 	
+	
+	
+	
 ##### Composition fxn #####
 
 compVec <- rep(0, times = length(metabolites))
 for(i in 1:length(comp_met$SpeciesID)){
 	compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
 	}
-	
+
 S <- cbind(S_rxns, influxS, compVec)		
 colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
+
+
+#colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName, excreted_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
+
 
 ################ F - flux balance ############
 
@@ -204,8 +231,25 @@ influxh <- NULL
 for(i in 1:length(boundary_met$SpeciesName)){
 influxG[i, c(1:length(S[1,]))[colnames(S) %in% paste(as.character(boundary_met$SpeciesName)[i], "boundary")]] <- -1
 influxh	<- c(influxh, -1*treatment_par[[treatment]]$nutrients$conc_per_t[treatment_par[[treatment]]$nutrients$nutrient %in% boundary_met$SpeciesName[i]])
-	
+
 	}
+
+
+effluxG <- matrix(0, ncol = length(S[1,]), nrow = length(excreted_met$SpeciesID))
+effluxh <- NULL
+
+for(i in 1:length(excreted_met$SpeciesID)){
+effluxG[i, c(1:length(S[1,]))[colnames(S) %in% paste(as.character(excreted_met$SpeciesName)[i], "boundary")]] <- -1
+effluxh	<- c(effluxh, 0)
+	
+	}	
+	
+Gtot <- rbind(influxG)#, effluxG)	
+htot <- c(influxh)#), effluxh) 	
+
+#Gtot <- rbind(influxG)#, effluxG)	
+#htot <- c(influxh#), effluxh) 	
+
 
 ############### costFxn - indicates the final rxn in S ######
 
@@ -213,13 +257,21 @@ costFxn = c(rep(0, times = length(S[1,]) -1), 1)
 
 ######## use linear programming to maximize biomass #######
 
-linp_solution <- linp(E = S, F = Fzero, G = influxG, H = influxh, Cost = costFxn, ispos = FALSE)
+linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
+invert_fluxes <- ifelse(colnames(S) %in% c(sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), function(x){paste(x, "boundary")}), "composition"), -1, 1)
 
-flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X
 
-growth_rate$growth[treatment] <- linp_solution$solutionNorm
+flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X*invert_fluxes
+
+growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
 }
+
+
+#v <- rep(1, times = length(S[1,]))
+#S %*%v
+Gtot %*% v >= htot
+
 
 
 rxnIDtoEnz("r_1384")
@@ -256,3 +308,23 @@ std.reduced_flux_mat <- (reduced_flux_mat - apply(reduced_flux_mat, 1, mean, na.
 
 heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n")
 
+
+
+
+
+
+
+
+
+
+
+
+#fxns
+
+perfect.match <- function(source, query, corrFile){
+all_char <- "[[:graph:][:space:]]"
+	
+tmp <- corrFile[grep(source, query)[!(grep(source, query) %in% union(grep(paste(all_char, source, sep = ""), query), grep(paste(source, all_char, sep = ""), query)))],]
+if(length(tmp[,1]) == 0){tmp <- corrFile[grep(source, query, fixed = TRUE),]}
+tmp
+	}
