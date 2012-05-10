@@ -95,6 +95,9 @@ boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$
 #extrate the IDs of excreted metabolites
 
 excreted <- c("acetate", "ethanol", "succinate(2-)", "(R)-lactate", "L-alanine", "L-glutamate")
+#excreted <- c("acetate", "ethanol")
+
+
 
 resource_matches <- lapply(excreted, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -186,21 +189,20 @@ S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrop
 ##### Unconstrained Chemical Influx #####
 ##### Excreted Metabolite Efflux #####
 
-#influx_rxns <- c(1:length(metabolites))[metabolites %in% c(boundary_met$SpeciesID, freeExchange_met$SpeciesID, excreted_met$SpeciesID)]
-
-#influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
-#for(i in 1:length(influx_rxns)){
-#	influxS[influx_rxns[i],i] <- -1
-#	}
-	
 influx_rxns <- c(1:length(metabolites))[metabolites %in% c(boundary_met$SpeciesID, freeExchange_met$SpeciesID)]
 
 influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
 for(i in 1:length(influx_rxns)){
 	influxS[influx_rxns[i],i] <- -1
 	}
-	
-	
+
+efflux_rxns <- c(1:length(metabolites))[metabolites %in% excreted_met$SpeciesID]
+
+effluxS <- matrix(0, ncol = length(efflux_rxns), nrow = length(metabolites))
+for(i in 1:length(efflux_rxns)){
+	effluxS[efflux_rxns[i],i] <- 1
+	}
+
 	
 	
 ##### Composition fxn #####
@@ -210,11 +212,9 @@ for(i in 1:length(comp_met$SpeciesID)){
 	compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
 	}
 
-S <- cbind(S_rxns, influxS, compVec)		
-colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
-
-
-#colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName, excreted_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
+S <- cbind(S_rxns, influxS, effluxS, compVec)		
+#colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
+colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName, excreted_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
 
 
 ################ F - flux balance ############
@@ -239,16 +239,16 @@ effluxG <- matrix(0, ncol = length(S[1,]), nrow = length(excreted_met$SpeciesID)
 effluxh <- NULL
 
 for(i in 1:length(excreted_met$SpeciesID)){
-effluxG[i, c(1:length(S[1,]))[colnames(S) %in% paste(as.character(excreted_met$SpeciesName)[i], "boundary")]] <- -1
+effluxG[i, c(1:length(S[1,]))[colnames(S) %in% paste(as.character(excreted_met$SpeciesName)[i], "boundary")]] <- 1
 effluxh	<- c(effluxh, 0)
 	
 	}	
 	
-Gtot <- rbind(influxG)#, effluxG)	
-htot <- c(influxh)#), effluxh) 	
-
 #Gtot <- rbind(influxG)#, effluxG)	
-#htot <- c(influxh#), effluxh) 	
+#htot <- c(influxh)#), effluxh) 	
+
+Gtot <- rbind(influxG, effluxG)	
+htot <- c(influxh, effluxh) 	
 
 
 ############### costFxn - indicates the final rxn in S ######
@@ -302,13 +302,51 @@ for(treatment in 1:length(names(treatment_par))){
 
 	}
 
-reduced_flux_mat <- cond_fluxes[apply(cond_fluxes == 0, 1, sum) == 0,]
+reduced_flux_mat <- cond_fluxes[apply(cond_fluxes != 0, 1, sum) != 0,]
 reduced_flux_mat <- reduced_flux_mat[!is.na(apply(reduced_flux_mat, 1, sd, na.rm = TRUE)),]
+renamed_reduced_flux <- reduced_flux_mat; rownames(renamed_reduced_flux) <- c(rxnIDtoEnz(rownames(reduced_flux_mat)[grep("r_", rownames(reduced_flux_mat))]), rownames(reduced_flux_mat)[grep("r_", rownames(reduced_flux_mat), invert = TRUE)])
+
 std.reduced_flux_mat <- (reduced_flux_mat - apply(reduced_flux_mat, 1, mean, na.rm = TRUE))/apply(reduced_flux_mat, 1, sd, na.rm = TRUE)
 
-heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n")
+heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row")
 
 
+
+######### compare boundary fluxes with their limit #########
+
+limiting_fluxes <- matrix(nrow = length(names(treatment_par)), ncol = length(treatment_par[[1]]$nutrients[,1])); rownames(limiting_fluxes) <- names(treatment_par); colnames(limiting_fluxes) <- treatment_par[[1]]$nutrients[,1]
+
+for(treatment in 1:length(names(treatment_par))){
+
+limiting_fluxes[treatment,]	<-(reduced_flux_mat[sapply(sapply(treatment_par[[treatment]]$nutrients$nutrient, function(x){paste(x, "boundary")}), function(x){c(1:length(reduced_flux_mat[,1]))[rownames(reduced_flux_mat) %in% x]}), treatment]*-1)/treatment_par[[treatment]]$nutrients$conc_per_t
+	
+	}
+
+
+
+
+########## evaluating rxns ########
+"isa acyl-CoA", "isa fatty acid", 
+
+query_rxns <- c("protein production")
+
+eval_mat <- stoiMat[apply(stoiMat[,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns] != 0, 1, sum) != 0,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
+
+
+named_stoi <- stoiMat; rownames(named_stoi) <- metIDtoSpec(rownames(named_stoi)); colnames(named_stoi) <- rxnIDtoEnz(colnames(named_stoi))
+
+
+query_mets <- c("Ser-tRNA(Ser)")
+
+x <- rxn_search(named_stoi, query_mets, is_rxn = FALSE)
+
+
+
+matches <- metIDtoSpec(rownames(stoiMat)) %in% query_mets
+if(sum(matches) >
+
+
+stoiMat[metIDtoSpec(rownames(stoiMat)) %in% query_mets,] != 0
 
 
 
@@ -328,3 +366,31 @@ tmp <- corrFile[grep(source, query)[!(grep(source, query) %in% union(grep(paste(
 if(length(tmp[,1]) == 0){tmp <- corrFile[grep(source, query, fixed = TRUE),]}
 tmp
 	}
+
+
+rxn_search = function(stoiMat, search_string, is_rxn = TRUE){
+	#search by metabolite or reactant and return all reactions and nonzero metabolites.
+	if (is_rxn == TRUE){
+		colz = grep(search_string, colnames(stoiMat), ignore.case = TRUE)
+		} else {
+		met = grep(search_string, rownames(stoiMat), ignore.case = TRUE)
+		if (length(met) == 1){
+			colz = c(1:length(stoiMat[1,]))[stoiMat[met,] != 0]
+			} else {
+			colz = c(1:length(stoiMat[1,]))[apply(stoiMat[met,], 2, is.not.zero)]
+		}}
+	
+	if(length(colz) == 0){
+		print("no hits")
+		} else {
+			rxns = stoiMat[,colz]
+			if(is.vector(rxns)){
+				c(colz, rxns[rxns != 0])
+				} else {
+					output <- rbind(colz, rxns[apply(rxns, 1, is.not.zero),])
+					colnames(output) = colnames(stoiMat)[colz]
+					output
+					}
+		}
+	}
+
