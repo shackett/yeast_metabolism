@@ -4,6 +4,8 @@ library(limSolve)
 setwd("/Users/seanhackett/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 source("FBA_lib.R")
 
+options(stringsAsFactors = FALSE)
+
 #inputFilebase = "yeast_GS"
 inputFilebase = "yeast"
 
@@ -13,6 +15,8 @@ rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), 
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
+
+metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
 compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
@@ -20,28 +24,6 @@ rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
-
-######### fxns to convert between IDs and species ######
-
-metIDtoSpec <- function(meta){
-	sapply(meta, function(x){
-		corrFile$SpeciesName[corrFile$SpeciesID == x]
-		})}
-
-rxnIDtoEnz <- function(rxn){
-	sapply(rxn, function(x){
-		rxnFile$Reaction[rxnFile$ReactionID == x][1]
-		})}
-
-
-
-
-
-
-
-
-
-
 
 
 ######### treatment ###########
@@ -66,6 +48,8 @@ for(i in 1:length(nutrientFile[1,])){
 		}
 	
 	}}
+
+#rxnIDtoEnz(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))
 
 #load or write stoichiometry matrix of reactions and their altered metabolites
 
@@ -114,6 +98,97 @@ excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$
 #grep("lactate", rxnIDtoEnz(colnames(stoiMat)), value = TRUE)
 
 
+######### Confirm mass balance of reactions ############
+
+met_chebi <- unlist(sapply(metabolites, metToCHEBI))
+met_chebi_comp <- metComp[metComp$ID %in% met_chebi,]
+met_chebi_comp <- met_chebi_comp[,c(TRUE, TRUE, apply(met_chebi_comp[,-c(1,2)], 2, sum) != 0)]
+
+ele_comp <- lapply(met_chebi, function(x){
+	if(length(met_chebi_comp[met_chebi_comp$ID %in% x,]) != 0){
+	met_chebi_comp[met_chebi_comp$ID %in% x,]}
+	})
+
+#matrix of elemental abundance of species corresponding to rows of the stoichiometric matrix
+ele_comp_mat <- matrix(NA, nrow = length(stoiMat[,1]), ncol = length(ele_comp[[1]])-2); rownames(ele_comp_mat) <- rownames(stoiMat); colnames(ele_comp_mat) <- names(ele_comp[[1]])[-c(1:2)]
+for(el in 1:length(stoiMat[1,])){
+	if(length(unlist(ele_comp[[el]][-c(1:2)])) != 0){
+		ele_comp_mat[el,] <- unlist(ele_comp[[el]][-c(1:2)])
+		}
+	}
+
+missed_compounds <- met_chebi[!is.na(met_chebi)][names(met_chebi[!is.na(met_chebi)]) %in% rownames(ele_comp_mat)[apply(is.na(ele_comp_mat), 1, sum) != 0]]
+
+#create a data.frame of species with a chebi ID, but without a chemical formula match in my composition file
+missed_df <- data.frame(metIDtoSpec(names(missed_compounds)), names(missed_compounds), missed_compounds)
+unique_missed_df <- as.data.frame(matrix(NA, nrow = length(unique(missed_compounds)), ncol = 3))
+for(i in 1:length(unique(missed_compounds))){
+	unique_missed_df[i,] <- missed_df[missed_df[,3] == sort(unique(missed_compounds))[i],][1,]
+	}
+
+unique_missed_df[,3] %in% chem_form$COMPOUND_ID
+
+
+out <- as.data.frame(matrix(0, ncol = length(colnames(ele_comp_mat)), nrow = length(unique_missed_df[,1])))
+colnames(out) <- c(colnames(ele_comp_mat))
+
+write.table(cbind(unique_missed_df, out), row.names = FALSE, col.names = TRUE, file = "woot", sep = "\t")
+
+
+
+
+
+mass_balanced <- matrix(NA, nrow = length(stoiMat[1,]), ncol = length(ele_comp_mat[1,]) + 1); rownames(mass_balanced) <- colnames(stoiMat); colnames(mass_balanced) <- c("missingIDs", colnames(ele_comp_mat))
+mass_balanced <- as.data.frame(mass_balanced, stringsAsFactors = FALSE)
+
+for(colnum in c(1:length(stoiMat[1,]))){
+	
+	if(length(stoiMat[,colnum][stoiMat[,colnum] != 0]) > 1){
+	if(sum(is.na(ele_comp_mat[stoiMat[,colnum] != 0,][,1])) != 0){
+		#some species are missing IDs
+		#ignore those species and determine for which species the reaction is balanced
+		mass_balanced$missingIDs[colnum] <- TRUE
+	
+		defined_spec <- !is.na(ele_comp_mat[stoiMat[,colnum] != 0,][,1])
+		if(sum(defined_spec) > 1){
+		mass_balanced[colnum, -1] <- t(ele_comp_mat[stoiMat[,colnum] != 0,][defined_spec,])%*% (stoiMat[,colnum][stoiMat[,colnum] != 0][defined_spec]) == 0
+		}
+		}else{
+			
+			mass_balanced$missingIDs[colnum] <- FALSE
+			
+			if(sum(defined_spec) > 1){
+			mass_balanced[colnum, -1] <- t(ele_comp_mat[stoiMat[,colnum] != 0,])%*% (stoiMat[,colnum][stoiMat[,colnum] != 0]) == 0
+			}
+			}}}
+	
+mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),]
+	
+	
+non_na_MB <- mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),][!is.na(mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),]$P),]
+
+non_na_MB_stoi <- stoiMat[apply(stoiMat[,colnames(stoiMat) %in% rownames(non_na_MB[non_na_MB$P == FALSE,])] != 0, 1, sum) != 0,colnames(stoiMat) %in% rownames(non_na_MB[non_na_MB$P == FALSE,])]
+	
+met_dict <- metIDtoSpec(rownames(non_na_MB_stoi))
+rxn_dict <- rxnIDtoEnz(colnames(non_na_MB_stoi))
+
+rownames(non_na_MB_stoi) <- sapply(c(1:length(non_na_MB_stoi[,1])), function(x){met_dict[x][[1]]})
+colnames(non_na_MB_stoi) <- sapply(c(1:length(non_na_MB_stoi[1,])), function(x){rxn_dict[x][[1]]})
+
+metIDtoSpec("s_0334")
+
+rxnparFile[,3][rxnparFile[,1] %in% corrFile$SpeciesType[corrFile$SpeciesID %in% "s_0334"]]
+
+
+
+#taken from chebi
+chem_form <- read.delim("../Yeast_reconstruction/Sequences/chemical_data.tsv", stringsAsFactors = FALSE)
+chem_form <- chem_form[chem_form$SOURCE == "ChEBI",]
+
+
+#chem_form[chem_form$ID %in% met_chebi,]
+#rxnparFile[grep("7814", rxnparFile[,3]),]
+
 
 
 
@@ -151,16 +226,42 @@ for(i in 1:length(stoiMat[1,])){
 rem.unbalanced <- colnames(stoiMat)[is.unbalanced]
 
 
-boundary_put <- stoiMat[,is.unbalanced][apply(abs(stoiMat[,is.unbalanced]), 1, sum) != 0,]
+#boundary_put <- stoiMat[,is.unbalanced][apply(abs(stoiMat[,is.unbalanced]), 1, sum) != 0,]
 
-rownames(boundary_put) <- metIDtoSpec(rownames(boundary_put))
-colnames(boundary_put) <- rxnIDtoEnz(colnames(boundary_put))
+#rownames(boundary_put) <- metIDtoSpec(rownames(boundary_put))
+#colnames(boundary_put) <- rxnIDtoEnz(colnames(boundary_put))
 
-all_rxns <- rxnIDtoEnz(colnames(stoiMat))
-#all_rxns[grep("biomass", all_rxns)]
+#all_rxns <- rxnIDtoEnz(colnames(stoiMat))
 
-#stoiMat[colnames(stoiMat) %in% "r_1812"][stoiMat[colnames(stoiMat) %in% "r_1812"] != 0]
-#metIDtoSpec(rownames(stoiMat)[stoiMat[colnames(stoiMat) %in% "r_1812"] != 0])
+
+
+##### generic reactions #####
+
+named_stoi <- stoiMat
+met_dict <- metIDtoSpec(rownames(named_stoi))
+met_dict <- sapply(c(1:length(named_stoi[,1])), function(x){met_dict[x][[1]]})
+rxn_dict <- rxnIDtoEnz(colnames(named_stoi))
+rxn_dict <- sapply(c(1:length(named_stoi[1,])), function(x){rxn_dict[x][[1]]})
+
+rownames(named_stoi) <- met_dict
+colnames(named_stoi) <- rxn_dict
+
+labelz <- c("isa", "protein production", "biomass production", "growth", "lipid production")
+aggregate_rxns <- NULL
+
+for(l in 1:length(labelz)){
+	aggregate_rxns <- union(aggregate_rxns, rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE))
+	}
+
+#grep(labelz[l], colnames(named_stoi), fixed = TRUE)
+
+
+
+#aggregate_rxns <- c(colnames(rxn_search(named_stoi, "isa", is_rxn = TRUE)), colnames(rxn_search(named_stoi, "protein production", is_rxn = TRUE)))
+
+rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
+
+
 
 
 
@@ -181,7 +282,7 @@ flux_vectors <- list()
 for(treatment in 1:length(names(treatment_par))){
 
 #remove reactions which are defective (such 
-S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrophies, rem.unbalanced))]
+S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrophies, rem.unbalanced, rem.aggregate))]
 
 #added reactions for boundary fluxes
 
@@ -274,12 +375,6 @@ Gtot %*% v >= htot
 
 
 
-rxnIDtoEnz("r_1384")
-
-#leucine 0.3
-2.515818e-05/-0.2964
-#uracil 0.3
-6.959310e-06/-0.0599
 
 
 all_rxns <- NULL
@@ -306,9 +401,9 @@ reduced_flux_mat <- cond_fluxes[apply(cond_fluxes != 0, 1, sum) != 0,]
 reduced_flux_mat <- reduced_flux_mat[!is.na(apply(reduced_flux_mat, 1, sd, na.rm = TRUE)),]
 renamed_reduced_flux <- reduced_flux_mat; rownames(renamed_reduced_flux) <- c(rxnIDtoEnz(rownames(reduced_flux_mat)[grep("r_", rownames(reduced_flux_mat))]), rownames(reduced_flux_mat)[grep("r_", rownames(reduced_flux_mat), invert = TRUE)])
 
-std.reduced_flux_mat <- (reduced_flux_mat - apply(reduced_flux_mat, 1, mean, na.rm = TRUE))/apply(reduced_flux_mat, 1, sd, na.rm = TRUE)
+std.reduced_flux_mat <- (renamed_reduced_flux - apply(renamed_reduced_flux, 1, mean, na.rm = TRUE))/apply(renamed_reduced_flux, 1, sd, na.rm = TRUE)
 
-heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row")
+heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05)
 
 
 
@@ -324,38 +419,98 @@ limiting_fluxes[treatment,]	<-(reduced_flux_mat[sapply(sapply(treatment_par[[tre
 
 
 
-
 ########## evaluating rxns ########
-"isa acyl-CoA", "isa fatty acid", 
 
-query_rxns <- c("protein production")
+#query_rxns <- c("protein production")
 
-eval_mat <- stoiMat[apply(stoiMat[,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns] != 0, 1, sum) != 0,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
+#eval_mat <- stoiMat[apply(stoiMat[,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns] != 0, 1, sum) != 0,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
 
+######### evaluate metabolite #########
 
-named_stoi <- stoiMat; rownames(named_stoi) <- metIDtoSpec(rownames(named_stoi)); colnames(named_stoi) <- rxnIDtoEnz(colnames(named_stoi))
+#eval_mat <- stoiMat[,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
 
-
-query_mets <- c("Ser-tRNA(Ser)")
-
-x <- rxn_search(named_stoi, query_mets, is_rxn = FALSE)
+query_met <- c("phosphatidylinositol")
 
 
-
-matches <- metIDtoSpec(rownames(stoiMat)) %in% query_mets
-if(sum(matches) >
-
-
-stoiMat[metIDtoSpec(rownames(stoiMat)) %in% query_mets,] != 0
+eval_mets(query_met, TRUE)
 
 
 
 
 
+eval_mets <- function(query_met, grep_it = FALSE){
+	#find all of the reactions that a greped or exact matched metabolite participates in and then get all of the other metabolites also in those reactions
+	if(grep_it == TRUE){
+		met_matches <- grep(query_met, metIDtoSpec(rownames(stoiMat)))
+		}else{
+			met_matches <- c(1:length(stoiMat[,1]))[metIDtoSpec(rownames(stoiMat)) %in% query_met]
+			}
+	if(length(met_matches) == 0){print("miss")}
+	if(length(met_matches) == 1){
+		eval_mat <- stoiMat[apply(stoiMat[,stoiMat[met_matches,] != 0] != 0, 1, sum) != 0,stoiMat[met_matches,] != 0]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
+		}else{
+		eval_mat <- stoiMat[apply(stoiMat[,apply(stoiMat[met_matches,] != 0, 2, sum) != 0] != 0, 1, sum) != 0, apply(stoiMat[met_matches,] != 0, 2, sum) != 0]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
+		}
+	eval_mat
+	}
 
 
 
 
+named_stoi <- stoiMat
+met_dict <- metIDtoSpec(rownames(named_stoi))
+rxn_dict <- rxnIDtoEnz(colnames(named_stoi))
+
+rownames(named_stoi) <- sapply(c(1:length(named_stoi[,1])), function(x){met_dict[x][[1]]})
+colnames(named_stoi) <- sapply(c(1:length(named_stoi[1,])), function(x){rxn_dict[x][[1]]})
+
+aggregate_rxns <- c(colnames(rxn_search(named_stoi, "isa", is_rxn = TRUE)), colnames(rxn_search(named_stoi, "protein production", is_rxn = TRUE)))
+
+##########
+
+
+#flux through regexed rxn
+renamed_reduced_flux[rownames(renamed_reduced_flux) %in% names(rxn_search(named_stoi, "g", is_rxn = FALSE)[1,]),]
+
+
+growth_rate$growth
+
+"uracil boundary"
+
+growth_rate$growth[30]/(treatment_par$'Uracil 0.3'$nutrients$conc_per_t[treatment_par$'Uracil 0.3'$nutrients$nutrient == "uracil"]/as.numeric(compositionFile[compositionFile$MetName %in% "UMP",]$StoiCoef))
+
+
+
+colnames(stoiMat)
+
+
+
+#### looking at extracellular rxns
+
+extra <- stoiMat[,compartment == "c_05"]
+extra_stoi <- extra[apply(extra != 0, 1, sum) != 0,]
+
+met_dict <- metIDtoSpec(rownames(extra_stoi))
+rxn_dict <- rxnIDtoEnz(colnames(extra_stoi))
+
+rownames(extra_stoi) <- sapply(c(1:length(extra_stoi[,1])), function(x){met_dict[x][[1]]})
+colnames(extra_stoi) <- sapply(c(1:length(extra_stoi[1,])), function(x){rxn_dict[x][[1]]})
+
+#look at all reactions involving a metabolite from a particular compartment, that actually carry flux
+
+extra <- stoiMat[rownames(stoiMat) %in% corrFile[corrFile$Compartment == "c_02",]$SpeciesID,apply(stoiMat[rownames(stoiMat) %in% corrFile[corrFile$Compartment == "c_02",]$SpeciesID,] != 0, 2, sum) != 0]
+
+extra_red <- stoiMat[,colnames(stoiMat) %in% colnames(extra)[colnames(extra) %in% rownames(reduced_flux_mat)]]
+extra_red <- extra_red[apply(extra_red != 0, 1, sum) != 0,]
+
+met_dict <- metIDtoSpec(rownames(extra_red))
+rxn_dict <- rxnIDtoEnz(colnames(extra_red))
+
+rownames(extra_red) <- sapply(c(1:length(extra_red[,1])), function(x){met_dict[x][[1]]})
+colnames(extra_red) <- sapply(c(1:length(extra_red[1,])), function(x){rxn_dict[x][[1]]})
+
+ 
+ 
 
 #fxns
 
@@ -368,12 +523,12 @@ tmp
 	}
 
 
-rxn_search = function(stoiMat, search_string, is_rxn = TRUE){
+rxn_search = function(stoiMat, search_string, is_rxn = TRUE, index = FALSE){
 	#search by metabolite or reactant and return all reactions and nonzero metabolites.
 	if (is_rxn == TRUE){
-		colz = grep(search_string, colnames(stoiMat), ignore.case = TRUE)
+		colz = grep(search_string, colnames(stoiMat), fixed = TRUE)
 		} else {
-		met = grep(search_string, rownames(stoiMat), ignore.case = TRUE)
+		met = grep(search_string, rownames(stoiMat), fixed = TRUE)
 		if (length(met) == 1){
 			colz = c(1:length(stoiMat[1,]))[stoiMat[met,] != 0]
 			} else {
@@ -383,6 +538,10 @@ rxn_search = function(stoiMat, search_string, is_rxn = TRUE){
 	if(length(colz) == 0){
 		print("no hits")
 		} else {
+			if(index == TRUE){
+				colz
+				} else {
+			
 			rxns = stoiMat[,colz]
 			if(is.vector(rxns)){
 				c(colz, rxns[rxns != 0])
@@ -390,7 +549,39 @@ rxn_search = function(stoiMat, search_string, is_rxn = TRUE){
 					output <- rbind(colz, rxns[apply(rxns, 1, is.not.zero),])
 					colnames(output) = colnames(stoiMat)[colz]
 					output
-					}
+					}}
 		}
 	}
 
+flip.rxn <- function(reactions, joint.stoi){
+	stoi <- joint.stoi
+	stoi[,colnames(joint.stoi) %in% reactions] <- stoi[,colnames(joint.stoi) %in% reactions]*-1
+	stoi
+	}
+	
+is.not.zero = function(vec){
+	length(vec[vec!=0]) != 0
+	}	
+	
+######### fxns to convert between IDs and species ######
+
+metIDtoSpec <- function(meta){
+	sapply(meta, function(x){
+		corrFile$SpeciesName[corrFile$SpeciesID == x]
+		})}
+
+rxnIDtoEnz <- function(rxn){
+	sapply(rxn, function(x){
+		rxnFile$Reaction[rxnFile$ReactionID == x][1]
+		})}
+		
+metToCHEBI <- function(mets){
+	#associate species IDs and CHEBI ids where available/applicable
+	if(length(grep("chebi", rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]])) == 0){
+		NA
+		}else{
+	unlist(strsplit(rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]], split = "%3A"))[2]	
+	}}
+		
+	
+	
