@@ -1,5 +1,6 @@
 library(lpSolve)
 library(limSolve)
+library(gplots)
 
 setwd("/Users/seanhackett/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 source("FBA_lib.R")
@@ -14,6 +15,8 @@ rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFa
 rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE, stringsAsFactors = FALSE)
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
+
+#load('~/Desktop/Cornell/Drosophila_metabolism/stoiCorr.Rdata')
 
 
 metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
@@ -120,20 +123,31 @@ for(el in 1:length(stoiMat[1,])){
 missed_compounds <- met_chebi[!is.na(met_chebi)][names(met_chebi[!is.na(met_chebi)]) %in% rownames(ele_comp_mat)[apply(is.na(ele_comp_mat), 1, sum) != 0]]
 
 #create a data.frame of species with a chebi ID, but without a chemical formula match in my composition file
-missed_df <- data.frame(metIDtoSpec(names(missed_compounds)), names(missed_compounds), missed_compounds)
-unique_missed_df <- as.data.frame(matrix(NA, nrow = length(unique(missed_compounds)), ncol = 3))
-for(i in 1:length(unique(missed_compounds))){
-	unique_missed_df[i,] <- missed_df[missed_df[,3] == sort(unique(missed_compounds))[i],][1,]
-	}
+#missed_df <- data.frame(metIDtoSpec(names(missed_compounds)), names(missed_compounds), missed_compounds)
+#unique_missed_df <- as.data.frame(matrix(NA, nrow = length(unique(missed_compounds)), ncol = 3))
+#for(i in 1:length(unique(missed_compounds))){
+#	unique_missed_df[i,] <- missed_df[missed_df[,3] == sort(unique(missed_compounds))[i],][1,]
+#	}
 
-unique_missed_df[,3] %in% chem_form$COMPOUND_ID
+#unique_missed_df[,3] %in% chem_form$COMPOUND_ID
 
 
-out <- as.data.frame(matrix(0, ncol = length(colnames(ele_comp_mat)), nrow = length(unique_missed_df[,1])))
-colnames(out) <- c(colnames(ele_comp_mat))
+#out <- as.data.frame(matrix(0, ncol = length(colnames(ele_comp_mat)), nrow = length(unique_missed_df[,1])))
+#colnames(out) <- c(colnames(ele_comp_mat))
 
-write.table(cbind(unique_missed_df, out), row.names = FALSE, col.names = TRUE, file = "woot", sep = "\t")
+#write.table(cbind(unique_missed_df, out), row.names = FALSE, col.names = TRUE, file = "woot", sep = "\t")
+add.chebi.comp <- read.delim("chebi_srh_curated.tsv", stringsAsFactors = FALSE)
+add.chebi.comp <- add.chebi.comp[is.na(add.chebi.comp$generic),]
+add.chebi.comp$internal_ID <- sapply(add.chebi.comp$internal_ID, function(x){corrFile$SpeciesType[corrFile$SpeciesID == x]})
 
+for(i in 1:length(ele_comp_mat[,1])){
+	
+	if(corrFile$SpeciesType[corrFile$SpeciesID == rownames(ele_comp_mat)[i]] %in% add.chebi.comp$internal_ID){
+		ele_comp_mat[i,] <- unlist(add.chebi.comp[add.chebi.comp$internal_ID %in% corrFile$SpeciesType[corrFile$SpeciesID == rownames(ele_comp_mat)[i]], -c(1:3, length(add.chebi.comp[1,]))])
+		}}
+		
+		
+		
 
 
 
@@ -157,17 +171,49 @@ for(colnum in c(1:length(stoiMat[1,]))){
 			
 			mass_balanced$missingIDs[colnum] <- FALSE
 			
-			if(sum(defined_spec) > 1){
-			mass_balanced[colnum, -1] <- t(ele_comp_mat[stoiMat[,colnum] != 0,])%*% (stoiMat[,colnum][stoiMat[,colnum] != 0]) == 0
+			if(is.vector(ele_comp_mat[stoiMat[,colnum] != 0,]) == FALSE){
+			mass_balanced[colnum, -1] <- t(ele_comp_mat[stoiMat[,colnum] != 0,]) %*% (stoiMat[,colnum][stoiMat[,colnum] != 0]) == 0
 			}
 			}}}
 	
-mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),]
+#reactions to use: those that have transformed metabolites
+good_rxns <- colnames(stoiMat)[!is.na(mass_balanced[,2])]	
+	
+add_rxns <- mass_balanced[colnames(stoiMat) %in% good_rxns,][mass_balanced[colnames(stoiMat) %in% good_rxns,]$missingIDs == TRUE,]	
 	
 	
+	
+	
+#reactions carrying flux with elemental composition information	
 non_na_MB <- mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),][!is.na(mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),]$P),]
 
+#reactions carrying flux that are not mass balanced for an element
+
 non_na_MB_stoi <- stoiMat[apply(stoiMat[,colnames(stoiMat) %in% rownames(non_na_MB[non_na_MB$P == FALSE,])] != 0, 1, sum) != 0,colnames(stoiMat) %in% rownames(non_na_MB[non_na_MB$P == FALSE,])]
+
+#for met
+rxnparFile[rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID == "s_0504"],]
+
+
+mb.ids <- sapply(rownames(non_na_MB_stoi)[is.na(ele_comp_mat[rownames(ele_comp_mat) %in% rownames(non_na_MB_stoi),][,1])], function(x){corrFile$SpeciesType[corrFile$SpeciesID == x]})
+#for rxn 
+rxnFile[rxnFile$ReactionID %in% "r_1279",]
+rxnFile[rxnFile$ReactionID %in% "r_1281",]
+rxnFile[rxnFile$ReactionID %in% "r_1448",]
+#destroy glycine-cleavage complex (lipoylprotein)
+
+stoiMat <- stoiMat[,!is.na(mass_balanced[,2])]
+
+rxnIDtoEnz(colnames(stoiMat)[is.na(mass_balanced[,2])])
+
+
+
+
+rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
+
+metIDtoSpec(rownames(non_na_MB_stoi)[is.na(ele_comp_mat[rownames(ele_comp_mat) %in% rownames(non_na_MB_stoi),][,1])])
+metIDtoSpec("s_0504")
+
 	
 met_dict <- metIDtoSpec(rownames(non_na_MB_stoi))
 rxn_dict <- rxnIDtoEnz(colnames(non_na_MB_stoi))
@@ -175,15 +221,20 @@ rxn_dict <- rxnIDtoEnz(colnames(non_na_MB_stoi))
 rownames(non_na_MB_stoi) <- sapply(c(1:length(non_na_MB_stoi[,1])), function(x){met_dict[x][[1]]})
 colnames(non_na_MB_stoi) <- sapply(c(1:length(non_na_MB_stoi[1,])), function(x){rxn_dict[x][[1]]})
 
-metIDtoSpec("s_0334")
-
-rxnparFile[,3][rxnparFile[,1] %in% corrFile$SpeciesType[corrFile$SpeciesID %in% "s_0334"]]
+rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
 
 
+
+
+#metIDtoSpec("s_0334")
+
+#rxnparFile[,3][rxnparFile[,1] %in% corrFile$SpeciesType[corrFile$SpeciesID %in% "r_0267"]]
+
+s_0504
 
 #taken from chebi
-chem_form <- read.delim("../Yeast_reconstruction/Sequences/chemical_data.tsv", stringsAsFactors = FALSE)
-chem_form <- chem_form[chem_form$SOURCE == "ChEBI",]
+#chem_form <- read.delim("../Yeast_reconstruction/Sequences/chemical_data.tsv", stringsAsFactors = FALSE)
+#chem_form <- chem_form[chem_form$SOURCE == "ChEBI",]
 
 
 #chem_form[chem_form$ID %in% met_chebi,]
@@ -314,8 +365,8 @@ for(i in 1:length(comp_met$SpeciesID)){
 	}
 
 S <- cbind(S_rxns, influxS, effluxS, compVec)		
-#colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
 colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName, excreted_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
+#if(is.na(treatment_par[[treatment]]$auxotrophies)){save(S, file = "totalStoi.Rdata")}
 
 
 ################ F - flux balance ############
@@ -369,10 +420,6 @@ growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 }
 
 
-#v <- rep(1, times = length(S[1,]))
-#S %*%v
-Gtot %*% v >= htot
-
 
 
 
@@ -406,6 +453,30 @@ std.reduced_flux_mat <- (renamed_reduced_flux - apply(renamed_reduced_flux, 1, m
 heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05)
 
 
+# generate the stoichiometry matrix from rxns carrying flux
+load("totalStoi.Rdata")
+#metSty.old <- read.table("metSty.tsv", sep = "\t", header = TRUE)
+#rxnSty.old <- read.table("rxnSty.tsv", sep = "\t", header = TRUE)
+
+Stotal <- S[,colnames(S) %in% rownames(reduced_flux_mat)]
+Stotal <- Stotal[apply(Stotal != 0, 1, sum) != 0,]
+
+metSty <- data.frame(SpeciesID = rep(NA, times = length(Stotal[,1])), SpeciesName = rep(NA, times = length(Stotal[,1])), Compartment = rep(NA, times = length(Stotal[,1])), x = rep(NA, times = length(Stotal[,1])), y = rep(NA, times = length(Stotal[,1]))) 
+rxnSty <- data.frame(ReactionID = rep(NA, times = length(Stotal[1,])), Reaction = rep(NA, times = length(Stotal[1,])), Compartment = rep(NA, times = length(Stotal[1,])), x1 = rep(NA, times = length(Stotal[1,])), y1 = rep(NA, times = length(Stotal[1,])), x2 = rep(NA, times = length(Stotal[1,])), y2 = rep(NA, times = length(Stotal[1,]))) 
+
+for(i in 1:length(Stotal[,1])){
+	metSty[i,c(1:3)] <- corrFile[corrFile$SpeciesID %in% rownames(Stotal)[i],][,c(1,2,4)]
+	}
+for(i in 1:length(Stotal[1,])){
+	if(colnames(Stotal)[i] %in% rxnFile$ReactionID){
+		rxnSty[i,c(1:3)] <- rxnFile[rxnFile$ReactionID %in% colnames(Stotal)[i],][1,][c(2,1,3)]
+		}else{
+			rxnSty$ReactionID[i] <- colnames(Stotal)[i]
+			}}
+#write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
+#write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
+
+
 
 ######### compare boundary fluxes with their limit #########
 
@@ -429,30 +500,18 @@ limiting_fluxes[treatment,]	<-(reduced_flux_mat[sapply(sapply(treatment_par[[tre
 
 #eval_mat <- stoiMat[,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
 
-query_met <- c("phosphatidylinositol")
+reduced_flux_mat[rownames(reduced_flux_mat) %in% c("r_0393", "r_0394"),]
 
+
+query_met <- c("stearoyl")
 
 eval_mets(query_met, TRUE)
 
+metToCHEBI("s_1002")
+#
+########
 
 
-
-
-eval_mets <- function(query_met, grep_it = FALSE){
-	#find all of the reactions that a greped or exact matched metabolite participates in and then get all of the other metabolites also in those reactions
-	if(grep_it == TRUE){
-		met_matches <- grep(query_met, metIDtoSpec(rownames(stoiMat)))
-		}else{
-			met_matches <- c(1:length(stoiMat[,1]))[metIDtoSpec(rownames(stoiMat)) %in% query_met]
-			}
-	if(length(met_matches) == 0){print("miss")}
-	if(length(met_matches) == 1){
-		eval_mat <- stoiMat[apply(stoiMat[,stoiMat[met_matches,] != 0] != 0, 1, sum) != 0,stoiMat[met_matches,] != 0]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
-		}else{
-		eval_mat <- stoiMat[apply(stoiMat[,apply(stoiMat[met_matches,] != 0, 2, sum) != 0] != 0, 1, sum) != 0, apply(stoiMat[met_matches,] != 0, 2, sum) != 0]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
-		}
-	eval_mat
-	}
 
 
 
@@ -471,6 +530,7 @@ aggregate_rxns <- c(colnames(rxn_search(named_stoi, "isa", is_rxn = TRUE)), coln
 
 #flux through regexed rxn
 renamed_reduced_flux[rownames(renamed_reduced_flux) %in% names(rxn_search(named_stoi, "g", is_rxn = FALSE)[1,]),]
+
 
 
 growth_rate$growth
@@ -514,74 +574,6 @@ colnames(extra_red) <- sapply(c(1:length(extra_red[1,])), function(x){rxn_dict[x
 
 #fxns
 
-perfect.match <- function(source, query, corrFile){
-all_char <- "[[:graph:][:space:]]"
-	
-tmp <- corrFile[grep(source, query)[!(grep(source, query) %in% union(grep(paste(all_char, source, sep = ""), query), grep(paste(source, all_char, sep = ""), query)))],]
-if(length(tmp[,1]) == 0){tmp <- corrFile[grep(source, query, fixed = TRUE),]}
-tmp
-	}
 
-
-rxn_search = function(stoiMat, search_string, is_rxn = TRUE, index = FALSE){
-	#search by metabolite or reactant and return all reactions and nonzero metabolites.
-	if (is_rxn == TRUE){
-		colz = grep(search_string, colnames(stoiMat), fixed = TRUE)
-		} else {
-		met = grep(search_string, rownames(stoiMat), fixed = TRUE)
-		if (length(met) == 1){
-			colz = c(1:length(stoiMat[1,]))[stoiMat[met,] != 0]
-			} else {
-			colz = c(1:length(stoiMat[1,]))[apply(stoiMat[met,], 2, is.not.zero)]
-		}}
-	
-	if(length(colz) == 0){
-		print("no hits")
-		} else {
-			if(index == TRUE){
-				colz
-				} else {
-			
-			rxns = stoiMat[,colz]
-			if(is.vector(rxns)){
-				c(colz, rxns[rxns != 0])
-				} else {
-					output <- rbind(colz, rxns[apply(rxns, 1, is.not.zero),])
-					colnames(output) = colnames(stoiMat)[colz]
-					output
-					}}
-		}
-	}
-
-flip.rxn <- function(reactions, joint.stoi){
-	stoi <- joint.stoi
-	stoi[,colnames(joint.stoi) %in% reactions] <- stoi[,colnames(joint.stoi) %in% reactions]*-1
-	stoi
-	}
-	
-is.not.zero = function(vec){
-	length(vec[vec!=0]) != 0
-	}	
-	
-######### fxns to convert between IDs and species ######
-
-metIDtoSpec <- function(meta){
-	sapply(meta, function(x){
-		corrFile$SpeciesName[corrFile$SpeciesID == x]
-		})}
-
-rxnIDtoEnz <- function(rxn){
-	sapply(rxn, function(x){
-		rxnFile$Reaction[rxnFile$ReactionID == x][1]
-		})}
-		
-metToCHEBI <- function(mets){
-	#associate species IDs and CHEBI ids where available/applicable
-	if(length(grep("chebi", rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]])) == 0){
-		NA
-		}else{
-	unlist(strsplit(rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]], split = "%3A"))[2]	
-	}}
-		
 	
 	
