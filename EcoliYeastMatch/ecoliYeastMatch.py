@@ -6,6 +6,7 @@ and return which KEGG ids match
 
 ecoli_kegg = 'ecoli_kegg_id.csv'
 yeast_chebi = 'yeast_chebi_id.csv'
+out_file = 'correspondence.dict.csv'
 
 import CTSpy
 import re
@@ -25,26 +26,16 @@ for l in open(ecoli_kegg):
 	ecoli_id_dict[line[0]] = line[1]
 	
 	if line[1] in unique_ecoli_kegg.keys():
-		print 'woot'
+		unique_ecoli_kegg[line[1]].add(line[0])
 	else:
 		new_el = set()
-		print line[0]
-		unique_ecoli_kegg[line[1]] = new_el.add(line[0])
-		print unique_ecoli_kegg[line[1]]
-		print 'wee'
-	
-	
-	
-	lcount += 1
-	if lcount > 50:
-		break
+		new_el.add(line[0])
+		unique_ecoli_kegg[line[1]] = new_el
+		
+	#lcount += 1
+	#if lcount > 50:
+	#	break
 
-
-
-print ecoli_id_dict.values()
-
-
-quit()
 
 """ import yeast ChEBI ids, associate internal name with ChEBI id """
 
@@ -54,11 +45,14 @@ chebi_ids = set()
 lcount = 1
 for l in open(yeast_chebi):
 	line = l[:-1].split(",")
+	
+	yeast_id_dict[line[0]] = line[1]
+	
 	chebi_ids.add(line[1])
 	
-	lcount += 1
-	if lcount > 5:
-		break
+	#lcount += 1
+	#if lcount > 5:
+	#	break
 
 directCHtoKEGG = dict()
 synCHtoKEGG = dict()
@@ -76,6 +70,28 @@ for id in chebi_ids:
 			syn_set.add(aKegg)
 	synCHtoKEGG[id] = syn_set
 
-print synCHtoKEGG.keys()
-print synCHtoKEGG.values()
+
+"""
+Associate yeast metabolite IDs with ecoli metabolite IDs via id-chebi-kegg-kegg-id
+"""
+
+yeast_ecoli_id_dict = dict()
+
+for yeastID in yeast_id_dict.keys():
+	corr_ids = set()
+	yeast_ecoli_id_dict[yeastID] = corr_ids
 	
+	for eID in synCHtoKEGG[yeast_id_dict[yeastID]]:
+		if eID in unique_ecoli_kegg.keys():
+			for el in unique_ecoli_kegg[eID]:
+				yeast_ecoli_id_dict[yeastID].add(el)
+		
+
+outf = open(out_file, "w")		
+outf.write("yeastID\tecoliID" + "\n")
+			
+for l in yeast_ecoli_id_dict.keys():
+	outf.write(l + "\t" + ",".join(yeast_ecoli_id_dict[l]) + "\n")
+outf.close()	 
+	
+		
