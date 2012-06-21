@@ -4,6 +4,8 @@ Compare the list of n sets of ChEBI-associated KEGG ids with a list of ecoli KEG
 and return which KEGG ids match
 """
 
+#qsub -l 1day -cwd -sync n python ecoliYeastMatch.py
+
 ecoli_kegg = 'ecoli_kegg_id.csv'
 yeast_chebi = 'yeast_chebi_id.csv'
 out_file = 'correspondence.dict.csv'
@@ -60,12 +62,31 @@ synCHtoKEGG = dict()
 cts = CTSpy.CTS()
 
 for id in chebi_ids:
-	directCHtoKEGG[id] = cts.convert("chebi", "kegg", id)
+	import_pass = False
+	while import_pass == False:
+	 	try:
+			directCHtoKEGG[id] = cts.convert("chebi", "kegg", id)
+			import_pass = True
+		except:
+			import_pass = False
 	
+	import_pass = False
 	syn_set = set()
-	ch_syn = cts.convert("chebi", "names", id)
+	while import_pass == False:
+		try:
+			ch_syn = cts.convert("chebi", "names", id)
+			import_pass = True
+		except:
+			import_pass = False
+			
 	for syn in ch_syn:
-		keggids = cts.convert("name", "kegg", syn.split(" - ")[0])
+		import_pass = False
+		while import_pass == False:
+			try:
+				keggids = cts.convert("name", "kegg", syn.split(" - ")[0])
+				import_pass = True
+			except:
+				import_pass = False
 		for aKegg in keggids:
 			syn_set.add(aKegg)
 	synCHtoKEGG[id] = syn_set
