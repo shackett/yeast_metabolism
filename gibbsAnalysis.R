@@ -282,8 +282,6 @@ entrez_to_EC <- sapply(name_to_entrez, function(ID){
 
 ### Pass free energy to E.C. numbers
 
-e_coli_rxns
-
 unique_ECs <- unique(unlist(entrez_to_EC)[!is.na(unlist(entrez_to_EC))])
 e_coli_EC_gibbs <- list()
 for(ID in unique_ECs){
@@ -307,40 +305,76 @@ for(gene in 1:length(e_coli_rxn_corr[1,])){
 
 #determine the EC numbers of yeast genes
 
-
-
-
-rxnFile
-
-
-
-
-
-
-
-
-
-
-
-
-#all of the mapped genes in yeast
-mapped_genes
-
 library("org.Sc.sgd.db")
-x <- org.Sc.sgdENZYME
-    # Get the ORF identifiers that are mapped to an EC number 
-    mapped_genes <- mappedkeys(x)
-    # Convert to a list
-    xx <- as.list(x[mapped_genes])
-  
-    }    
+yeast_gene_to_EC_list <- as.list(org.Sc.sgdENZYME)
 
-table(unique(unlist(xx)) %in% unique(unlist(yy)))
+yeastEC <- list()
+for(ID in colnames(stoiMat)){
+	geneNamez <- rxnFile[rxnFile$ReactionID == ID,]$MetName[is.na(rxnFile[rxnFile$ReactionID == ID,]$StoiCoef)]
+	ECnums <- unlist(yeast_gene_to_EC_list[unique(unlist(strsplit(geneNamez, split = ":")))])
+	if(is.null(ECnums)){yeastEC[[ID]] <- NA; next}
+	if(length(ECnums[!is.na(ECnums)]) != 0){
+		yeastEC[[ID]] <- ECnums[!is.na(ECnums)]
+		}else{yeastEC[[ID]] <- NA}
+	}
+
+#take the reaction free energies attributed to EC numbers and pass them to the yeast rxns with the same EC number
+
+yeast_EC_pass <- list()
+for(ID in colnames(stoiMat)){
+	if(is.na(yeastEC[[ID]][1])){
+		yeast_EC_pass[[ID]] <- NA; next
+		}
+	if(sum(yeastEC[[ID]] %in% names(e_coli_EC_gibbs)) == 0){
+		yeast_EC_pass[[ID]] <- NA; next
+		}
+		
+	matchez <- yeastEC[[ID]][yeastEC[[ID]] %in% names(e_coli_EC_gibbs)]
+	out <- NULL
+	
+	for(match in matchez){out <- rbind(out, e_coli_EC_gibbs[[match]])}
+	
+	yeast_EC_pass[[ID]] <- out
+		
+	}
+
+#make a table of the high confidence gibbs free energies draw by E.C. comparison
+
+EC_gibbs <- data.frame(rxn = names(yeast_EC_pass), rxName = rxnIDtoEnz(names(yeast_EC_pass)), ecoliRxName = NA, delta_G_Kj_mol = NA, G_form_sd = NA)
+
+for(rx in 1:length(EC_gibbs[,1])){
+	if(is.vector(yeast_EC_pass[[EC_gibbs$rxn[rx]]])){
+		next
+		}
+	matchez <- yeast_EC_pass[[EC_gibbs$rxn[rx]]]
+	if(length(matchez$delta_G_Kj_mol) == 1){
+		EC_gibbs[rx,3:5] <- matchez[,3:5]
+		next
+		}
+	if(sd(matchez$delta_G_Kj_mol) == 0){
+		EC_gibbs[rx,3:5] <- c(matchez$Name[1], mean(matchez$delta_G_Kj_mol), max(matchez$G_form_sd))
+		next
+		}
+	if(abs(sd(matchez$delta_G_Kj_mol)/mean(matchez$delta_G_Kj_mol)) < 0.2){
+		EC_gibbs[rx,3:5] <- c(matchez$Name[1], mean(matchez$delta_G_Kj_mol), max(matchez$G_form_sd))
+		}
+	}
+
+
+dim(EC_gibbs[!is.na(EC_gibbs$ecoliRxName),])
+#288 1-1 matches by E.C. alignment
+#cbind(EC_gibbs$rxName, EC_gibbs$ecoliRxName)[!is.na(EC_gibbs$ecoliRxName),][1:20,]
 
 
 
 
-org.Sc.sgdENZYME()
+
+	
+	
+
+
+
+
 
 
 
