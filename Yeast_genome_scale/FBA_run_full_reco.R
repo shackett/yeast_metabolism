@@ -16,13 +16,12 @@ rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), 
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
-#load('~/Desktop/Cornell/Drosophila_metabolism/stoiCorr.Rdata')
-
 
 metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
 compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
+reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
@@ -78,6 +77,7 @@ boundary_met <- NULL
 for(x in 1:length(sources)){
 boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
 }
+
 
 #extrate the IDs of excreted metabolites
 
@@ -305,9 +305,6 @@ for(l in 1:length(labelz)){
 	}
 
 #grep(labelz[l], colnames(named_stoi), fixed = TRUE)
-
-
-
 #aggregate_rxns <- c(colnames(rxn_search(named_stoi, "isa", is_rxn = TRUE)), colnames(rxn_search(named_stoi, "protein production", is_rxn = TRUE)))
 
 rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
@@ -396,11 +393,30 @@ effluxh	<- c(effluxh, 0)
 	
 	}	
 	
+#thermodynamic flux-constraints
+
+thermoG <- NULL
+thermoh <- NULL
+cnstr_rxns <- c(1:length(S[1,]))[colnames(S) %in% reversibleRx[,1]]
+for(i in cnstr_rxns){
+	revC <- reversibleRx[,2][reversibleRx[,1] == colnames(S)[i]]
+	if(revC != 0){
+		pointVec <- rep(0, times = length(S[1,]))
+		pointVec[i] <- 1*revC
+		thermoG <- rbind(thermoG, pointVec)
+		thermoh <- c(thermoh, 0)
+		}
+	}
+
+	
 #Gtot <- rbind(influxG)#, effluxG)	
 #htot <- c(influxh)#), effluxh) 	
 
-Gtot <- rbind(influxG, effluxG)	
-htot <- c(influxh, effluxh) 	
+Gtot <- rbind(influxG, effluxG, thermoG[c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82),])	
+htot <- c(influxh, effluxh, thermoh[c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82)]) 	
+
+#Gtot <- rbind(influxG, effluxG, thermoG[78,])	
+#htot <- c(influxh, effluxh, thermoh[78]) 
 
 
 ############### costFxn - indicates the final rxn in S ######
@@ -419,6 +435,14 @@ growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
 }
 
+#colorz <- rep(c(1:5), each = 6)
+#plot(growth_rate$growth, col = colorz, , xlab = "condition", ylab = "growth rate")
+#legend("topleft", unique(growth_rate$limit), text.col = c(1:5))
+
+
+#uncooperative rxns
+
+reversibleRx[,1][reversibleRx[,1] %in% colnames(S)[apply((thermoG[c(1:length(thermoG[,1]))[!(c(1:length(thermoG[,1])) %in% c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82))],]) != 0, 2, sum) != 0]]
 
 
 
@@ -473,6 +497,7 @@ for(i in 1:length(Stotal[1,])){
 		}else{
 			rxnSty$ReactionID[i] <- colnames(Stotal)[i]
 			}}
+#save(Stotal, metSty, rxnSty, file = "totalStoiAux.Rdata")						
 #write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
 #write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
 
@@ -487,7 +512,8 @@ for(treatment in 1:length(names(treatment_par))){
 limiting_fluxes[treatment,]	<-(reduced_flux_mat[sapply(sapply(treatment_par[[treatment]]$nutrients$nutrient, function(x){paste(x, "boundary")}), function(x){c(1:length(reduced_flux_mat[,1]))[rownames(reduced_flux_mat) %in% x]}), treatment]*-1)/treatment_par[[treatment]]$nutrients$conc_per_t
 	
 	}
-
+#library(xtable)
+#xtable(limiting_fluxes)
 
 
 ########## evaluating rxns ########
