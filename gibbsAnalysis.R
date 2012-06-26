@@ -22,9 +22,6 @@ if(file.exists("Yeast_genome_scale/yeast_stoi.R")){
 
 
 
-
-
-
 metabolites <- rownames(stoiMat)
 
 e_coli_mets <- read.delim("EcoliYeastMatch/gibbs_mets.txt", header = TRUE, sep = "\t")
@@ -42,6 +39,7 @@ e_coli_rxns[,c(1,3)] <- apply(e_coli_rxns[,c(1,3)], c(1,2), function(x){
 e_coli_S <- as.matrix(read.delim("EcoliYeastMatch/e_coliStoi", header = FALSE, sep = ",", stringsAsFactors = FALSE))
 rownames(e_coli_S) <- e_coli_mets$ID
 colnames(e_coli_S) <- e_coli_rxns$ID
+
 
 
 if(run_full == TRUE){
@@ -77,16 +75,43 @@ if(run_full == TRUE){
 
 
 
-
-
-
-
+corrFile[,2][corrFile[,1] %in% c("s_1098", "s_1094")]
+YE_match[YE_match[,1] %in% c(corrFile[grep("water", corrFile[,2]),]$SpeciesID),]
+corrFile[grep("water", corrFile[,2]),]$SpeciesID
 
 
 #match based on shared stoichiometry
 
 YE_match <- read.delim("EcoliYeastMatch/correspondence.dict.csv", sep = "\t", header = TRUE)
 YE_match <- YE_match[sapply(c(1:length(YE_match[,1])), function(x){c(1:length(YE_match[,1]))[YE_match[,1] == rownames(stoiMat)[x]]}),]
+
+#correct some obvious mismatches
+
+YE_match <- match_correction(YE_match, "water", "H2O")
+YE_match <- match_correction(YE_match, "^ATP", "^ATP")
+YE_match <- match_correction(YE_match, "^ADP$", "^ADP$")
+YE_match <- match_correction(YE_match, "FAD$", "Flavin-adenine-dinucleotide-oxidized")
+YE_match <- match_correction(YE_match, "FADH2", "Flavin-adenine-dinucleotide-reduced")
+YE_match <- match_correction(YE_match, "^NAD\\(", "Nicotinamide-adenine-dinucleotide$")
+YE_match <- match_correction(YE_match, "NADH", "Nicotinamide-adenine-dinucleotide--reduced")
+YE_match <- match_correction(YE_match, "^NADP\\(", "Nicotinamide-adenine-dinucleotide-phosphate$")
+YE_match <- match_correction(YE_match, "NADPH", "Nicotinamide-adenine-dinucleotide-phosphate--reduced")
+#glucose
+#f16bp
+#D-ribose
+#UTP
+
+#metIDtoSpec(YE_match$yeastID)[grep("^NADP\\(", metIDtoSpec(YE_match$yeastID))]
+#YE_match[grep("^NADP\\(", metIDtoSpec(YE_match$yeastID)),]
+#e_coli_mets[grep("NADH", e_coli_mets$Name),]
+
+
+#yeastReg <- "^ATP"
+#coliReg <- "^ATP"
+
+
+
+
 
 YE_match_list <- list()
 for(spec in c(1:length(YE_match[,1]))){
@@ -111,14 +136,19 @@ for(yRx in 1:length(stoiMat[1,])){
 	
 	spec_col_id <- NULL
 	matching_mat <- NULL
+	involved_spec <- NULL
 	for(spec in 1:length(rxn_stoi)){
 		if(length(YE_match_list[names(rxn_stoi)][[spec]]) == 0){
 			print(paste("no match for", names(rxn_stoi)[spec], ":", metIDtoSpec(names(rxn_stoi)[spec])))
 			}else{
 				matching_mat <- rbind(matching_mat, matrix(e_coli_S[rownames(e_coli_S) %in% YE_match_list[names(rxn_stoi)][[spec]],], nrow = length(YE_match_list[names(rxn_stoi)][[spec]])))
 				spec_col_id <- c(spec_col_id, rep(spec, times = length(YE_match_list[names(rxn_stoi)][[spec]])))
+				involved_spec <- c(involved_spec, rownames(e_coli_S)[rownames(e_coli_S) %in% YE_match_list[names(rxn_stoi)][[spec]]])
 			}
 		}
+	
+	
+	
 	
 	if(is.null(spec_col_id)){
 		next
@@ -140,17 +170,21 @@ for(yRx in 1:length(stoiMat[1,])){
 					}else{
 						pos_match <- rbind(pos_match, apply(unity_mat[c(1:length(spec_col_id))[spec_col_id == spec],] == 1, 2, sum) != 0)
 						neg_match <- rbind(neg_match, apply(unity_mat[c(1:length(spec_col_id))[spec_col_id == spec],] == -1, 2, sum) != 0)
+						
 						}
 					}
 			}
+	
+	#match score = #of yeast species matched to an ecoli rxn - #of ecoli species not included
+	missing_elements <- apply(e_coli_S[!(rownames(e_coli_S) %in% involved_spec),] != 0, 2, sum)
 	
 	near_matches[[colnames(stoiMat)[yRx]]] <- list()
 	perfect_matches[[colnames(stoiMat)[yRx]]] <- list()
 							
 	
 	if(length(rxn_stoi) > 1){
-		pos_match <- apply(pos_match, 2, sum)
-		neg_match <- apply(neg_match, 2, sum)
+		pos_match <- apply(pos_match, 2, sum) - missing_elements
+		neg_match <- apply(neg_match, 2, sum) - missing_elements
 		
 		most_similar <- max(c(pos_match, neg_match))
 		
@@ -204,7 +238,17 @@ perfect <- c(1:length(is_perfect))[!is.na(is_perfect)][is_perfect[!is.na(is_perf
 n_matches <- rep(NA, times = length(perfect))
 rxn_free_e <- data.frame(delta_G_Kj_mol = rep(NA, times = length(perfect)), G_form_sd = rep(NA, times = length(perfect)))
 for(match in perfect){
-	n_matches[c(1:length(perfect))[perfect == match]] <- length(unlist(perfect_matches[[colnames(stoiMat)[match]]]))
+	n_matches[c(1:length(perfect))[perfect == match]] <- sum(!is.na(unlist(perfect_matches[[colnames(stoiMat)[match]]])))
+	
+	F_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,][,c(2,4:5)]
+	R_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,][,c(2,4:5)]
+	R_gibbs[,2] <- R_gibbs[,2]*-1
+	
+	}
+	
+	#match needs to ensure that all elements of matched rxn are met
+	
+	
 	
 	rxn_free_e <- 
 	
@@ -376,7 +420,30 @@ dim(EC_gibbs[!is.na(EC_gibbs$ecoliRxName),])
 
 
 
-
+match_correction <- function(YE_match, yeastReg, coliReg, report = FALSE){
+	
+	#remove matches in other rxns
+	for(id_match in e_coli_mets[grep(coliReg, e_coli_mets$Name),]$ID){
+		id_match <- sub("\\[", "\\\\[", id_match)
+		id_match <- sub("\\]", "\\\\]", id_match)
+		YE_match$ecoliID <- sub(paste("^", id_match, ",", sep = ""), "", YE_match$ecoliID)
+		YE_match$ecoliID <- sub(paste(",", id_match, sep = ""), "", YE_match$ecoliID)
+		YE_match$ecoliID <- sub(paste("^", id_match, "$", sep = ""), "", YE_match$ecoliID)
+		}
+		
+		
+	#add appropriate mathches
+	for(match in grep(yeastReg, metIDtoSpec(YE_match$yeastID))){
+		YE_match$ecoliID[match] <- paste(e_coli_mets[grep(coliReg, e_coli_mets$Name),]$ID, collapse = ",")
+		}
+	
+	print(paste("Replaced ", yeastReg, " ", length(grep(yeastReg, metIDtoSpec(YE_match$yeastID))), " times", sep = ""))
+	
+	if(report == TRUE){
+		YE_match[c(grep(paste("^", id_match, ",", sep = ""), YE_match$ecoliID), grep(paste(",", id_match, sep = ""), YE_match$ecoliID), grep(paste("^", id_match, "$", sep = ""), YE_match$ecoliID)),]
+		}
+	YE_match
+	}
 
 
 
