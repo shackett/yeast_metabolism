@@ -338,14 +338,14 @@ S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrop
 ##### Unconstrained Chemical Influx #####
 ##### Excreted Metabolite Efflux #####
 
-influx_rxns <- c(1:length(metabolites))[metabolites %in% c(boundary_met$SpeciesID, freeExchange_met$SpeciesID)]
+influx_rxns <- sapply(c(boundary_met$SpeciesID, freeExchange_met$SpeciesID), function(id){c(1:length(metabolites))[metabolites == id]})
 
 influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
 for(i in 1:length(influx_rxns)){
 	influxS[influx_rxns[i],i] <- -1
 	}
 
-efflux_rxns <- c(1:length(metabolites))[metabolites %in% excreted_met$SpeciesID]
+efflux_rxns <- sapply(excreted_met$SpeciesID, function(id){c(1:length(metabolites))[metabolites == id]})
 
 effluxS <- matrix(0, ncol = length(efflux_rxns), nrow = length(metabolites))
 for(i in 1:length(efflux_rxns)){
@@ -412,11 +412,13 @@ for(i in cnstr_rxns){
 #Gtot <- rbind(influxG)#, effluxG)	
 #htot <- c(influxh)#), effluxh) 	
 
-Gtot <- rbind(influxG, effluxG, thermoG[c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82),])	
-htot <- c(influxh, effluxh, thermoh[c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82)]) 	
+Gtot <- rbind(influxG, effluxG, thermoG[c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82),])	
+htot <- c(influxh, effluxh, thermoh[c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82)]) 	
 
-#Gtot <- rbind(influxG, effluxG, thermoG[78,])	
-#htot <- c(influxh, effluxh, thermoh[78]) 
+#thermoh[c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82)]) 
+
+#Gtot <- rbind(influxG, effluxG, thermoG[32,])	
+#htot <- c(influxh, effluxh, thermoh[32]) 
 
 
 ############### costFxn - indicates the final rxn in S ######
@@ -442,7 +444,12 @@ growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
 #uncooperative rxns
 
-reversibleRx[,1][reversibleRx[,1] %in% colnames(S)[apply((thermoG[c(1:length(thermoG[,1]))[!(c(1:length(thermoG[,1])) %in% c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82))],]) != 0, 2, sum) != 0]]
+rxnSet <- reversibleRx[,1][reversibleRx[,1] %in% colnames(S)[apply((thermoG[c(1:length(thermoG[,1]))[!(c(1:length(thermoG[,1])) %in% c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82))],]) != 0, 2, sum) != 0]]
+
+rxnum <- 7
+rxnstoi <- S[S[,colnames(S) == rxnSet[rxnum]] != 0 ,colnames(S) == rxnSet[rxnum]]
+names(rxnstoi) <- metIDtoSpec(names(rxnstoi))
+rxnstoi
 
 
 
@@ -474,14 +481,27 @@ renamed_reduced_flux <- reduced_flux_mat; rownames(renamed_reduced_flux) <- c(rx
 
 std.reduced_flux_mat <- (renamed_reduced_flux - apply(renamed_reduced_flux, 1, mean, na.rm = TRUE))/apply(renamed_reduced_flux, 1, sd, na.rm = TRUE)
 
+#write.table(reduced_flux_mat, file = "carriedFlux.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+
 heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05)
+
+#heatmap of fluxes-per-unit growth
+
+flux_per_gr <- reduced_flux_mat/matrix(growth_rate$growth, ncol = length(reduced_flux_mat[1,]), nrow = length(reduced_flux_mat[,1]), byrow = TRUE)
+flux_per_gr <- flux_per_gr[apply(flux_per_gr, 1, sd) != 0,]
+
+heatmap.2(t(scale(t(flux_per_gr), TRUE, TRUE)), trace = "n")
+
+####### BRIDGE TO NETWORK LAYOUT ########
+
 
 
 # generate the stoichiometry matrix from rxns carrying flux
 load("totalStoi.Rdata")
-#metSty.old <- read.table("metSty.tsv", sep = "\t", header = TRUE)
-#rxnSty.old <- read.table("rxnSty.tsv", sep = "\t", header = TRUE)
+first_write = FALSE
 
+if(first_write == TRUE){
+#writing a position file from scratch
 Stotal <- S[,colnames(S) %in% rownames(reduced_flux_mat)]
 Stotal <- Stotal[apply(Stotal != 0, 1, sum) != 0,]
 
@@ -497,9 +517,44 @@ for(i in 1:length(Stotal[1,])){
 		}else{
 			rxnSty$ReactionID[i] <- colnames(Stotal)[i]
 			}}
-#save(Stotal, metSty, rxnSty, file = "totalStoiAux.Rdata")						
-#write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
-#write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
+}else{
+	#updating an existing position file
+	metSty.old <- read.delim("metSty.tsv", sep = "\t", header = TRUE)
+	rxnSty.old <- read.delim("rxnSty.tsv", sep = "\t", header = TRUE)
+	
+	Stotal <- S[,colnames(S) %in% union(rownames(reduced_flux_mat), rxnSty.old$ReactionID)]
+	Stotal <- Stotal[apply(Stotal != 0, 1, sum) != 0,]
+	
+	#new rxns
+	new_rxns <- rownames(reduced_flux_mat)[!(rownames(reduced_flux_mat) %in% rxnSty.old$ReactionID)]
+	new_mets <- rownames(Stotal)[!(rownames(Stotal) %in% metSty.old$SpeciesID)]
+	
+	metSty_bind <- as.data.frame(matrix(NA, ncol = length(metSty.old[1,]), nrow = length(new_mets)))
+	colnames(metSty_bind) <- colnames(metSty.old)
+	for(i in 1:length(new_mets)){
+		metSty_bind[i,c(1:3)] <- corrFile[corrFile$SpeciesID %in% new_mets[i],][,c(1,2,4)]
+		}
+	
+	rxnSty_bind <- as.data.frame(matrix(NA, ncol = length(rxnSty.old[1,]), nrow = length(new_rxns)))
+	colnames(rxnSty_bind) <- colnames(rxnSty.old)
+	for(i in 1:length(new_rxns)){
+	if(new_rxns[i] %in% rxnFile$ReactionID){
+		rxnSty_bind[i,c(1:3)] <- rxnFile[rxnFile$ReactionID %in% new_rxns[i],][1,][c(2,1,3)]
+		}else{
+			rxnSty_bind$ReactionID[i] <- new_rxns[i]
+			}}
+	
+	metSty = rbind(metSty.old, metSty_bind)
+	rxnSty = rbind(rxnSty.old, rxnSty_bind)
+	
+	}
+
+save(Stotal, metSty, rxnSty, file = "totalStoiAux.Rdata")						
+write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
+write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
+
+
+
 
 
 
