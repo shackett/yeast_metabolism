@@ -23,6 +23,10 @@ nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 
+load("checkRev.R")
+reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 0
+reversibleRx[,2][reversibleRx[,1] %in% c("r_0222", "r_0241", "r_0938")] <- 1
+
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
@@ -230,8 +234,6 @@ rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
 
 #rxnparFile[,3][rxnparFile[,1] %in% corrFile$SpeciesType[corrFile$SpeciesID %in% "r_0267"]]
 
-s_0504
-
 #taken from chebi
 #chem_form <- read.delim("../Yeast_reconstruction/Sequences/chemical_data.tsv", stringsAsFactors = FALSE)
 #chem_form <- chem_form[chem_form$SOURCE == "ChEBI",]
@@ -397,6 +399,7 @@ effluxh	<- c(effluxh, 0)
 
 thermoG <- NULL
 thermoh <- NULL
+rxstack <- NULL
 cnstr_rxns <- c(1:length(S[1,]))[colnames(S) %in% reversibleRx[,1]]
 for(i in cnstr_rxns){
 	revC <- reversibleRx[,2][reversibleRx[,1] == colnames(S)[i]]
@@ -405,6 +408,7 @@ for(i in cnstr_rxns){
 		pointVec[i] <- 1*revC
 		thermoG <- rbind(thermoG, pointVec)
 		thermoh <- c(thermoh, 0)
+		rxstack <- c(rxstack, colnames(S)[colnames(S) %in% reversibleRx[,1]][i])
 		}
 	}
 
@@ -412,10 +416,15 @@ for(i in cnstr_rxns){
 #Gtot <- rbind(influxG)#, effluxG)	
 #htot <- c(influxh)#), effluxh) 	
 
-Gtot <- rbind(influxG, effluxG, thermoG[c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82),])	
-htot <- c(influxh, effluxh, thermoh[c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82)]) 	
+Gtot <- rbind(influxG, effluxG, thermoG)	
+htot <- c(influxh, effluxh, thermoh) 	
 
-#thermoh[c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82)]) 
+
+#Gtot <- rbind(influxG, effluxG, thermoG[c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82),])	
+#htot <- c(influxh, effluxh, thermoh[c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82)]) 	
+
+#misclass <- rxstack[!(c(1:length(rxstack)) %in% c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82))]
+#save(misclass, file = "checkRev.R"))
 
 #Gtot <- rbind(influxG, effluxG, thermoG[32,])	
 #htot <- c(influxh, effluxh, thermoh[32]) 
