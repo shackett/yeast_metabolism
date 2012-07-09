@@ -765,3 +765,98 @@
 "r_1518"	"trehalose vacuolar transport"	"exchange"	NA	NA	NA	NA
 "r_1522"	"tyrosine transport"	"exchange"	NA	NA	NA	NA
 "r_1523"	"tyrosine transport"	"exchange"	NA	NA	NA	NA
+"r_0098"	"5-formethyltetrahydrofolate cyclo-ligase"	"c_10"	NA	NA	NA	NA
+"r_0185"	"aldehyde dehydrogenase (2-methylbutanol, NAD)"	"c_10"	NA	NA	NA	NA
+"r_0186"	"aldehyde dehydrogenase (2-methylbutanol, NADP)"	"c_02"	NA	NA	NA	NA
+"r_0196"	"aldehyde dehydrogenase (indole-3-acetaldehyde, NADP)"	"c_10"	NA	NA	NA	NA
+"r_0213"	"alpha,alpha-trehalose-phosphate synthase (UDP-forming)"	"c_02"	NA	NA	NA	NA
+"r_0260"	"C-22 sterol desaturase (NADP)"	"c_02"	NA	NA	NA	NA
+"r_0345"	"cytidylate kinase (CMP)"	"c_02"	NA	NA	NA	NA
+"r_0415"	"fatty acid oxidation (octanoyl-CoA)"	"c_14"	NA	NA	NA	NA
+"r_0442"	"fatty-acid--CoA ligase (octanoate)"	"c_14"	NA	NA	NA	NA
+"r_0500"	"glucosamine-6-phosphate deaminase"	"c_02"	NA	NA	NA	NA
+"r_0516"	"glutamine-fructose-6-phosphate transaminase"	"c_02"	NA	NA	NA	NA
+"r_0596"	"hydroxyethylthiazole kinase"	"c_02"	NA	NA	NA	NA
+"r_0601"	"hydroxymethylpyrimidine kinase (ATP)"	"c_02"	NA	NA	NA	NA
+"r_0629"	"isocitrate dehydrogenase (NAD+)"	"c_10"	NA	NA	NA	NA
+"r_0736"	"NAD kinase"	"c_02"	NA	NA	NA	NA
+"r_0740"	"NAD synthase (nh3)"	"c_02"	NA	NA	NA	NA
+"r_0743"	"NADH kinase"	"c_02"	NA	NA	NA	NA
+"r_0746"	"NADP phosphatase"	"c_02"	NA	NA	NA	NA
+"r_0748"	"NAPRtase"	"c_02"	NA	NA	NA	NA
+"r_0756"	"nicotinamidase"	"c_02"	NA	NA	NA	NA
+"r_0876"	"phosphomethylpyrimidine kinase"	"c_02"	NA	NA	NA	NA
+"r_0917"	"purine-nucleoside phosphorylase"	"c_02"	NA	NA	NA	NA
+"r_0930"	"pyridoxamine kinase"	"c_02"	NA	NA	NA	NA
+"r_0960"	"ribonucleoside-triphosphate reductase (CTP)"	"c_02"	NA	NA	NA	NA
+"r_0964"	"ribosylnicotinamide kinase"	"c_02"	NA	NA	NA	NA
+"r_1001"	"succinate dehydrogenase (ubiquinone-6)"	"c_10"	NA	NA	NA	NA
+"r_1011"	"tetrahydrofolate aminomethyltransferase"	"c_10"	NA	NA	NA	NA
+"r_1014"	"thiamin phosphatase"	"c_02"	NA	NA	NA	NA
+"r_1016"	"thiaminase"	"c_02"	NA	NA	NA	NA
+"r_1019"	"thiamine-phosphate diphosphorylase"	"c_02"	NA	NA	NA	NA
+"r_1038"	"trehalose-phosphatase"	"c_02"	NA	NA	NA	NA
+"r_1098"	"2-methyl-1-butanol transport"	"exchange"	NA	NA	NA	NA
+"r_1100"	"2-methylbutanal transport"	"exchange"	NA	NA	NA	NA
+"r_1138"	"acetate transport"	"exchange"	NA	NA	NA	NA
+"r_0110"	"acetaldehyde condensation"	"c_02"	NA	NA	NA	NA
+"r_0153"	"adenine deaminase"	"c_02"	NA	NA	NA	NA
+"r_0157"	"adenosine kinase"	"c_02"	NA	NA	NA	NA
+"r_0409"	"fatty acid oxidation"	"c_14"	NA	NA	NA	NA
+"r_0439"	"fatty-acid--CoA ligase (octadecanoate)"	"c_02"	NA	NA	NA	NA
+"r_0772"	"nucleoside-diphosphate kinase (ATP:dADP)"	"c_02"	NA	NA	NA	NA
+"r_0818"	"peroxisomal acyl-CoA thioesterase"	"c_14"	NA	NA	NA	NA
+"r_0939"	"pyruvate decarboxylase (acetoin-forming)"	"c_02"	NA	NA	NA	NA
+"r_0955"	"ribonucleoside-diphosphate reductase (GDP)"	"c_02"	NA	NA	NA	NA
+"r_0959"	"ribonucleoside-triphosphate reductase (ATP)"	"c_02"	NA	NA	NA	NA
+"r_1117"	"3-methyl-oxopentanoate trasport"	"exchange"	NA	NA	NA	NA
+"r_1124"	"4-aminobutyrate transport"	"exchange"	NA	NA	NA	NA
+"r_1125"	"4-aminobutyrate transport"	"exchange"	NA	NA	NA	NA
+"r_1150"	"ADP/ATP transporter"	"exchange"	NA	NA	NA	NA
+"r_1226"	"dihydroxyacetone phosphate transport"	"exchange"	NA	NA	NA	NA
+"r_1301"	"glycerol-3-phosphate shuttle"	"exchange"	NA	NA	NA	NA
+"r_1323"	"hexadecanoate (n-C16:0) transport"	"exchange"	NA	NA	NA	NA
+"r_1324"	"hexadecenoate (n-C16:1) transport"	"exchange"	NA	NA	NA	NA
+"r_1440"	"octadecynoate (n-C18:2) transport"	"exchange"	NA	NA	NA	NA
+"r_1447"	"palmitoyl-CoA transport"	"exchange"	NA	NA	NA	NA
+"r_1459"	"phosphate transport"	"exchange"	NA	NA	NA	NA
+"r_0199"	"aldehyde dehydrogenase (isoamyl alcohol, NADP)"	"c_02"	NA	NA	NA	NA
+"r_0295"	"ceramide-3 synthase (26C)"	"c_03"	NA	NA	NA	NA
+"r_0449"	"fatty-acyl-ACP hydrolase"	"c_02"	NA	NA	NA	NA
+"r_0458"	"fatty-acyl-ACP synthase (n-C14:1ACP)"	"c_10"	NA	NA	NA	NA
+"r_0624"	"IPC synthase"	"c_06"	NA	NA	NA	NA
+"r_1178"	"ceramide-3 (Phytosphingosine:n-C26:0OH) transport"	"exchange"	NA	NA	NA	NA
+"r_1276"	"fatty-acyl-ACP transport"	"exchange"	NA	NA	NA	NA
+"r_1358"	"L-carnitine transport"	"exchange"	NA	NA	NA	NA
+"r_1432"	"O-acetylcarnintine transport into mitochondria"	"exchange"	NA	NA	NA	NA
+"r_0021"	"2-deoxy-D-arabino-heptulosonate 7-phosphate synthetase"	"c_10"	NA	NA	NA	NA
+"r_0041"	"3-(4-hydroxyphenyl-)lactate formation"	"c_10"	NA	NA	NA	NA
+"r_0075"	"4-hydroxybenzoate formation"	"c_10"	NA	NA	NA	NA
+"r_0076"	"4-hydroxybenzoyl-CoA formation"	"c_10"	NA	NA	NA	NA
+"r_0077"	"4-hydroxycinnamate formation"	"c_10"	NA	NA	NA	NA
+"r_0165"	"adenylate kinase (GTP)"	"c_02"	NA	NA	NA	NA
+"r_0201"	"aldehyde dehydrogenase (isobutyl alcohol, NAD)"	"c_10"	NA	NA	NA	NA
+"r_0202"	"aldehyde dehydrogenase (isobutyl alcohol, NADP)"	"c_02"	NA	NA	NA	NA
+"r_0305"	"chorismate pyruvate lyase"	"c_02"	NA	NA	NA	NA
+"r_0307"	"cis-aconitate(3-) to isocitrate"	"c_10"	NA	NA	NA	NA
+"r_0330"	"citrate to cis-aconitate(3-)"	"c_10"	NA	NA	NA	NA
+"r_0334"	"coumaroyl-CoA formation"	"c_10"	NA	NA	NA	NA
+"r_0591"	"hydrogen peroxide reductase (thioredoxin)"	"c_10"	NA	NA	NA	NA
+"r_0767"	"nucleoside-diphosphatase (dGDP)"	"c_02"	NA	NA	NA	NA
+"r_1025"	"thioredoxin reductase (NADPH)"	"c_10"	NA	NA	NA	NA
+"r_1092"	"2-dehydro-3-deoxy-D-arabino-heptonate7-phohsphate transport"	"exchange"	NA	NA	NA	NA
+"r_1103"	"2-methylpropanal transport"	"exchange"	NA	NA	NA	NA
+"r_1128"	"4-hydroxybenzoate transport"	"exchange"	NA	NA	NA	NA
+"r_1183"	"citrate transport"	"exchange"	NA	NA	NA	NA
+"r_1203"	"D-erythrose 4-phosphate transport"	"exchange"	NA	NA	NA	NA
+"r_1343"	"isobutyl alcohol transport"	"exchange"	NA	NA	NA	NA
+"succinate(2-) boundary"	NA	NA	NA	NA	NA	NA
+"(R)-lactate boundary"	NA	NA	NA	NA	NA	NA
+"r_0412"	"fatty acid oxidation"	"c_14"	NA	NA	NA	NA
+"r_0958"	"ribonucleoside-diphosphate reductase (UDP)"	"c_12"	NA	NA	NA	NA
+"r_1060"	"UMP kinase"	"c_12"	NA	NA	NA	NA
+"r_1166"	"ATP diffusion"	"exchange"	NA	NA	NA	NA
+"r_1236"	"dUDP diffusion"	"exchange"	NA	NA	NA	NA
+"r_1498"	"spermidine excretion"	"exchange"	NA	NA	NA	NA
+"r_1499"	"spermidine transport"	"exchange"	NA	NA	NA	NA
+"r_1525"	"UMP transport"	"exchange"	NA	NA	NA	NA

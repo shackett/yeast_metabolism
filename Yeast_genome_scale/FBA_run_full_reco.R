@@ -16,7 +16,6 @@ rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), 
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
-
 metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
 compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
@@ -25,7 +24,7 @@ reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header 
 
 load("checkRev.R")
 reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 0
-reversibleRx[,2][reversibleRx[,1] %in% c("r_0222", "r_0241", "r_0938")] <- 1
+reversibleRx[,2][reversibleRx[,1] %in% c("r_0241", "r_0862", "r_0938")] <- 1
 
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
@@ -56,6 +55,9 @@ for(i in 1:length(nutrientFile[1,])){
 	}}
 
 #rxnIDtoEnz(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))
+rxchoose <- "r_0241"
+x <- stoiMat[stoiMat[,colnames(stoiMat) == rxchoose] != 0,colnames(stoiMat) == rxchoose]
+names(x) <- metIDtoSpec(names(x))
 
 #load or write stoichiometry matrix of reactions and their altered metabolites
 
@@ -104,6 +106,10 @@ excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$
 #rownames(tmp2) <- metIDtoSpec(rownames(tmp2)); colnames(tmp2) <- rxnIDtoEnz(colnames(tmp2))
 #grep("lactate", rxnIDtoEnz(colnames(stoiMat)), value = TRUE)
 
+
+skip_me = TRUE
+
+if(skip_me == FALSE){
 
 ######### Confirm mass balance of reactions ############
 
@@ -228,7 +234,7 @@ colnames(non_na_MB_stoi) <- sapply(c(1:length(non_na_MB_stoi[1,])), function(x){
 rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
 
 
-
+}
 
 #metIDtoSpec("s_0334")
 
@@ -344,14 +350,14 @@ influx_rxns <- sapply(c(boundary_met$SpeciesID, freeExchange_met$SpeciesID), fun
 
 influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
 for(i in 1:length(influx_rxns)){
-	influxS[influx_rxns[i],i] <- -1
+	influxS[influx_rxns[i],i] <- 1
 	}
 
 efflux_rxns <- sapply(excreted_met$SpeciesID, function(id){c(1:length(metabolites))[metabolites == id]})
 
 effluxS <- matrix(0, ncol = length(efflux_rxns), nrow = length(metabolites))
 for(i in 1:length(efflux_rxns)){
-	effluxS[efflux_rxns[i],i] <- 1
+	effluxS[efflux_rxns[i],i] <- -1
 	}
 
 	
@@ -413,34 +419,35 @@ for(i in cnstr_rxns){
 	}
 
 	
-#Gtot <- rbind(influxG)#, effluxG)	
-#htot <- c(influxh)#), effluxh) 	
 
-Gtot <- rbind(influxG, effluxG, thermoG)	
+Gtot <- rbind(influxG, effluxG, thermoG)
 htot <- c(influxh, effluxh, thermoh) 	
 
-
-#Gtot <- rbind(influxG, effluxG, thermoG[c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82),])	
-#htot <- c(influxh, effluxh, thermoh[c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82)]) 	
-
+#misclass <- rxstack[!(c(1:length(rxstack)) %in% c(1:63,65:82))]
 #misclass <- rxstack[!(c(1:length(rxstack)) %in% c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82))]
-#save(misclass, file = "checkRev.R"))
+#save(misclass, file = "checkRev.R")
 
-#Gtot <- rbind(influxG, effluxG, thermoG[32,])	
-#htot <- c(influxh, effluxh, thermoh[32]) 
+#Gtot <- rbind(influxG, effluxG, thermoG[64,])	
+#htot <- c(influxh, effluxh, thermoh[64]) 
 
 
 ############### costFxn - indicates the final rxn in S ######
+#lp loss fxn
+costFxn = c(rep(0, times = length(S[1,]) -1), -1)
 
-costFxn = c(rep(0, times = length(S[1,]) -1), 1)
+#qp loss fxn
+#costFxn = c(rep(0, times = length(S[1,]) -1), 1)
+
+
+
+
 
 ######## use linear programming to maximize biomass #######
 
 linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
-invert_fluxes <- ifelse(colnames(S) %in% c(sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), function(x){paste(x, "boundary")}), "composition"), -1, 1)
+#quadp_solution <- lsei(
 
-
-flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X*invert_fluxes
+flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X#*invert_fluxes
 
 growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
