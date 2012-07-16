@@ -1,0 +1,250 @@
+\documentclass[12pt]{article}
+\usepackage[left=0.95in,top=0.95in,right=0.95in,bottom=0.95in,nohead]{geometry}
+\usepackage{geometry}                % See geometry.pdf to learn the layout options. There are lots.
+\geometry{a4paper}                   % ... or a4paper or a5paper or ... 
+\usepackage{wrapfig}	%in-line figures
+\usepackage[numbers, super]{natbib}		%bibliography
+%\usepackage{pslatex} 	%for times new roman
+\usepackage[parfill]{parskip}    % Activate to begin paragraphs with an empty line rather than an indent
+\usepackage{graphicx}
+\usepackage{amssymb}
+\usepackage{epstopdf}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{subfig}
+\usepackage{wrapfig}
+\usepackage{graphics}
+\usepackage{enumitem}
+\usepackage[T1]{fontenc}
+\usepackage{aurical}
+\usepackage[T1]{fontenc}
+\usepackage[scaled]{helvet}
+\usepackage{multicol}
+
+% This setup helps makes sure R code doesn't stretch off the side of the screen
+% Don't worry about this until you've read the rest of the document
+\SweaveOpts{keep.source=FALSE}
+<<echo=FALSE, results=hide>>=
+options(width=60)
+library("xtable")
+library("gplots")
+library("colorRamps")
+library(ggplot2)
+
+library(cacheSweave)
+setCacheDir("cache")
+
+setwd("/Users/seanhackett/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/Flux_analysis")
+
+source("/Users/seanhackett/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/FBA_lib.R")
+@
+
+
+\author{Sean R. Hackett}
+\title{FBA analysis} 
+\date{}
+
+\begin{document}
+
+\setlength{\parskip}{0.5mm}
+\linespread{1}
+
+\thispagestyle{empty}
+\pagestyle{empty}
+
+\maketitle
+
+<<>>=
+load("SweaveFluxFilez.Rdata")
+load("SweaveNetFilez.Rdata")
+
+all_rxns <- NULL
+for(treatment in 1:length(names(treatment_par))){
+	all_rxns <- union(all_rxns, names(flux_vectors[[names(flux_vectors)[treatment]]]))
+	}
+
+specified_rxns <- c(grep("r_", all_rxns), grep("boundary", all_rxns))
+
+ordered_rxns <- all_rxns[c(specified_rxns, c(1:length(all_rxns))[!(all_rxns %in% all_rxns[specified_rxns])])]
+
+cond_fluxes <- matrix(NA, ncol = length(names(treatment_par)), nrow = length(all_rxns))
+rownames(cond_fluxes) <- ordered_rxns
+colnames(cond_fluxes) <- names(treatment_par)
+
+for(treatment in 1:length(names(treatment_par))){
+	fluxes <- flux_vectors[[names(treatment_par)[treatment]]]
+
+	cond_fluxes[,treatment] <- unlist(sapply(rownames(cond_fluxes), function(x){ifelse(is.null(fluxes[names(fluxes) %in% x]),NA,fluxes[names(fluxes) %in% x])}))
+
+	}
+
+reduced_flux_mat <- cond_fluxes[apply(cond_fluxes != 0, 1, sum) != 0,]
+reduced_flux_mat <- reduced_flux_mat[!is.na(apply(reduced_flux_mat, 1, sd, na.rm = TRUE)),]
+renamed_reduced_flux <- reduced_flux_mat; rownames(renamed_reduced_flux) <- c(rxnIDtoEnz(rownames(reduced_flux_mat)[grep("r_", rownames(reduced_flux_mat))]), rownames(reduced_flux_mat)[grep("r_", rownames(reduced_flux_mat), invert = TRUE)])
+
+std.reduced_flux_mat <- (renamed_reduced_flux - apply(renamed_reduced_flux, 1, mean, na.rm = TRUE))/apply(renamed_reduced_flux, 1, sd, na.rm = TRUE)
+
+flux_per_gr <- reduced_flux_mat/matrix(growth_rate$growth, ncol = length(reduced_flux_mat[1,]), nrow = length(reduced_flux_mat[,1]), byrow = TRUE)
+flux_per_gr <- flux_per_gr[apply(flux_per_gr, 1, sd) != 0,]
+
+@
+
+\section*{Growth rate across conditions}
+
+
+<<>>=
+gr_plot <- ggplot(data.frame(growth_rate, index = 1:length(growth_rate[,1])), aes(index, growth, colour = factor(limit), size = 15))
+gr_plot  <- gr_plot + labs(x = NULL, y = "Growth rate")
+gr_plot  <- gr_plot + guides(size = FALSE)
+gr_plot  <- gr_plot  + scale_colour_manual(values= c(1:5), name = "Condition")
+gr_plot  <- gr_plot + geom_point()
+@
+
+\begin{figure}
+<<fig = TRUE>>=
+gr_plot
+@
+\caption{Growth rate across nutrient conditions}
+\end{figure}
+
+
+\begin{figure}
+<<fig=TRUE>>=
+heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05)
+@
+\caption{Flux carried through \Sexpr{length(reduced_flux_mat[,1])} across \Sexpr{length(reduced_flux_mat[1,])} conditions}
+\label{heatmap_fluxes}
+\end{figure}
+
+Looking across all of the \Sexpr{length(reduced_flux_mat[,1])} reactions that carry non-zero flux in some condition, the relationship between sets of fluxes and condition-specific and dr-specific nutrient availability can be visualized through hierarchical clustering (figure \ref{heatmap_fluxes}). 
+
+Because most of the fluxes within a given condition are proportional to the concentration of the limiting nutrient, the patterns of flux can be simplified by dividing by this concentration (figure \ref{heatmap_gr_removed})
+
+
+\begin{figure}
+<<fig=TRUE>>=
+heatmap.2(t(scale(t(flux_per_gr), TRUE, TRUE)), Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05)
+@
+\caption{fluxes shown in figure \ref{heatmap_fluxes} divided by the growth rate}
+\label{heatmap_gr_removed}
+\end{figure}
+
+
+
+<<>>=
+limiting_fluxes <- matrix(nrow = length(names(treatment_par)), ncol = length(treatment_par[[1]]$nutrients[,1])); rownames(limiting_fluxes) <- names(treatment_par); colnames(limiting_fluxes) <- treatment_par[[1]]$nutrients[,1]
+
+for(treatment in 1:length(names(treatment_par))){
+	limiting_fluxes[treatment,]	<-(reduced_flux_mat[sapply(sapply(treatment_par[[treatment]]$nutrients$nutrient, function(x){paste(x, "boundary")}), function(x){c(1:length(reduced_flux_mat[,1]))[rownames(reduced_flux_mat) %in% x]}), treatment]*-1)/treatment_par[[treatment]]$nutrients$conc_per_t
+	}
+@
+
+<<results = tex>>=
+print(xtable(limiting_fluxes*-1, caption = "nutrient influx / max influx", digits = 3, label = "limiting_flux"), size = "scriptsize")
+@
+
+\section*{Analysis of flux trends}
+
+<<>>=
+fluxMatPCA = svd(std.reduced_flux_mat)
+
+npcs = length(std.reduced_flux_mat[1,])
+scree_frame = data.frame(fact = "data", pc_num = 1: npcs, frac_var = fluxMatPCA$d^2/sum(fluxMatPCA$d^2))
+null_scree_frame = data.frame(fact = "null", pc_num = 1:npcs, frac_var = NA)
+n_brok_stick = 50
+for(n in 1:npcs){
+	#generate an approximate null distribution of fractions of variance explained using a stickbreaking process
+	null_scree_frame$frac_var[n] = c(1, 1 - cumsum(scree_frame$frac_var)[-npcs])[n]*mean(sapply(c(1: n_brok_stick), function(x){max(diff(c(0, sort(runif(npcs - (n-1), 0, 1)), 1)))}))
+	}
+	
+scree_coloring = c("red", "cadetblue")	
+scale_colour_manual(values=scree_coloring) 
+
+
+#generate an approximate null distribution of fractions of variance explained using a stickbreaking process
+
+
+scree_plot <- ggplot(rbind(scree_frame, null_scree_frame), aes(pc_num, frac_var, colour = factor(fact), size = 15, alpha = 0.5))
+scree_plot  <- scree_plot + labs(x = "Principal component number", y = "Fraction of variance explained")
+scree_plot <- scree_plot + opts(legend.title=theme_blank()) 
+scree_plot  <- scree_plot + guides(size = FALSE, alpha = FALSE)
+scree_plot  <- scree_plot  + scale_colour_manual(values= scree_coloring, 
+                       name= NA,
+                       breaks=c("null", "data"),
+                       labels=c("NULL", "DATA"))
+scree_plot  <- scree_plot + geom_point()
+@
+
+<<fig = TRUE>>=
+scree_plot
+@
+
+<<echo = FALSE>>=
+multiplot <- function(..., plotlist=NULL, cols) {
+    require(grid)
+
+    # Make a list from the ... arguments and plotlist
+    plots <- c(list(...), plotlist)
+
+    numPlots = length(plots)
+
+    # Make the panel
+    plotCols = cols                          # Number of columns of plots
+    plotRows = ceiling(numPlots/plotCols) # Number of rows needed, calculated from # of cols
+
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(plotRows, plotCols)))
+    vplayout <- function(x, y)
+        viewport(layout.pos.row = x, layout.pos.col = y)
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+        curRow = ceiling(i/plotCols)
+        curCol = (i-1) %% plotCols + 1
+        print(plots[[i]], vp = vplayout(curRow, curCol ))
+    }
+
+}
+@
+
+
+
+<<fig = TRUE>>=
+
+nsig_pc = 4
+pcs <- fluxMatPCA$v[,1:nsig_pc]; colnames(pcs) = paste("PC", 1:nsig_pc, sep = "_")
+PCdataframe = data.frame(index = 1:length(std.reduced_flux_mat[1,]), growth_rate, pcs, X = NA)
+plot_list = list()
+	
+
+
+for(sig_pc in 1:nsig_pc){
+	PCdataframe$X <- PCdataframe[,colnames(PCdataframe) == paste("PC", sig_pc, sep = "_")]
+	
+	tmp_plot = ggplot(PCdataframe, aes(index, X, size = 15, colour = factor(limit)))
+	tmp_plot  <- tmp_plot + labs(x = "Condition", y = "PC value")
+	tmp_plot <- tmp_plot + opts(legend.title=theme_blank()) 
+	tmp_plot  <- tmp_plot + guides(size = FALSE, alpha = FALSE, colour = FALSE)
+	tmp_plot <- tmp_plot  + scale_colour_manual(name = "Condition", values= c(1:5))
+	plot_list[[sig_pc]] <- tmp_plot + geom_point()
+	
+}
+multiplot(plot_list[[1]], plot_list[[2]], plot_list[[3]], plot_list[[4]], cols = 2)
+
+
+
+
+
+
+
+@
+
+
+
+
+
+\bibliographystyle{plainnat}
+\bibliography{hackett2011}
+
+\end{document}  
