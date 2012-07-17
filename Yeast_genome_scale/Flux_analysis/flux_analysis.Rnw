@@ -100,7 +100,7 @@ gr_plot  <- gr_plot  + scale_colour_manual(values= c(1:5), name = "Condition")
 gr_plot  <- gr_plot + geom_point()
 @
 
-\begin{figure}
+\begin{figure}[h!]
 <<fig = TRUE>>=
 gr_plot
 @
@@ -216,29 +216,44 @@ nsig_pc = 4
 pcs <- fluxMatPCA$v[,1:nsig_pc]; colnames(pcs) = paste("PC", 1:nsig_pc, sep = "_")
 PCdataframe = data.frame(index = 1:length(std.reduced_flux_mat[1,]), growth_rate, pcs, X = NA)
 plot_list = list()
-	
+plot_list2 = list()	
 
 
 for(sig_pc in 1:nsig_pc){
 	PCdataframe$X <- PCdataframe[,colnames(PCdataframe) == paste("PC", sig_pc, sep = "_")]
 	
 	tmp_plot = ggplot(PCdataframe, aes(index, X, size = 15, colour = factor(limit)))
-	tmp_plot  <- tmp_plot + labs(x = "Condition", y = "PC value")
+	tmp_plot  <- tmp_plot + labs(x = "Condition", y = paste("PC", sig_pc, "value", sep = " "))
 	tmp_plot <- tmp_plot + opts(legend.title=theme_blank()) 
 	tmp_plot  <- tmp_plot + guides(size = FALSE, alpha = FALSE, colour = FALSE)
 	tmp_plot <- tmp_plot  + scale_colour_manual(name = "Condition", values= c(1:5))
 	plot_list[[sig_pc]] <- tmp_plot + geom_point()
 	
+	PCdataframe$X <- PCdataframe$X/PCdataframe$growth
+	
+	tmp_plot2 = ggplot(PCdataframe, aes(index, X, size = 15, colour = factor(limit)))
+	tmp_plot2  <- tmp_plot2 + labs(x = "Condition", y = paste("PC", sig_pc, "value / GR", sep = " "))
+	tmp_plot2 <- tmp_plot2 + opts(legend.title=theme_blank()) 
+	tmp_plot2  <- tmp_plot2 + guides(size = FALSE, alpha = FALSE, colour = FALSE)
+	tmp_plot2 <- tmp_plot2  + scale_colour_manual(name = "Condition", values= c(1:5))
+	plot_list2[[sig_pc]] <- tmp_plot2 + geom_point()
+	
 }
 multiplot(plot_list[[1]], plot_list[[2]], plot_list[[3]], plot_list[[4]], cols = 2)
 
-
-
-
-
-
-
 @
+
+<<fig = TRUE>>=
+multiplot(plot_list2[[1]], plot_list2[[2]], plot_list2[[3]], plot_list2[[4]], cols = 2)
+@
+
+
+Looking at PC loadings
+
+hist(abs(fluxMatPCA$u)[,1])
+hist((fluxMatPCA$u)[,1])
+
+
 
 
 

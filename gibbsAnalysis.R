@@ -234,49 +234,57 @@ for(yRx in 1:length(stoiMat[1,])){
 c(table(is_perfect), nNA = table(is.na(is_perfect))[names(table(is.na(is_perfect))) == "TRUE"])
 
 #determine whether perfect matches are unique		
+
+
+SM_gibbs <- data.frame(rxn = colnames(stoiMat), rxName = rxnIDtoEnz(colnames(stoiMat)), ecoliRxName = NA, delta_G_Kj_mol = NA, G_form_sd = NA)
+
 perfect <- c(1:length(is_perfect))[!is.na(is_perfect)][is_perfect[!is.na(is_perfect)]]
 n_matches <- rep(NA, times = length(perfect))
 rxn_free_e <- data.frame(delta_G_Kj_mol = rep(NA, times = length(perfect)), G_form_sd = rep(NA, times = length(perfect)))
 for(match in perfect){
 	n_matches[c(1:length(perfect))[perfect == match]] <- sum(!is.na(unlist(perfect_matches[[colnames(stoiMat)[match]]])))
 	
-	F_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,][,c(2,4:5)]
-	R_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,][,c(2,4:5)]
-	R_gibbs[,2] <- R_gibbs[,2]*-1
 	
+	if(!is.na(perfect_matches[[colnames(stoiMat)[match]]]$F)[1] & !is.na(perfect_matches[[colnames(stoiMat)[match]]]$R)[1]){
+		#some reactions match with forward & reverse polarity
+		F_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,][,c(2,4:5)]
+		R_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,][,c(2,4:5)]
+		R_gibbs[,2] <- R_gibbs[,2]*-1
+		freeE <- rbind(F_gibbs, R_gibbs)
+		}else{
+			if(!is.na(perfect_matches[[colnames(stoiMat)[match]]]$F)[1]){
+				#only forward matches
+				freeE <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,][,c(2,4:5)]
+				
+				}else{
+					#only reverse matches
+					R_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,][,c(2,4:5)]
+					R_gibbs[,2] <- R_gibbs[,2]*-1
+					freeE <- R_gibbs
+					}
+			}
+	
+	if(length(freeE[,1]) == 1){
+		SM_gibbs[match,3:5] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE))], freeE$delta_G_Kj_mol, freeE$G_form_sd)
+		next
+		}
+	
+	if(sd(freeE$delta_G_Kj_mol) == 0){
+		SM_gibbs[match,3:5] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE)[1])], mean(freeE$delta_G_Kj_mol), max(freeE$G_form_sd))
+		next
+		}
+		
+	if(abs(sd(freeE$delta_G_Kj_mol)/mean(freeE$delta_G_Kj_mol)) < 0.2){
+		SM_gibbs[match,3:5] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE)[1])], mean(freeE$delta_G_Kj_mol), max(freeE$G_form_sd))
+		}
 	}
 	
-	#match needs to ensure that all elements of matched rxn are met
 	
-	
-	
-	rxn_free_e <- 
-	
-	
-	perfect_matches[[colnames(stoiMat)[match]]]
-	
-	e_coli_rxns[2047,]
-	
-	}
-
-imperfect <- perfect[n_matches != 1]
-
-
-
+	table(!is.na(SM_gibbs$delta_G_Kj_mol))
 
 
 	
 		
-		
-	
-	
-		
-	
-	
-	
-	
-	
-
 #match based on shared E.C. numbers
 
 e_coli_genes <- read.table("EcoliYeastMatch/gibbs_genes.txt", sep = "\t")
@@ -409,13 +417,47 @@ dim(EC_gibbs[!is.na(EC_gibbs$ecoliRxName),])
 #288 1-1 matches by E.C. alignment
 #cbind(EC_gibbs$rxName, EC_gibbs$ecoliRxName)[!is.na(EC_gibbs$ecoliRxName),][1:20,]
 
+table(apply(!is.na(cbind(SM_gibbs[,4], EC_gibbs[,4])), 1, sum))
+#about 700 IDs total
 
+EC_gibbs[,4:5] <- apply(EC_gibbs[,4:5], c(1,2), as.numeric)
+SM_gibbs[,4:5] <- apply(SM_gibbs[,4:5], c(1,2), as.numeric)
 
-
+gibbsFused <- data.frame(rxn = names(yeast_EC_pass), rxName = rxnIDtoEnz(names(yeast_EC_pass)), delta_G_Kj_mol = NA, G_form_sd = NA)
+for(i in 1:length(gibbsFused[,1])){
+	if(!is.na(SM_gibbs[i,4]) & !is.na(EC_gibbs[i,4])){
+		gibbsFused[i,3:4] <- c(mean(SM_gibbs[i,4], EC_gibbs[i,4]), max(SM_gibbs[i,5], EC_gibbs[i,5]))
+		next
+		}
+	if(!is.na(SM_gibbs[i,4])){
+		gibbsFused[i,3:4] <- SM_gibbs[i,4:5]
+		next
+		}	
+	if(!is.na(EC_gibbs[i,4])){
+		gibbsFused[i,3:4] <- EC_gibbs[i,4:5]
+		next
+		}
+	}
 
 	
-	
+table(abs(gibbsFused[,3]) > 30)
 
+gibbsCO = 30
+reversible <- unlist(sapply(c(1:length(gibbsFused[,1])), function(x){
+	if(!is.na(gibbsFused[x,3])){
+	if(gibbsFused[x,3] - 2*gibbsFused[x,4] > gibbsCO){
+		-1
+		}else{
+	if(gibbsFused[x,3] + 2*gibbsFused[x,4] < -1*gibbsCO){
+		1
+		}else{
+			0
+			}	
+		}}else{
+			0
+			}}))
+
+write.table(data.frame(rx = gibbsFused[,1], reversible = reversible), file = "revRxns.tsv", sep = "\t", col.names = TRUE, row.names = FALSE)
 
 
 
@@ -444,6 +486,9 @@ match_correction <- function(YE_match, yeastReg, coliReg, report = FALSE){
 		}
 	YE_match
 	}
+
+
+
 
 
 
