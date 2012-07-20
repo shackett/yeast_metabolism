@@ -1,0 +1,193 @@
+\documentclass[12pt]{article}
+\usepackage[left=1in,top=1in,right=1in,bottom=1in,nohead]{geometry}
+\usepackage{geometry}                % See geometry.pdf to learn the layout options. There are lots.
+\geometry{a4paper}                   % ... or a4paper or a5paper or ... 
+\usepackage{wrapfig}	%in-line figures
+\usepackage{natbib}		%bibliography
+\usepackage{pslatex} 	%for times new roman
+\usepackage[parfill]{parskip}    % Activate to begin paragraphs with an empty line rather than an indent
+\usepackage{graphicx}
+\usepackage{amssymb}
+\usepackage{epstopdf}
+\usepackage{booktabs}
+\usepackage{amsmath}
+
+\DeclareGraphicsRule{.tif}{png}{.png}{`convert #1 `dirname #1`/`basename #1 .tif`.png}
+
+\author{Sean R. Hackett}
+\title{RNA - Protein associations and the central dogma} 
+\date{}
+
+\begin{document}
+
+\setlength{\parskip}{1mm}
+\linespread{1}
+
+\thispagestyle{empty}
+\pagestyle{empty}
+
+\maketitle
+
+In order to understand how the steady state levels of proteins and mRNAs are related to one another and to various ways they can be produced and lost, experimentally-driven modeling of the central dogma of molecular biology can be done.  This will allow us to predict the value of important constants for many proteins and transcripts, and evaluate whether there are trends across environmental conditions effecting these variables.
+
+\subsection*{Experimental measurements}
+
+\textbf{Protein:} Relative measures of protein abundance across experimental conditions.  Absolute concentrations would allow for a measure of processivity (rate of protein production-per-ribosome/mRNA), but because of experimental difficulties this will probably not be possible
+
+\textbf{mRNA:} An absolute measure of RNA abundance is needed.  This could be done with RNAseq on all conditions, or RNAseq of a reference + 2-color microarrays of all experimental conditions.  Because the only experimental measurements of transcript abundance under these conditions was done on CENPK and the background used for proteomics, ... was FY4 (a highy divergent strain), some updated transcript measurements would be desirable for all conditions.  In order to normalize the RPKM values (Reads Per Kilobase of exon model) to transcript concentrations, these values should be divided by the concentration of mRNA-per-cell in each conditions, to yield the fraction of RNA molecular weight from each transcript.  This can then be converted to the concentration of transcript using each transcripts molecular weight.
+
+\textbf{mRNA-Ribosome:} Ribosome profiling can be used to determine the relative frequency that a ribosome is bound to a given transcript.  These frequencies can be converted to concentrations if we know the total concentration of ribosomes with any bound transcript.
+
+\textbf{total [mRNA]:} In order to normalize RNASeq data, the total concentration or weight of RNA-per-cell volume must be known.\\
+Possible experimental methods:
+\begin{itemize}
+\item[\textbf{a}] Fluorescent detection of poly-A-tail
+\item[\textbf{b}] Extraction of total RNA, quantification of mRNA portion (difficult)
+\item[\textbf{c}] During RNASeq library prep, after performing RNA-extraction, but before poly-A-enrichment: use sparse sequencing ($<$1x) to roughly quantify fraction of rRNA/tRNA/mRNA
+\end{itemize}
+
+\textbf{total [ribosomes]:} 
+
+\begin{itemize}
+\item[\textbf{a}] Extraction of total RNA, quantification of rRNA portion (decent)
+\item[\textbf{b}] Use an antibody to probe cellular extracts (determining the absolute amount) 
+\end{itemize}
+
+\textbf{[bound ribosomes]:} In order to normalize ribosome-profiling data.
+
+\begin{itemize}
+\item[\textbf{a}] Use an antibody specific to the binding pocket of a ribosome to determine the amount of unbound ribosmes.
+\item[\textbf{b}] Because rRNA degrades rapidly when translation is inhibited, it may be a fair assumption to say that [ribosomes] = [bound ribosomes].  
+\end{itemize}
+
+
+
+\clearpage
+\subsection*{Modeling of steady state species abundance}
+
+Across the 25 conditions of interest (j = 1...25) and a large number of transcript-protein pairings (i = 1...N), a set of steady state equilibria must exist.  I will initially describe these using a set of parameters that primarily vary across trancript-proteins, but not across conditions.  The extent to which this assumption fails, can be evaluated using subsequent statistical modeling.
+
+\textbf{1: Concentration of a single protein:}
+
+P$_{ij}$: the relative concentration of protein \textit{i} in condition \textit{j}.\\
+T$_{ij}$: the relative concentration of transcript \textit{i}.\\  
+$\gamma_{i}$: the translation rate-per-RNA molecule*C.\\
+$\lambda_{i}$: the rate of degradation of protein \textit{i}
+DR$_{j}$: the rate which species will be lost due to dilution in condition \textit{j}.\\
+
+Assuming that the real translation rate $\<\<$ DR:
+
+\begin{align}
+\frac{dP_{ij}}{dt} &= \gamma_{i}T_{ij} - P_{ij}\lambda_{i} - P_{ij}DR_{j}\notag\\
+\label{prot}
+\end{align}
+
+
+
+
+
+\textbf{1a: Concentration of a single protein:}
+
+P$_{ij}$: the concentration of protein \textit{i} in condition \textit{j}.\\
+$RT_{ij}$: the concentration of ribosomes bound to transcript \textit{i}.\\  
+$\gamma_{i}$: the translation rate of producing protein \textit{i} per ribosome bound to the transcript ($\frac{1}{time}$ to make a full protein).\\
+$\lambda_{i}$: the rate of degradation of protein \textit{i}.\\
+DR$_{j}$: the rate which species will be lost due to dilution in condition \textit{j}.\\
+
+$RT_{ij}e^{-\cfrac{1}{\gamma_{i}}DR_{j}}$ is the fraction of the transcript-bound ribosomes that will last long enough without being lost by dilution, to produce a completed protein.  This will be $\sim$ 1 when $\gamma_{i}$ $>>$ DR$_{j}$
+
+\begin{align}
+\frac{dP_{ij}}{dt} &= \gamma_{i}RT_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}} - P_{ij}\lambda_{i} - P_{ij}DR_{j}\notag\\
+P_{ij}DR_{j} &= \gamma_{i}RT_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}} - P_{ij}\lambda_{i}\label{prot}
+\end{align}
+
+In order to solve for the 2 missing parameters ($\gamma_{i}$ \& $\lambda_{i}$), as a first pass, least squares optimization can be performed.
+
+\begin{equation}
+min_{\substack{
+   \gamma_{i} \\
+   \lambda_{i}
+  }}\sum_{j}^{25}[(\gamma_{i}RT_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}} - P_{ij}\lambda_{i}) - P_{ij}DR_{j}]^{2}
+\end{equation}
+
+\vspace{2cm}
+
+\textbf{1b: Concentration of a single protein, alternative:}
+
+We can use the ribosome profiling data to get an idea about the rate of protein production.  If we assume that once translation begins, the translation rate is constant across all transcripts and conditions, the rate of translation $\cdot$ the density of exon-bound ribosomes is the rate of production of proteins, in absolute concentration-per-time.
+
+EO$_{ij}$: the expected occupancy of ribosomes on the exons of transcript \textit{i}\\
+The term in the denominator normalizes the EO counts to the total expected occupancy if there was no washout over the period $\gamma_{i}^{-1}$, while the term in the numerator is the expected proportion of this initial pool persisting to time $\gamma_{i}^{-1}$.\\
+$\eta_{i}$: if we have a measure of the rate of production of proteins, and we want to match this to the loss of proteins, or relative abundances of proteins can be scaled by some unknown $\eta_{i}$ to go from relative ion-counts to relative concentrations.
+
+\begin{align}
+\frac{dP_{ij}}{dt} &= \frac{\gamma_{i}EO_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}}}{\cfrac{\int\limits_{0}^{\gamma_{i}^{-1}}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}}}{\gamma_{i}^{-1}}} - P_{ij}\eta_{i}\lambda_{i} - P_{ij}\eta_{i}\text{DR}_{j}\notag\\
+\end{align}
+
+
+
+\textbf{2: Concentration of a transcript:}
+
+Because multiple ribosomes can bind an individual transcript, T$_{ij}$ is tracked as the total amount of a transcript, such that when ribosomes become bound: T$_{ij}$ does not decrease.
+
+$\tau_{i}$: the rate of transcription of gene \textit{i}\\
+$\delta_{i}$: the rate of degradation of transcript T$_{i}$
+
+\begin{align}
+\frac{dT_{ij}}{dt} &= \tau_{i} - T_{ij}DR_{j} - T_{ij}\delta_{i}\notag\\
+T_{ij}DR_{j} &= \tau_{i} - T_{ij}\delta_{i}\label{trans}
+\end{align}
+
+\vspace{2cm}
+\textbf{3: Concentration of a ribosomes bound to a transcript:}
+
+Ribosomes are bound to transcripts at a rate R$_{ij}$T$_{ij}$k$_{1i}$ and detach after they have finished making a protein, with a waiting-time $\frac{1}{\gamma_{i}}$.  During this process they can also be lost by washout.
+
+\begin{align}
+\frac{dRT_{ij}}{dt} &= R_{ij}T_{ij}k_{1i} - \gamma_{i}RT_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}} - RT_{ij}DR_{j}\notag\\
+RT_{ij}DR_{j} &= R_{ij}T_{ij}k_{1i} - \gamma_{i}RT_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}}\label{riboP}
+\end{align}
+
+
+
+\vspace{2cm}
+\textbf{4: Concentration of free ribosomes:}
+
+\begin{align}
+\frac{dR_{j}}{dt} &= \tau^{R} + \sum_{i = 1}^{N}[\gamma_{i}RT_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}}] - R_{j}\sum_{i = 1}^{N}T_{ij}k_{1j} - R_{j}\delta^{R} - R_{j}DR_{j}
+\end{align}
+
+\clearpage
+\subsection*{Statistically solving equations \ref{prot}, \ref{trans} \& \ref{riboP} and identifying parameter trends related to the condition}
+
+These three equations can be thought of as regression questions.  Predicting a response that is a function of knowns using some abundance covariates with shared linear (\& for $\gamma$: non-linear) coefficients.  Because equations \ref{prot} and \ref{riboP} both contain $\gamma$, it makes sense to combine these two regression problems, if not all 3, into a single regression framework.
+
+Using problem \ref{prot} as an example:
+
+\begin{align}
+y_{ij} &= P_{ij}DR_{j}\notag\\
+\hat{y}_{ij} &= \gamma_{i}RT_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}} - P_{ij}\lambda_{i}\notag\\
+y_{ij} &= \gamma_{i}RT_{ij}\textbf{e}^{-\cfrac{1}{\gamma_{i}}DR_{j}} - P_{ij}\lambda_{i} + \epsilon_{ij}\\
+L(\gamma_{i}, \lambda_{i} | RT_{ij}, P_{ij}, DR_{j}) &\propto \prod_{j = 1}^{25}\textbf{N}(y_{i}; (\hat{y}_{ij}|\gamma_{i}, \lambda_{i}), \hat{\sigma}^{2}_{i})\\
+\text{where \hspace{2mm}} \hat{\sigma}^{2}_{i} &= \sum_{j = 1}^{25}\frac{(y - \hat{y})^{2}}{24}
+\end{align}
+
+Using this approach, we can optimize the likelihood function over all parameters, and determine confidence intervals for parameters using a likelihood ratio test (though there may need to be some further thought required to understand the appropriateness of this method for highly dependent parameters).
+
+After determining the maximum likelihood estimates of all parameters, the residual matrix (y$_{ij}$ - $\hat{y}_{ij}$) can be used to identify other trends in parameters that were not captured when assuming that parameters don't vary across conditions.  A simple example that would surely occur is that the rate of transcription of many genes $\tau_{i}$ will increase as the growth rate $\&$ dilution rate increases.  This will result in $\hat{y}$ being $<$ y for high dilution rates and $\hat{y}$ being $>$ y for low dilution rates across many genes.  In order to capture this effect, in the next iteration of modeling this growth rate dependence will explicitly account for this trend by adding additional latent covariates to the model.  This approach is similar to the SVA (surrogate variable analysis) and CDI (cross-dimensional inference) methods from the Storey lab.  
+
+
+\clearpage
+\subsection*{The biology behind the factor and parameter variation}
+
+\begin{itemize}
+
+\item[\textbf{a.}] Associating variation in transcription rate and translation rate (if we have a measure of absolute protein abundance) to DNA/protein motifs using EM.  This will identify $\&/$or confirm existing motifs responsible for growth-rate dependent or condition-specific transcription$/$translation.
+
+\item[\textbf{b.}] The rate of degradation of proteins and RNA can be associated to RNA and protein motifs, which can in turn be related to the levels of regulatory proteins whose abundance was quantified by proteomics/ribosme-profiling/transcriptomics.
+
+\item[\textbf{c.}] Variation in ribosome affinity for a transcript can be related to RNA-motiffs near the Shine-Dalgarno, or to the levels of potential regulatory proteins or small RNAs.
+
+\end{itemize}
+
+\end{document}
