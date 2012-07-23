@@ -75,9 +75,9 @@ if(run_full == TRUE){
 
 
 
-corrFile[,2][corrFile[,1] %in% c("s_1098", "s_1094")]
-YE_match[YE_match[,1] %in% c(corrFile[grep("water", corrFile[,2]),]$SpeciesID),]
-corrFile[grep("water", corrFile[,2]),]$SpeciesID
+#corrFile[,2][corrFile[,1] %in% c("s_1098", "s_1094")]
+#YE_match[YE_match[,1] %in% c(corrFile[grep("water", corrFile[,2]),]$SpeciesID),]
+#corrFile[grep("water", corrFile[,2]),]$SpeciesID
 
 
 #match based on shared stoichiometry
@@ -109,15 +109,64 @@ YE_match <- match_correction(YE_match, "NADPH", "Nicotinamide-adenine-dinucleoti
 #yeastReg <- "^ATP"
 #coliReg <- "^ATP"
 
+YE_match_list <- list()
+for(spec in c(1:length(YE_match[,1]))){
+	YE_match_list[[YE_match[spec,1]]] <- unlist(strsplit(YE_match[spec,2], split = ","))
+	}
 
 
 
+all_yeast_spec <- unique(corrFile$SpeciesType)
+all_yeast_names <- sapply(all_yeast_spec, function(ID){
+	corrFile$SpeciesName[corrFile$SpeciesType == ID][1]
+	})
+
+
+yeastMet_possible_match <- data.frame(specID = all_yeast_spec, specName = unname(all_yeast_names), ecoliMatchSugg = NA, ecoliMatchSuggManual = NA, carryFlux = NA)
+
+for(i in 1:length(all_yeast_spec)){
+	matched_spec <- corrFile$SpeciesID[corrFile$SpeciesType == all_yeast_spec[i]]
+	matched_spec <- matched_spec[matched_spec %in% names(YE_match_list)]
+	ecolimatches <- unique(unlist(YE_match_list[matched_spec]))
+	if(length(ecolimatches) != 0){
+		yeastMet_possible_match$ecoliMatchSugg[i] <- paste(ecolimatches, collapse = ", ")
+		}
+	}
+
+#determine which mets are involved in rxns that carry flux
+carriedFlux <- read.delim("Yeast_genome_scale/carriedFlux.tsv", sep = "\t")
+
+flux_involved_spec <- unique(corrFile$SpeciesType[corrFile$SpeciesID %in% rownames(stoiMat)[apply(stoiMat[,colnames(stoiMat) %in% rownames(carriedFlux)] != 0, 1, sum) != 0]])
+
+yeastMet_possible_match$carryFlux <- ifelse(yeastMet_possible_match$specID %in% flux_involved_spec, 1, 0)
+yeastMet_possible_match <- yeastMet_possible_match[order(yeastMet_possible_match$carryFlux, decreasing = TRUE),]
+
+#write.table(yeastMet_possible_match, file = "yeastMet_possible_match.tsv", row.names = FALSE, col.names = TRUE, sep = "\t")
+
+yeastMet_possible_match <- read.delim("EcoliYeastMatch/yeastMet_possible_match.tsv", header = TRUE, sep = "\t")
+
+yeastMet_possible_match$ecoliMatchSuggManual <- gsub("'", "", yeastMet_possible_match$ecoliMatchSuggManual)
+yeastMet_possible_match$ecoliMatchSuggManual[is.na(yeastMet_possible_match$ecoliMatchSuggManual)] <- ""
+
+
+for(overwrite in yeastMet_possible_match$specID[yeastMet_possible_match$carryFlux == 1 | yeastMet_possible_match$ecoliMatchSuggManual != ""]){
+	
+	YE_match$ecoliID[YE_match$yeastID %in% corrFile$SpeciesID[corrFile$SpeciesType == overwrite]] <- 
+	yeastMet_possible_match$ecoliMatchSuggManual[yeastMet_possible_match$specID == overwrite]
+	}
 
 YE_match_list <- list()
 for(spec in c(1:length(YE_match[,1]))){
 	YE_match_list[[YE_match[spec,1]]] <- unlist(strsplit(YE_match[spec,2], split = ","))
-	
 	}
+
+
+
+
+
+
+
+
 
 #for each yeast rxn: read the rows of the ecoli stoichiometry matrix corresponding to the species matched with yeast.  Look for matching stoichiometry
 
@@ -390,7 +439,7 @@ for(ID in colnames(stoiMat)){
 		
 	}
 
-#make a table of the high confidence gibbs free energies draw by E.C. comparison
+#make a table of the high confidence gibbs free energies drawn by E.C. comparison
 
 EC_gibbs <- data.frame(rxn = names(yeast_EC_pass), rxName = rxnIDtoEnz(names(yeast_EC_pass)), ecoliRxName = NA, delta_G_Kj_mol = NA, G_form_sd = NA)
 
