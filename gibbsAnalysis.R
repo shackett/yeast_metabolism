@@ -146,6 +146,7 @@ yeastMet_possible_match <- yeastMet_possible_match[order(yeastMet_possible_match
 yeastMet_possible_match <- read.delim("EcoliYeastMatch/yeastMet_possible_match.tsv", header = TRUE, sep = "\t")
 
 yeastMet_possible_match$ecoliMatchSuggManual <- gsub("'", "", yeastMet_possible_match$ecoliMatchSuggManual)
+yeastMet_possible_match$ecoliMatchSuggManual <- gsub(" ", "", yeastMet_possible_match$ecoliMatchSuggManual)
 yeastMet_possible_match$ecoliMatchSuggManual[is.na(yeastMet_possible_match$ecoliMatchSuggManual)] <- ""
 
 
@@ -160,8 +161,10 @@ for(spec in c(1:length(YE_match[,1]))){
 	YE_match_list[[YE_match[spec,1]]] <- unlist(strsplit(YE_match[spec,2], split = ","))
 	}
 
-
-
+#add in all ecoli species with the same name as the possible matches
+for(i in c(1:length(YE_match_list))){
+	YE_match_list[[i]] <- e_coli_mets$ID[e_coli_mets$Name %in% e_coli_mets$Name[e_coli_mets$ID %in% YE_match_list[[i]]]]
+	}
 
 
 
@@ -173,6 +176,7 @@ for(spec in c(1:length(YE_match[,1]))){
 perfect_matches <- list()
 near_matches <- list()
 is_perfect <- rep(NA, times = length(stoiMat[1,]))
+deltaGf <- data.frame(deltaGlb = rep(NA, times = length(stoiMat[1,])), deltaGub = rep(NA, times = length(stoiMat[1,])))
 
 for(yRx in 1:length(stoiMat[1,])){
 	
@@ -181,14 +185,14 @@ for(yRx in 1:length(stoiMat[1,])){
 		names(rxn_stoi) <- rownames(stoiMat)[stoiMat[,yRx] != 0]
 		}
 			
-	YE_match_list[names(rxn_stoi)]
+
 	
 	spec_col_id <- NULL
 	matching_mat <- NULL
 	involved_spec <- NULL
 	for(spec in 1:length(rxn_stoi)){
 		if(length(YE_match_list[names(rxn_stoi)][[spec]]) == 0){
-			print(paste("no match for", names(rxn_stoi)[spec], ":", metIDtoSpec(names(rxn_stoi)[spec])))
+			#print(paste("no match for", names(rxn_stoi)[spec], ":", metIDtoSpec(names(rxn_stoi)[spec])))
 			}else{
 				matching_mat <- rbind(matching_mat, matrix(e_coli_S[rownames(e_coli_S) %in% YE_match_list[names(rxn_stoi)][[spec]],], nrow = length(YE_match_list[names(rxn_stoi)][[spec]])))
 				spec_col_id <- c(spec_col_id, rep(spec, times = length(YE_match_list[names(rxn_stoi)][[spec]])))
@@ -196,12 +200,35 @@ for(yRx in 1:length(stoiMat[1,])){
 			}
 		}
 	
-	
-	
+	near_matches[[colnames(stoiMat)[yRx]]] <- list()
+	perfect_matches[[colnames(stoiMat)[yRx]]] <- list()
 	
 	if(is.null(spec_col_id)){
 		next
 		}
+		
+	#approximate deltaGrxn from differences of Gform	
+	if(all(1:length(rxn_stoi) %in% spec_col_id)){
+		Gpart <- data.frame(mean = rep(NA, times = length(rxn_stoi)), sd = rep(NA, times = length(rxn_stoi)))
+		for(spec in 1:length(rxn_stoi)){
+			Gf = e_coli_mets[e_coli_mets$ID %in% YE_match_list[[names(rxn_stoi)[spec]]],]
+			if(length(Gf[,1]) == 1){
+				Gpart[spec,] <- Gf[4:5]
+				}else{
+					if(sd(Gf$Gform) < 5){
+						Gpart[spec,] <- c(mean(Gf$Gform), max(Gf$G_sd))
+						}else{
+							print(paste(paste(Gf$ID, collapse = ", "), " not similar"))
+							}
+					}
+			}
+		if(all(!is.na(Gpart$mean))){
+			deltaGf[yRx,] <- sum(rxn_stoi*-1*Gpart[,1]) + sample_over_sds(10000, rxn_stoi, Gpart[,2])
+		 	}
+		}
+			
+	
+	#matching rxns based on the metabolite stoichiometry
 	
 	unity_mat <- matching_mat * 1/matrix(sapply(spec_col_id, function(x){rxn_stoi[x]}), nrow = length(spec_col_id), ncol = length(e_coli_S[1,]))
 	
@@ -225,11 +252,7 @@ for(yRx in 1:length(stoiMat[1,])){
 			}
 	
 	#match score = #of yeast species matched to an ecoli rxn - #of ecoli species not included
-	missing_elements <- apply(e_coli_S[!(rownames(e_coli_S) %in% involved_spec),] != 0, 2, sum)
-	
-	near_matches[[colnames(stoiMat)[yRx]]] <- list()
-	perfect_matches[[colnames(stoiMat)[yRx]]] <- list()
-							
+	missing_elements <- apply(e_coli_S[!(rownames(e_coli_S) %in% involved_spec),] != 0, 2, sum)						
 	
 	if(length(rxn_stoi) > 1){
 		pos_match <- apply(pos_match, 2, sum) - missing_elements
@@ -277,10 +300,9 @@ for(yRx in 1:length(stoiMat[1,])){
 		}
 	}
 		
-
-
 #breakdown of assignment
 c(table(is_perfect), nNA = table(is.na(is_perfect))[names(table(is.na(is_perfect))) == "TRUE"])
+
 
 #determine whether perfect matches are unique		
 
@@ -332,13 +354,22 @@ for(match in perfect){
 	table(!is.na(SM_gibbs$delta_G_Kj_mol))
 
 
+#look at coverage of reactions that actually carry flux
+
+#matched rxns
+table(!is.na(SM_gibbs$delta_G_Kj_mol[rownames(SM_gibbs) %in% rownames(carriedFlux)]))
+
+unmatchedRx <- SM_gibbs[rownames(SM_gibbs) %in% rownames(carriedFlux),][is.na(SM_gibbs$delta_G_Kj_mol[rownames(SM_gibbs) %in% rownames(carriedFlux)]), c(1:2)]
+
+
+
+
 	
 		
 #match based on shared E.C. numbers
 
 e_coli_genes <- read.table("EcoliYeastMatch/gibbs_genes.txt", sep = "\t")
 e_coli_rxn_corr <- read.table("EcoliYeastMatch/rxnGeneMat", sep = ",")
-#ecoli_dict <- read.table("EcoliYeastMatch/ecoliNameDict.txt", sep = "\t", header = TRUE)
 ecoli_dict <- read.table("EcoliYeastMatch/gene-links.dat", skip = 16, sep = "\t")
 
 e_coli_gene_names <- unlist(sapply(e_coli_genes[,1], function(ID){ifelse(ID %in% ecoli_dict[,3], ecoli_dict[,7][ecoli_dict[,3] == ID], NA)}))
@@ -474,14 +505,16 @@ SM_gibbs[,4:5] <- apply(SM_gibbs[,4:5], c(1,2), as.numeric)
 
 gibbsFused <- data.frame(rxn = names(yeast_EC_pass), rxName = rxnIDtoEnz(names(yeast_EC_pass)), delta_G_Kj_mol = NA, G_form_sd = NA)
 for(i in 1:length(gibbsFused[,1])){
-	if(!is.na(SM_gibbs[i,4]) & !is.na(EC_gibbs[i,4])){
-		gibbsFused[i,3:4] <- c(mean(SM_gibbs[i,4], EC_gibbs[i,4]), max(SM_gibbs[i,5], EC_gibbs[i,5]))
-		next
-		}
+	#take the stoichiometry matching method matches preferentially
+	#if(!is.na(SM_gibbs[i,4]) & !is.na(EC_gibbs[i,4])){
+	#	gibbsFused[i,3:4] <- c(mean(SM_gibbs[i,4], EC_gibbs[i,4]), max(SM_gibbs[i,5], EC_gibbs[i,5]))
+	#	next
+	#	}
 	if(!is.na(SM_gibbs[i,4])){
 		gibbsFused[i,3:4] <- SM_gibbs[i,4:5]
 		next
-		}	
+		}
+	#use EC matches if that is all thats available		
 	if(!is.na(EC_gibbs[i,4])){
 		gibbsFused[i,3:4] <- EC_gibbs[i,4:5]
 		next
@@ -537,7 +570,10 @@ match_correction <- function(YE_match, yeastReg, coliReg, report = FALSE){
 	}
 
 
-
+sample_over_sds <- function(n, rxn_stoi, sds){
+			quantile(matrix(rnorm(n*length(sds), 0, rep(sds, each = n)), nrow = n) %*% (-1*rxn_stoi), c(0.025, 0.975))
+			}
+	
 
 
 

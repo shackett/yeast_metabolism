@@ -23,8 +23,13 @@ rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 
 load("checkRev.R")
-reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 0
-reversibleRx[,2][reversibleRx[,1] %in% c("r_0241", "r_0862", "r_0938")] <- 1
+#reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 0
+#reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 1
+reversibleRx[,2][reversibleRx[,1] %in% c("r_0241", "r_0862", "r_0938", "r_0246", "r_0247", "r_0248", "r_0478", "r_0277")] <- 1
+
+#ATPsynthase: c("r_0246", "r_0247", "r_0248")
+#r_0478
+#r_0277 - may be reversible
 
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
@@ -55,9 +60,13 @@ for(i in 1:length(nutrientFile[1,])){
 	}}
 
 #rxnIDtoEnz(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))
-rxchoose <- "r_0241"
+rxchoose <- "r_1193"
 x <- stoiMat[stoiMat[,colnames(stoiMat) == rxchoose] != 0,colnames(stoiMat) == rxchoose]
 names(x) <- metIDtoSpec(names(x))
+x
+
+#metIDtoSpec(c("s_1063", "s_1059"))
+#rxnIDtoEnz(c("r_0885", "r_0707"))
 
 #load or write stoichiometry matrix of reactions and their altered metabolites
 
@@ -305,7 +314,7 @@ rxn_dict <- sapply(c(1:length(named_stoi[1,])), function(x){rxn_dict[x][[1]]})
 rownames(named_stoi) <- met_dict
 colnames(named_stoi) <- rxn_dict
 
-labelz <- c("isa", "protein production", "biomass production", "growth", "lipid production")
+labelz <- c("isa", "protein production", "biomass production", "growth", "lipid production", "IPC synthase")
 aggregate_rxns <- NULL
 
 for(l in 1:length(labelz)){
@@ -319,11 +328,14 @@ rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
 
 
 
+#look for rxns that produce CO2 and make them irreversible
 
+carb_match <- rxn_search(named_stoi, "carbon dioxide", is_rxn = FALSE, index = TRUE)
 
+co_two_producing_rx <- apply(stoiMat[met_dict == "carbon dioxide",carb_match] < 0, 2, sum) == 0
+co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 
-
-
+reversibleRx[,2][reversibleRx[,1] %in% co_two_producing_rx] <- 1
 
 
 
@@ -337,8 +349,11 @@ flux_vectors <- list()
 
 for(treatment in 1:length(names(treatment_par))){
 
-#remove reactions which are defective (such 
+#reversibleRx[reversibleRx[,1] %in% c("r_0246", "r_0328", "r_0329", "r_0629", "r_0630", "r_0631", "r_0632", "r_0691", "r_0692", "r_0693", "r_0694", "r_0938", "r_0939", "r_0940"),2] <- 1
+
+#remove reactions which are defective 
 S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrophies, rem.unbalanced, rem.aggregate))]
+
 
 #added reactions for boundary fluxes
 
@@ -424,7 +439,6 @@ Gtot <- rbind(influxG, effluxG, thermoG)
 htot <- c(influxh, effluxh, thermoh) 	
 
 #misclass <- rxstack[!(c(1:length(rxstack)) %in% c(1:63,65:82))]
-#misclass <- rxstack[!(c(1:length(rxstack)) %in% c(1:28,30:31,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82))]
 #save(misclass, file = "checkRev.R")
 
 #Gtot <- rbind(influxG, effluxG, thermoG[64,])	
@@ -445,27 +459,63 @@ costFxn = c(rep(0, times = length(S[1,]) -1), -1)
 ######## use linear programming to maximize biomass #######
 
 linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
-#quadp_solution <- lsei(
 
-flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X#*invert_fluxes
+#linp_solution$X[names(linp_solution$X) %in% c("r_0486", "r_0488", "r_0689", "r_1003", "r_0246")]
+
+
+flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X
 
 growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
 }
 
+
+
+#determine whether reactions can carry flux under the current boundary conditons
+
+rxnGR <- data.frame(rxn = colnames(S), fluxF = NA, boundedF = NA, fluxR = NA, boundedR = NA)
+x <- t(sapply(rxnGR[1:5,1], optimize_rx_flux))
+rxnGR[,2:5] <- t(sapply(rxnGR[,1], optimize_rx_flux))
+
+optimize_rx_flux <- function(rx){
+	
+	cost1 <- ifelse(colnames(S) %in% rx, -1, 0)
+	linp_solution1 <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = cost1, ispos = FALSE)
+	
+	cost2 <- ifelse(colnames(S) %in% rx, 1, 0)
+	linp_solution2 <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = cost2, ispos = FALSE)
+	
+	c(linp_solution1$solutionNorm*-1, linp_solution1$IsError, linp_solution2$solutionNorm*-1, linp_solution2$IsError)
+	
+	}
+
+
+no_flux <- rxnGR$rxn[!((rxnGR$fluxF != 0 | rxnGR$boundedF == 1) | (rxnGR$fluxR != 0 | rxnGR$boundedR == 1))]
+#rxns that can't carry flux 
+rxnIDtoEnz(no_flux)
+
+
+rxnGR$rxn[rxnGR$growth == 0 & rxnGR$bounded == 0]
+
+
+
+
 #colorz <- rep(c(1:5), each = 6)
-#plot(growth_rate$growth, col = colorz, , xlab = "condition", ylab = "growth rate")
+#plot(growth_rate$growth, col = colorz, , xlab = "condition", ylab = "growth rate", pch = 16)
 #legend("topleft", unique(growth_rate$limit), text.col = c(1:5))
 
 
 #uncooperative rxns
 
-rxnSet <- reversibleRx[,1][reversibleRx[,1] %in% colnames(S)[apply((thermoG[c(1:length(thermoG[,1]))[!(c(1:length(thermoG[,1])) %in% c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82))],]) != 0, 2, sum) != 0]]
+#rxnSet <- reversibleRx[,1][reversibleRx[,1] %in% colnames(S)[apply((thermoG[c(1:length(thermoG[,1]))[!(c(1:length(thermoG[,1])) %in% c(1:28,30:32,34:35,37:44,47:58,60:64,66:71,73:74,76:77,79:82))],]) != 0, 2, sum) != 0]]
 
-rxnum <- 7
-rxnstoi <- S[S[,colnames(S) == rxnSet[rxnum]] != 0 ,colnames(S) == rxnSet[rxnum]]
-names(rxnstoi) <- metIDtoSpec(names(rxnstoi))
-rxnstoi
+#rxnum <- 7
+#rxnstoi <- S[S[,colnames(S) == rxnSet[rxnum]] != 0 ,colnames(S) == rxnSet[rxnum]]
+#names(rxnstoi) <- metIDtoSpec(names(rxnstoi))
+#rxnstoi
+
+save(flux_vectors, growth_rate, treatment_par, file = "Flux_analysis/SweaveFluxFilez.Rdata")
+save(rxnFile, rxnparFile, corrFile, compFile, metComp, compositionFile, nutrientFile, reversibleRx, file = "Flux_analysis/SweaveNetFilez.Rdata")
 
 
 
