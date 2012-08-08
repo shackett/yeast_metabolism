@@ -860,3 +860,26 @@
 "r_1498"	"spermidine excretion"	"exchange"	NA	NA	NA	NA
 "r_1499"	"spermidine transport"	"exchange"	NA	NA	NA	NA
 "r_1525"	"UMP transport"	"exchange"	NA	NA	NA	NA
+"r_0493"	"galactose-1-phosphate uridylyltransferase"	"c_02"	NA	NA	NA	NA
+"r_0738"	"NAD nucleosidase"	"c_02"	NA	NA	NA	NA
+"r_0739"	"NAD nucleosidase nuclear"	"c_12"	NA	NA	NA	NA
+"r_0741"	"NAD synthase (nh3)"	"c_12"	NA	NA	NA	NA
+"r_1058"	"UDPglucose--hexose-1-phosphate uridylyltransferase"	"c_02"	NA	NA	NA	NA
+"r_1151"	"ADPribose diffusion"	"exchange"	NA	NA	NA	NA
+"r_1156"	"ammonia transport"	"exchange"	NA	NA	NA	NA
+"r_1215"	"deamino-NAD+ diffusion"	"exchange"	NA	NA	NA	NA
+"r_1426"	"nicotinamide diffusion"	"exchange"	NA	NA	NA	NA
+"r_0163"	"adenylate kinase"	"c_02"	NA	NA	NA	NA
+"r_0444"	"fatty-acid--CoA ligase (tetradecanoate)"	"c_14"	NA	NA	NA	NA
+"r_0568"	"guanylate kinase (GMP:dATP)"	"c_02"	NA	NA	NA	NA
+"r_1187"	"CMP transport"	"exchange"	NA	NA	NA	NA
+"r_1198"	"CTP transport"	"exchange"	NA	NA	NA	NA
+"r_1299"	"glycerol transport via channel"	"exchange"	NA	NA	NA	NA
+"r_1300"	"glycerol transport via symport"	"exchange"	NA	NA	NA	NA
+"r_1247"	"ethanol transport"	"exchange"	NA	NA	NA	NA
+"r_0184"	"aldehyde dehydrogenase (2-methylbutanol, NAD)"	"c_02"	NA	NA	NA	NA
+"r_0742"	"NADH dehydrogenase, cytosolic/mitochondrial"	"exchange"	NA	NA	NA	NA
+"r_1139"	"acetate transport"	"exchange"	NA	NA	NA	NA
+"acetate boundary"	NA	NA	NA	NA	NA	NA
+"r_0659"	"L-hydroxyproline dehydrogenase (NAD)"	"c_10"	NA	NA	NA	NA
+"r_0660"	"L-hydroxyproline dehydrogenase (NADP)"	"c_10"	NA	NA	NA	NA

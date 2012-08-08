@@ -23,8 +23,7 @@ rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 
 load("checkRev.R")
-#reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 0
-#reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 1
+reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 0
 reversibleRx[,2][reversibleRx[,1] %in% c("r_0241", "r_0862", "r_0938", "r_0246", "r_0247", "r_0248", "r_0478", "r_0277")] <- 1
 
 #ATPsynthase: c("r_0246", "r_0247", "r_0248")
@@ -60,10 +59,14 @@ for(i in 1:length(nutrientFile[1,])){
 	}}
 
 #rxnIDtoEnz(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))
-rxchoose <- "r_1193"
+rxchoose <- "r_0653"
 x <- stoiMat[stoiMat[,colnames(stoiMat) == rxchoose] != 0,colnames(stoiMat) == rxchoose]
 names(x) <- metIDtoSpec(names(x))
 x
+
+metchoose <- "s_1160"
+x <- rxn_search(Stotal, metchoose, is_rxn = FALSE)
+rownames(x) <- metIDtoSpec(rownames(x)); #colnames(x) <- rxnIDtoEnz(colnames(x))
 
 #metIDtoSpec(c("s_1063", "s_1059"))
 #rxnIDtoEnz(c("r_0885", "r_0707"))
@@ -438,11 +441,14 @@ for(i in cnstr_rxns){
 Gtot <- rbind(influxG, effluxG, thermoG)
 htot <- c(influxh, effluxh, thermoh) 	
 
-#misclass <- rxstack[!(c(1:length(rxstack)) %in% c(1:63,65:82))]
+#misclass <- "r_0885"
 #save(misclass, file = "checkRev.R")
 
-#Gtot <- rbind(influxG, effluxG, thermoG[64,])	
-#htot <- c(influxh, effluxh, thermoh[64]) 
+#Gtot <- rbind(influxG, effluxG, thermoG[167,])	
+#htot <- c(influxh, effluxh, thermoh[167]) 
+
+#Gtot <- rbind(influxG, effluxG, thermoG[c(1:166,168:204),])	
+#htot <- c(influxh, effluxh, thermoh[c(1:166,168:204)]) 
 
 
 ############### costFxn - indicates the final rxn in S ######
@@ -551,6 +557,11 @@ std.reduced_flux_mat <- (renamed_reduced_flux - apply(renamed_reduced_flux, 1, m
 
 heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05)
 
+#look at the subset of rxns carrying flux in ura and leu
+
+renamed_reduced_flux[apply(renamed_reduced_flux[,!(growth_rate$limit %in% c("Leucine", "Uracil"))] != 0, 1, sum) == 0,]
+
+
 #heatmap of fluxes-per-unit growth
 
 flux_per_gr <- reduced_flux_mat/matrix(growth_rate$growth, ncol = length(reduced_flux_mat[1,]), nrow = length(reduced_flux_mat[,1]), byrow = TRUE)
@@ -615,7 +626,7 @@ for(i in 1:length(Stotal[1,])){
 	
 	}
 
-save(Stotal, metSty, rxnSty, file = "totalStoiAux.Rdata")						
+save(Stotal, metSty, rxnSty, reversibleRx, file = "totalStoiAux.Rdata")						
 write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
 write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
 
