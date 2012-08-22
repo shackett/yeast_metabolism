@@ -1,11 +1,30 @@
+####### An EM to go from peptides to proteins #######
 
 setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
 load('20120807ProtPepMatrices.Rdata')
 
-####### An EM to go from peptides to proteins #######
+library(Matrix)
+library(hexbin)
+library(gplots)
+	
 
 
-# Filter to only look at peptides with no missing values
+# Functions
+
+var_calc <- function(sampleIC, STDvar_fit){
+	2^(STDvar_fit[1] + STDvar_fit[2]*log2(sampleIC))
+	}
+
+normFactor <- function(alpha, logLight, logHeavy){
+	#determine a factor that will be added to each logLight abundance such that the global sum of squares is minimized between logLight and logHeavy
+	sum(((logLight + alpha) - logHeavy)^2)
+	}
+
+
+
+
+
+# Filter to only look at peptides with less than quality_frac fraction of missing values
 
 quality_frac <- 0.8
 ICthreshold <- 2^15
@@ -55,7 +74,6 @@ STDvar <- (logLight - logHeavy)^2*2
 STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
 
 
-library(hexbin)
 plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
 abline(STDvar_fit, col = "RED")
 
@@ -80,7 +98,7 @@ fittedPrec <- fittedVar^-1
 
 #for each unique peptide, combine the multiple ionization states to produce a single point estimate, using integrated likelihood
 
-#set the precision of missing values to 0
+#set the precision of missing values to 0; equivalent to no impact, infinite variance
 
 fittedPrec[t(is.na(abundMat))] <- 0
 fittedPrec[is.na(fittedPrec)] <- 0
@@ -88,8 +106,8 @@ abundMat[t(fittedPrec) == 0] <- 0
 
 uniquePepMean <- ((t(abundMat) * fittedPrec) %*% pepToUniq)/(fittedPrec %*% pepToUniq)
 uniquePepPrecision <- fittedPrec %*% pepToUniq
+uniquePepMean[is.na(uniquePepMean)] <- 0
 
-library(gplots)
 uniquePepMean[is.nan(uniquePepMean)] <- NA
 table(rowSums(!is.na(t(uniquePepMean))))
 
@@ -109,21 +127,28 @@ n_c = length(uniquePepMean[,1]) #15
 prior_p_div <- 0.01
 
 tmp <- diag(rep(prior_p_div, times = n_p)); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
-
 mixing_fract <- unique_mappingMat/((1-prior_p_div)^-1*rowSums(unique_mappingMat))
-mixing_fract <- cbind(mixing_fract, tmp) 
+mixing_fract <- cbind(mixing_fract, tmp)
+
+tmp[!(tmp %in% c(0,1))] <- 1 
 prior_mat <- cbind(unique_mappingMat, tmp) 
+prior_mat_sparse <- Matrix(prior_mat)
+
+#preprocess sparse data and precision matrices
+sampleEst_list <- list()
+samplePrec_list <- list()
+	
+for(c in 1:n_c){
+	sampleEst_list[[c]] <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
+	samplePrec_list[[c]] <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
+	}
 
 
-#prot_abund <- matrix(0, ncol = length(mixing_fract[1,]), nrow = length(uniquePepMean[,1]))
+#fractSVD <- svd(t(mixing_fract))
+#pseudoinv <- fractSVD$v%*%solve(diag(fractSVD$d))%*%t(fractSVD$u)
+#prot_abund <- uniquePepMean%*%pseudoinv
 #rownames(prot_abund) <- rownames(uniquePepMean); colnames(prot_abund) <- colnames(mixing_fract)
-
-fractSVD <- svd(t(mixing_fract))
-pseudoinv <- fractSVD$v%*%solve(diag(fractSVD$d))%*%t(fractSVD$u)
-uniquePepMean[is.na(uniquePepMean)] <- 0
-prot_abund <- uniquePepMean%*%pseudoinv
-rownames(prot_abund) <- rownames(uniquePepMean); colnames(prot_abund) <- colnames(mixing_fract)
-prot_prec <- uniquePepPrecision %*% mixing_fract
+#prot_prec <- uniquePepPrecision %*% mixing_fract
 	
 
 ### Iteration ###
@@ -142,22 +167,48 @@ for(t in 1:20){
 	
 	#update mixing fract
 	
+	sampleLik <- (sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[1]]
 	
-	library(Matrix)
-	?sparseMatrix
-	sparsePrior <- Matrix(prior_mat)
-	
-	
-	
-	totalLik <- matrix(0, ncol = n_p, nrow = n_pp)
-	for(c in 1:length(prot_abund[,1])){
-		tmp1 = ((prot_abund[c,] %*% t(rep(1, times = n_p)))*t(prior_mat) - (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat))^2
-		tmp2 = 0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat))
-		sampleLik = tmp1*tmp2
-		totalLik <- sampleLik + totalLik
+	for(c in 2:n_c){
+		sampleLik <- sampleLik + (sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[c]]
+		#sampleLik <- (((prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse)) - (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse))^2)*0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse))
+		#sampleMatlist[[c]] <- sampleLik
 		}
 	
+	likSum <- sampleMatlist[[1]]
+	for(c in 2:n_c){
+		likSum <- likSum + sampleMatlist[[c]]
+		}
 	
+	table(apply(likSum, 2, max))
+	
+	
+	
+	
+	
+	#tmp1 <- system.time(prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse))
+	#tmp2 <- system.time((t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse))
+	#tmp3 <- system.time((tmp1 - tmp2)^2)
+	#tmp4 <- system.time(0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse)))
+	#tmp5 <- system.time(tmp3*tmp4)
+	
+	#total_time <- tmp1+tmp2+tmp3+tmp4+tmp5
+	
+	#tmp123 <- system.time(((prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse)) - (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse))^2)
+	#tmp4 <- system.time(0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse)))
+	#tmp5 <- system.time(tmp3*tmp4)
+	
+	#total_time <- tmp123+tmp4+tmp5
+	
+	#tmp12345 <- system.time((((prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse)) - (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse))^2)*0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse)))
+	
+	
+	
+	tmp1 <- prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse)
+	tmp2 <- (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse)
+	tmp3 <- (tmp1 - tmp2)^2
+	tmp4 <- 0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse))
+	tmp5 <- tmp3*tmp4
 	
 	#update complete data log-likelihood
 	
@@ -184,17 +235,5 @@ logL <- function(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision){
 
 
 
-
-
-var_calc <- function(sampleIC, STDvar_fit){
-	2^(STDvar_fit[1] + STDvar_fit[2]*log2(sampleIC))
-	}
-
-
-
-normFactor <- function(alpha, logLight, logHeavy){
-	#determine a factor that will be added to each logLight abundance such that the global sum of squares is minimized between logLight and logHeavy
-	sum(((logLight + alpha) - logHeavy)^2)
-	}
 
 
