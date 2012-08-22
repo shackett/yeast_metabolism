@@ -132,7 +132,9 @@ mixing_fract <- cbind(mixing_fract, tmp)
 
 tmp[!(tmp %in% c(0,1))] <- 1 
 prior_mat <- cbind(unique_mappingMat, tmp) 
-prior_mat_sparse <- Matrix(prior_mat)
+#prior_mat_sparse <- Matrix(prior_mat)
+prior_mat_logical <- prior_mat; prior_mat_logical <- prior_mat_logical == 1
+prior_mat_sparse <- Matrix(prior_mat_logical)
 
 #preprocess sparse data and precision matrices
 sampleEst_list <- list()
@@ -167,20 +169,24 @@ for(t in 1:20){
 	
 	#update mixing fract
 	
+	#evaluate the log-likelihood of sample abundances about the inferred protein abundances with a precision-specific to the signal strength of the samples
 	sampleLik <- (sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[1]]
-	
 	for(c in 2:n_c){
 		sampleLik <- sampleLik + (sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[c]]
-		#sampleLik <- (((prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse)) - (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse))^2)*0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse))
-		#sampleMatlist[[c]] <- sampleLik
 		}
 	
-	likSum <- sampleMatlist[[1]]
-	for(c in 2:n_c){
-		likSum <- likSum + sampleMatlist[[c]]
-		}
+	relLik <- sampleLik - apply(sampleLik, 1, max) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
+	relLik[prior_mat_sparse] <- exp(relLik[prior_mat_sparse])
 	
-	table(apply(likSum, 2, max))
+	liksums <- apply(relLik, 1, sum)
+	
+	mixing_fract <- 1/liksums %*% t(rep(1, times = n_pp)) * prior_mat_sparse * relLik
+	
+
+
+
+
+	table(apply(sampleLik, 2, max))
 	
 	
 	
