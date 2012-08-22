@@ -20,6 +20,9 @@ normFactor <- function(alpha, logLight, logHeavy){
 	sum(((logLight + alpha) - logHeavy)^2)
 	}
 
+max_non_zero <- function(vec){
+	max(vec[vec != 0])
+	}
 
 
 
@@ -124,17 +127,20 @@ n_p = length(unique_pepNames) #4042
 n_pp = length(unique_mappingMat[,1]) + length(unique_mappingMat[1,]) #4964
 n_c = length(uniquePepMean[,1]) #15
 
-prior_p_div <- 0.01
+prior_p_div <- 0.001
 
 tmp <- diag(rep(prior_p_div, times = n_p)); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
 mixing_fract <- unique_mappingMat/((1-prior_p_div)^-1*rowSums(unique_mappingMat))
 mixing_fract <- cbind(mixing_fract, tmp)
+prior_mat_likadj <- unique_mappingMat/((1-prior_p_div)^-1)
+prior_mat_likadj <- cbind(prior_mat_likadj, tmp)
 
 tmp[!(tmp %in% c(0,1))] <- 1 
 prior_mat <- cbind(unique_mappingMat, tmp) 
-#prior_mat_sparse <- Matrix(prior_mat)
 prior_mat_logical <- prior_mat; prior_mat_logical <- prior_mat_logical == 1
 prior_mat_sparse <- Matrix(prior_mat_logical)
+prior_mat_likadj <- prior_mat_likadj*prior_mat_sparse
+prior_mat_likadj[prior_mat_sparse] <- log(prior_mat_likadj[prior_mat_sparse])
 
 #preprocess sparse data and precision matrices
 sampleEst_list <- list()
@@ -155,11 +161,13 @@ for(c in 1:n_c){
 
 ### Iteration ###
 
-
-
+whole_data_logL <- NULL
+previous_it <- -Inf
+continue_it <- TRUE
 
 for(t in 1:20){
 	
+	#update protein abundances: using integrated likelihood
 	#update protein means
 	prot_abund = ((uniquePepMean*uniquePepPrecision) %*% mixing_fract)/(uniquePepPrecision %*% mixing_fract)
 	prot_abund[is.nan(prot_abund)] <- 0
@@ -170,66 +178,42 @@ for(t in 1:20){
 	#update mixing fract
 	
 	#evaluate the log-likelihood of sample abundances about the inferred protein abundances with a precision-specific to the signal strength of the samples
-	sampleLik <- (sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[1]]
+	sampleLik <- -1*((sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[1]])
 	for(c in 2:n_c){
-		sampleLik <- sampleLik + (sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[c]]
+		sampleLik <- sampleLik - ((sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[c]])
 		}
+		
+	#adjust for prior	
+	sampleLik <- sampleLik + prior_mat_likadj
 	
-	relLik <- sampleLik - apply(sampleLik, 1, max) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
+	relLik <- sampleLik - apply(sampleLik, 1, max_non_zero) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
 	relLik[prior_mat_sparse] <- exp(relLik[prior_mat_sparse])
 	
 	liksums <- apply(relLik, 1, sum)
 	
 	mixing_fract <- 1/liksums %*% t(rep(1, times = n_pp)) * prior_mat_sparse * relLik
 	
-
-
-
-
-	table(apply(sampleLik, 2, max))
-	
-	
-	
-	
-	
-	#tmp1 <- system.time(prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse))
-	#tmp2 <- system.time((t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse))
-	#tmp3 <- system.time((tmp1 - tmp2)^2)
-	#tmp4 <- system.time(0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse)))
-	#tmp5 <- system.time(tmp3*tmp4)
-	
-	#total_time <- tmp1+tmp2+tmp3+tmp4+tmp5
-	
-	#tmp123 <- system.time(((prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse)) - (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse))^2)
-	#tmp4 <- system.time(0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse)))
-	#tmp5 <- system.time(tmp3*tmp4)
-	
-	#total_time <- tmp123+tmp4+tmp5
-	
-	#tmp12345 <- system.time((((prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse)) - (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse))^2)*0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse)))
-	
-	
-	
-	tmp1 <- prot_abund[c,] %*% t(rep(1, times = n_p)) * t(prior_mat_sparse)
-	tmp2 <- (t(uniquePepMean[c,] %*% t(rep(1, times = n_pp))))*t(prior_mat_sparse)
-	tmp3 <- (tmp1 - tmp2)^2
-	tmp4 <- 0.5*(t(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)))*t(prior_mat_sparse))
-	tmp5 <- tmp3*tmp4
-	
 	#update complete data log-likelihood
 	
-	
+	new_log_lik <- logL(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision)
 	
 	#check for convergence
 	
-	
+	if(abs(new_log_lik - previous_it) < 0.0001){
+		continue_it <- FALSE
+		}else{
+			whole_data_logL <- c(whole_data_logL, new_log_lik)
+			previous_it <- new_log_lik
+			}
 	}
 
 logL <- function(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision){
 	
 	#calculate the complete data log-likelihood
 	p_est <- prot_abund %*% t(mixing_fract)
-	
+	pos_lik <- -0.5*sum(uniquePepPrecision*(uniquePepMean - p_est)^2)
+	prior_adj <- sum(mixing_fract*prior_mat_likadj)
+	pos_lik + prior_adj
 	}
 
 
