@@ -321,40 +321,73 @@ while(continue_it){
 	}
 
 
+plot(whole_data_logL, col = ifelse(c(1:length(whole_data_logL)) <= initial_convergence, "ORANGE", "BLACK"), pch = 16)
+plot(whole_data_logL[-1], col = ifelse(c(2:length(whole_data_logL)) <= initial_convergence, "ORANGE", "BLACK"), pch = 16)
+
 prot_abund_final <- prot_abund[,1:n_prot]
 prot_abund_final[prot_abund_final == 0] <- NA
 
-save(prot_abund_final, prot_prec, mixing_fract, initial_convergence, final_convergence, file = "EMoutput.Rdata")
-
-#impute missing values based on the inverted-Wishart model of the norm package - use EM, also could do multiple imputations via MCMC
-
-#tmp <- prelim.norm(t(prot_abund_final))
-#theta_hat <- em.norm(tmp, criterion = 10^-8)
-#rngseed(1234567)	#set random number generator seed 
-#par_est2 <- getparam.norm(tmp, par_est)
-#imp_data <- imp.norm(tmp, theta_hat, t(prot_abund_final))
+save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, file = "EMoutput.Rdata")
 
 pdf(file = "proteinHeat.pdf")
-heatmap.2(t(prot_abund_final[,1:n_prot]), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500))
+heatmap.2(t(prot_abund_final[,1:n_prot]), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE)
 dev.off()
 
 
-#data(mdata)
-#s <- prelim.norm(mdata)	#do preliminary manipulations
-#thetahat <- em.norm(s)	#compute mle 
-#getparam.norm(s,thetahat,corr=TRUE)$r #look at estimated correlations
+library(missMDA)
 
-#data(mdata)
-#s <- prelim.norm(mdata)
-#thetahat <- em.norm(s, criterion = 10^-8)
-#rngseed(1234567)	#set random number generator seed 
-#ximp <- imp.norm(s,thetahat,mdata) #impute missing data under the MLE
 
+#look at a protein and all peptides that match it
+#color peptides with a divergent trend another color if one exists
+
+#protein -> peptides
+possibleMap <- cbind(unique_mappingMat, diag(rep(1, times = n_p)))
+prot <- 1
 
 
 
+library(ggplot2)
 
 
+
+plot_protein_add <- function(prot, possibleMap, prot_abund, uniquePepMean, uniquePepPrecision){
+row_match <- c(1:n_p)[possibleMap[,prot] != 0]
+div_match <- row_match[diag(mixing_fract[row_match, n_prot + row_match]) == 1]
+mixed_match <- row_match[!(row_match %in% div_match)]
+
+prot_abundM <- cbind(prot_abund[,prot], uniquePepMean[,c(mixed_match,div_match)])
+prot_precM <- cbind(prot_prec[,prot], uniquePepPrecision[,c(mixed_match, div_match)])
+prot_abundM[prot_abundM == 0] <- NA; prot_precM[is.na(prot_abundM)] <- NA
+prot_max <- prot_abundM + 2*sqrt(1/prot_precM)
+prot_min <- prot_abundM - 2*sqrt(1/prot_precM)
+
+n_pp_plot <- length(prot_abundM[1,])
+n_c <- length(prot_abundM[,1])
+
+ncolors <- 100
+color_fac <- round(mixing_fract[mixed_match, prot], length(ncolors)+1)
+match_cols <- c(rainbow(ncolors + 1, start = 0, end = 0.8)[unique(color_fac)*ncolors + 1], "black", "darkgray")
+match_fact <- c(paste(unique(color_fac), "x", " match", sep = ""), "protein", "non-match")
+all_cols <- c("protein", paste(color_fac, "x", " match", sep = ""), rep("non-match", times = length(div_match)))
+prot_cols <- apply((rep(1, times = n_c) %*% t(c(1:n_pp_plot))), c(1,2), function(col){all_cols[col]})
+
+xpos <- (1:n_c) %*% t(rep(1, n_pp_plot)) + rep(1, n_c) %*% t(((1:n_pp_plot)-1)*n_c + ((1:n_pp_plot)-1)*2)
+all_data <- data.frame(abund = c(t(prot_abundM)), abundMax = c(t(prot_max)), abundMin = c(t(prot_min)), xpos = c(xpos), color_fact = c(t(prot_cols)))
+
+plotter <- ggplot(all_data, aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact))
+plotter <- plotter + opts(panel_background = theme_rect(colour = "pink")) + xlab("sample * peptide") + ylab("relative abundance") 
+plotter <- plotter + labs(colour = paste(colnames(possibleMap)[prot], ": protein ", prot, sep = ""))
+print(plotter + geom_linerange()
++ scale_colour_manual(values = match_cols, limits = match_fact)
++ opts(axis.text.y = theme_text(colour = "red")))
+}
+
+
+pdf("prot_output_plots.pdf")
+for(p in 1:100){
+	plot_protein_add(p, possibleMap, prot_abund, uniquePepMean, uniquePepPrecision)
+	}
+dev.off()
 
 
 
