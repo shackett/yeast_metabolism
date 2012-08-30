@@ -22,7 +22,8 @@ abundMat <- PepMatrix[good_samples,]
 #possible mappings between a protein and all matching peptides
 mappingMat <- ProtPepMatrix[good_samples,]
 mappingMat <- mappingMat[,colSums(mappingMat) != 0]
-
+good_light <- lightIC[good_samples,]
+good_heavy <- heavyIC[good_samples,]
 
 #map measured peaks to unique peptide sequences
 
@@ -40,6 +41,7 @@ rownames(pepToUniq) <- pepNames; colnames(pepToUniq) <- unique_pepNames
 for(i in 1:length(pepNames)){
 	pepToUniq[i,unique_NameCorrCol[i]] <- 1
 	}
+pepToUniq <- Matrix(pepToUniq)
 
 #determine the expectation of the standard deviation as a heteroschedastic fxn of IC using p0.05 light v. p0.05 heavy
 
@@ -47,21 +49,54 @@ avgSignalSTD <- apply(cbind(heavyIC[,colnames(heavyIC) == "P0.05"], lightIC[,col
 logLight <- log2(lightIC[is.finite(avgSignalSTD),colnames(lightIC) == "P0.05"])
 logHeavy <- log2(heavyIC[is.finite(avgSignalSTD),colnames(heavyIC) == "P0.05"])
 avgSignalSTD <- avgSignalSTD[is.finite(avgSignalSTD)]
-
-
 logLight <- logLight + optimize(normFactor, c(-1, 1), logLight = logLight, logHeavy = logHeavy)$minimum
 
 #variance of the replicate differences accounting for small sample (scaling factor of 2)
 STDvar <- (logLight - logHeavy)^2*2
 STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
-
-
-plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
-abline(STDvar_fit, col = "RED")
-
-gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow)
+STDvar_fit_initial <- STDvar_fit
 
 gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
+
+sd_reg_plots <- function(STDvar, avgSignalSTD, STDvar_fit){
+
+	print(plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3))
+	abline(STDvar_fit, col = "RED")
+	abline(STDvar_fit_initial, col = "GREEN")
+	print(gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow))
+	
+	}
+
+####
+
+function(generate_plots = FALSE){
+
+n_tp <- length(good_light[,1])
+n_req_members <- 3
+
+allAttribPep <- pepToUniq %*% (mixing_fract == 1)[,1:n_prot]
+valid_prot <- c(1:n_prot)[colSums(allAttribPep) >= n_req_members]
+valid_pep <- c(1:n_tp)[rowSums(allAttribPep[,valid_prot]) == 1]
+
+nsharedpeps <- colSums(allAttribPep[,valid_prot]) %*% t(mixing_fract[,valid_prot]) %*% t(pepToUniq[valid_pep,])
+residuals <- as.matrix(prot_abund[,valid_prot]  %*% t(mixing_fract[,valid_prot]) %*% t(pepToUniq[valid_pep,]) - t(abundMat[valid_pep,]))
+sqresid_corrected <- as.vector(t(residuals^2 * (t(t(rep(1, times = n_c))) %*% (nsharedpeps/(nsharedpeps-1)))))
+
+sampleIC <- mapply(x = c(good_light[valid_pep,]), y = c(good_heavy[valid_pep,]), function(x,y){
+	if(!is.na(x) & !is.na(y)){mean(x,y)}else{NA}
+	})
+
+zero_thresh <- 0.00001
+STDvar_fit <- lm(log2(sqresid_corrected[!is.na(sampleIC) & sqresid_corrected > zero_thresh]) ~ log2(sampleIC[!is.na(sampleIC) & sqresid_corrected > zero_thresh]))
+
+if(generate_plots == TRUE){
+	sd_reg_plots(sqresid_corrected[!is.na(sampleIC) & sqresid_corrected > zero_thresh], sampleIC[!is.na(sampleIC) & sqresid_corrected > zero_thresh], STDvar_fit)
+	}
+	
+z <- cbind(log2(sqresid_corrected[!is.na(sampleIC) & sqresid_corrected > zero_thresh]), log2(sampleIC[!is.na(sampleIC) & sqresid_corrected > zero_thresh]))
+plot(z[,2] ~ z[,1])
+abline(a = mean(z[,1], b	
+
 
 
 #calculate the expected sampling variance of the heavy-low diff for experimental measurement
@@ -83,10 +118,16 @@ fittedPrec[t(is.na(abundMat))] <- 0
 fittedPrec[is.na(fittedPrec)] <- 0
 abundMat[t(fittedPrec) == 0] <- 0
 
-uniquePepMean <- ((t(abundMat) * fittedPrec) %*% pepToUniq)/(fittedPrec %*% pepToUniq)
-uniquePepPrecision <- fittedPrec %*% pepToUniq
+n_p = length(unique_pepNames) #4042
+n_pp = length(unique_mappingMat[,1]) + length(unique_mappingMat[1,]) #4964
+n_prot <- n_pp - n_p
+n_c = length(uniquePepMean[,1]) #15
 
+
+uniquePepMean <- matrix((((t(abundMat) * fittedPrec) %*% pepToUniq)/(fittedPrec %*% pepToUniq)), ncol = n_p, nrow = n_c)
+uniquePepPrecision <- Matrix(fittedPrec %*% pepToUniq)
 uniquePepMean[is.nan(uniquePepMean)] <- NA
+
 #number of non-missing values for peptides
 Nmissing_val <- table(rowSums(!is.na(t(uniquePepMean))))
 barplot(Nmissing_val, lwd = 5)
@@ -335,20 +376,33 @@ dev.off()
 
 
 library(missMDA)
+#determine how many significant principal components should be included based on repeated random sub-sampling validation
+pcrange <- c(2,12)
+npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = "Kfold", pNA = 0.10, nbsim = 10)
+npc <- npc.compare$ncp
+plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs")
+abline(v = npc, col = "RED", lwd = 2)
+
+#determine the most likely values of the missing data
+impute_abund <- imputePCA(prot_abund_final, npc, scale = FALSE)$completeObs
+impute_abund_thresh <- impute_abund
+impute_abund_thresh[impute_abund_thresh > 5] <- 5; impute_abund_thresh[impute_abund_thresh < -5] <- -5
+heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
+pdf(file = "proteinHM.pdf")
+heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
+dev.off()
 
 
-#look at a protein and all peptides that match it
-#color peptides with a divergent trend another color if one exists
 
-#protein -> peptides
-possibleMap <- cbind(unique_mappingMat, diag(rep(1, times = n_p)))
-prot <- 1
+#determne distributions of missing values and factor parameters
+multi_impute_abund <- MIPCA(prot_abund_final, npc, nboot = 100)
+plot(multi_impute_abund)
+
+
 
 
 
 library(ggplot2)
-
-
 
 plot_protein_add <- function(prot, possibleMap, prot_abund, uniquePepMean, uniquePepPrecision){
 row_match <- c(1:n_p)[possibleMap[,prot] != 0]
@@ -389,6 +443,89 @@ for(p in 1:100){
 	}
 dev.off()
 
+
+
+#determine the abundance of transcripts corresponding to ascertained proteins
+
+
+colnames(impute_abund_thresh)
+
+
+transcript_brauer <- read.delim("../brauer-microarray/Brauer_2008.pcl")
+rownames(transcript_brauer) <- transcript_brauer$SYSTEMATIC_NAME
+transcript_brauer <- transcript_brauer[-1,-c(1:3)]
+
+transcript.condition <- as.data.frame(matrix(NA, ncol = 36, nrow = 2))
+colnames(transcript.condition) <- colnames(transcript_brauer)
+rownames(transcript.condition) <- c("limitation", "GR")
+limitations <- c("C", "N", "P", "S", "L", "U")
+transcript.condition[1,] <- rep(limitations, each = 6)
+transcript.condition[2,] <- rep(c(0.05, 0.10, 0.15, 0.20, 0.25, 0.30), times = 6)
+
+barplot(table(rowSums(is.na(transcript_brauer))))
+
+#filter genes with many missing values
+transcript_brauer <- transcript_brauer[rowSums(is.na(transcript_brauer)) < length(transcript.condition[1,])*0.2,]
+
+pcrange <- c(16, 22)
+npc.compare.trans <- estim_ncpPCA(transcript_brauer, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = "Kfold", pNA = 0.10, nbsim = 5)
+npc.trans <- npc.compare$ncp
+plot(npc.compare.trans$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs")
+abline(v = npc.trans, col = "RED", lwd = 2)
+
+
+#impute missing values (very few)
+
+
+imputePCA(prot_abund_final, npc, scale = FALSE)
+
+
+#missing mappings
+missing_on_array <- colnames(impute_abund_thresh)[!(colnames(impute_abund_thresh) %in% rownames(transcript_brauer))]
+length(missing_on_array)
+genes_to_compare <- colnames(impute_abund)[colnames(impute_abund) %in% rownames(transcript_brauer)]
+
+#determine the relative abundance of array data by looking at the corresponding condition and imputing unobserved growth rates by drawing a line between the abundance of flanking conditions
+
+tmp <- sapply(genes_to_compare, function(match){
+	transcript_brauer[rownames(transcript_brauer) == match,]
+	})
+transcript_brauer_reduced <- matrix(unlist(tmp), ncol = length(tmp[1,]), nrow = length(tmp[,1]))
+colnames(transcript_brauer_reduced) <- colnames(tmp); rownames(transcript_brauer_reduced) <- rownames(tmp)
+
+
+#load true dilution rates for each of the proteomics samples
+load('~/Desktop/Composition/RNA_abundance/RNAabundance.R')
+
+prot_cond <- as.data.frame(matrix(NA, ncol = n_c, nrow = 2))
+prot_cond <- sapply(rownames(impute_abund), function(cond){
+	c(unlist(strsplit(cond, '[0-9]+'))[1], unlist(strsplit(cond, '[A-Z]'))[2])
+	})
+colnames(prot_cond) <- rownames(impute_abund)
+rownames(prot_cond) <- c("limitation", "GR")
+prot_cond <- as.data.frame(cbind(t(prot_cond), realDR = NA), stringsAsFactors = FALSE)
+prot_cond$realDR <- sapply(1:length(prot_cond[,1]), function(cond){
+	RNAabund$actual.dr[grep(paste(prot_cond$limitation[cond], prot_cond$GR[cond], sep = ""), RNAabund$condition, ignore.case = TRUE)[1]]
+	})
+
+DR_change_mat <- matrix(0, nrow = length(transcript.condition[1,]), ncol = length(prot_cond[,1]))
+colnames(DR_change_mat) <- rownames(prot_cond); rownames(DR_change_mat) <- colnames(transcript.condition)
+for(cond in 1:length(prot_cond[,1])){
+	#find the 2 closest DR within the same limitation
+	c_match <- c(1:length(transcript.condition[1,]))[transcript.condition[1,] %in% prot_cond[cond,]$limitation]
+	flanking_match <- c_match[order(abs(as.numeric(transcript.condition[2,c_match]) - prot_cond[cond,]$realDR))[1:2]]
+	lb_diff <- (prot_cond$realDR[cond] - as.numeric(transcript.condition[2,flanking_match])[1])/diff(as.numeric(transcript.condition[2,flanking_match]))
+	DR_change_mat[flanking_match,cond] <- c((1-lb_diff), lb_diff)
+	}
+	
+	
+remapped_transc <- t(transcript_brauer_reduced) %*% DR_change_mat
+
+heatmap.2(remapped_transc, trace = "none", Colv = NULL, dendrogram = "row", na.rm = TRUE, na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
+
+
+
+impute_abund[,(colnames(impute_abund) %in% rownames(transcript_brauer))] 
 
 
 
