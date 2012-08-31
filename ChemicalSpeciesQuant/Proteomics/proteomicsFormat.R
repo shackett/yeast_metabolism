@@ -49,6 +49,7 @@ avgSignalSTD <- apply(cbind(heavyIC[,colnames(heavyIC) == "P0.05"], lightIC[,col
 logLight <- log2(lightIC[is.finite(avgSignalSTD),colnames(lightIC) == "P0.05"])
 logHeavy <- log2(heavyIC[is.finite(avgSignalSTD),colnames(heavyIC) == "P0.05"])
 avgSignalSTD <- avgSignalSTD[is.finite(avgSignalSTD)]
+#remove this step? to increase variance, since this factor isn't known in principle
 logLight <- logLight + optimize(normFactor, c(-1, 1), logLight = logLight, logHeavy = logHeavy)$minimum
 
 #variance of the replicate differences accounting for small sample (scaling factor of 2)
@@ -119,14 +120,19 @@ fittedPrec[is.na(fittedPrec)] <- 0
 abundMat[t(fittedPrec) == 0] <- 0
 
 n_p = length(unique_pepNames) #4042
-n_pp = length(unique_mappingMat[,1]) + length(unique_mappingMat[1,]) #4964
-n_prot <- n_pp - n_p
-n_c = length(uniquePepMean[,1]) #15
-
+n_prot <- length(mappingMat[1,])
+n_pp = n_p + n_prot #4964
+n_c = length(abundMat[1,]) #15
 
 uniquePepMean <- matrix((((t(abundMat) * fittedPrec) %*% pepToUniq)/(fittedPrec %*% pepToUniq)), ncol = n_p, nrow = n_c)
 uniquePepPrecision <- Matrix(fittedPrec %*% pepToUniq)
 uniquePepMean[is.nan(uniquePepMean)] <- NA
+
+#change mapping from peptides to unique peptides (averaging over ionization states)
+unique_mappingMat <- as.matrix(t(pepToUniq) %*% mappingMat)
+unique_mappingMat[!(unique_mappingMat %in% c(0,1))] <- 1
+unique_mappingMat <- Matrix(unique_mappingMat)
+
 
 #number of non-missing values for peptides
 Nmissing_val <- table(rowSums(!is.na(t(uniquePepMean))))
@@ -134,9 +140,6 @@ barplot(Nmissing_val, lwd = 5)
 uniquePepMean[is.na(uniquePepMean)] <- 0
 
 
-#change mapping from peptides to unique peptides (averaging over ionization states)
-unique_mappingMat <- t(pepToUniq) %*% mappingMat
-unique_mappingMat[!(unique_mappingMat %in% c(0,1))] <- 1
 
 
 ######## EM ######
@@ -150,16 +153,11 @@ prerun_fixed_mat <- TRUE
 
 ### Initalization ###
 
-n_p = length(unique_pepNames) #4042
-n_pp = length(unique_mappingMat[,1]) + length(unique_mappingMat[1,]) #4964
-n_prot <- n_pp - n_p
-n_c = length(uniquePepMean[,1]) #15
-
-prior_p_div <- exp(-1*qchisq(0.999, n_c))
-
+prior_bound <- 0.999
+prior_p_div <- exp(-1*qchisq(prior_bound, n_c))
 
 tmp <- diag(rep(prior_p_div, times = n_p)); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
-mixing_fract <- unique_mappingMat/((1-prior_p_div)^-1*rowSums(unique_mappingMat))
+mixing_fract <- unique_mappingMat * (1/(t(t((1-prior_p_div)^-1*rowSums(unique_mappingMat)))) %*% rep(1, n_prot))
 mixing_fract <- cbind(mixing_fract, tmp)
 mixing_fract <- Matrix(mixing_fract)
 prior_mat_likadj <- unique_mappingMat/((1-prior_p_div)^-1)
@@ -448,8 +446,6 @@ dev.off()
 #determine the abundance of transcripts corresponding to ascertained proteins
 
 
-colnames(impute_abund_thresh)
-
 
 transcript_brauer <- read.delim("../brauer-microarray/Brauer_2008.pcl")
 rownames(transcript_brauer) <- transcript_brauer$SYSTEMATIC_NAME
@@ -467,28 +463,30 @@ barplot(table(rowSums(is.na(transcript_brauer))))
 #filter genes with many missing values
 transcript_brauer <- transcript_brauer[rowSums(is.na(transcript_brauer)) < length(transcript.condition[1,])*0.2,]
 
-pcrange <- c(16, 22)
+#not valid because of correlated noise?
+pcrange <- c(21, 30)
 npc.compare.trans <- estim_ncpPCA(transcript_brauer, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = "Kfold", pNA = 0.10, nbsim = 5)
 npc.trans <- npc.compare$ncp
+
+npc.trans <- 10
 plot(npc.compare.trans$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs")
 abline(v = npc.trans, col = "RED", lwd = 2)
 
 
 #impute missing values (very few)
 
-
-imputePCA(prot_abund_final, npc, scale = FALSE)
+transcript_brauer_impute <- imputePCA(transcript_brauer, npc, scale = FALSE)$completeObs
 
 
 #missing mappings
-missing_on_array <- colnames(impute_abund_thresh)[!(colnames(impute_abund_thresh) %in% rownames(transcript_brauer))]
+missing_on_array <- colnames(impute_abund_thresh)[!(colnames(impute_abund_thresh) %in% rownames(transcript_brauer_impute))]
 length(missing_on_array)
-genes_to_compare <- colnames(impute_abund)[colnames(impute_abund) %in% rownames(transcript_brauer)]
+genes_to_compare <- colnames(impute_abund)[colnames(impute_abund) %in% rownames(transcript_brauer_impute)]
 
 #determine the relative abundance of array data by looking at the corresponding condition and imputing unobserved growth rates by drawing a line between the abundance of flanking conditions
 
 tmp <- sapply(genes_to_compare, function(match){
-	transcript_brauer[rownames(transcript_brauer) == match,]
+	transcript_brauer_impute[rownames(transcript_brauer_impute) == match,]
 	})
 transcript_brauer_reduced <- matrix(unlist(tmp), ncol = length(tmp[1,]), nrow = length(tmp[,1]))
 colnames(transcript_brauer_reduced) <- colnames(tmp); rownames(transcript_brauer_reduced) <- rownames(tmp)
@@ -525,11 +523,92 @@ heatmap.2(remapped_transc, trace = "none", Colv = NULL, dendrogram = "row", na.r
 
 
 
-impute_abund[,(colnames(impute_abund) %in% rownames(transcript_brauer))] 
+
+#measure the correlation of the transcript and protein matrix
+
+shared_prot <- impute_abund[,(colnames(impute_abund) %in% rownames(transcript_brauer))] 
+shared_trans <- t(remapped_transc)
+
+#center each sample
+shared_prot <- shared_prot - t(t(apply(shared_prot, 1, mean))) %*% t(rep(1, times = length(shared_prot[1,])))
+shared_trans <- shared_trans - t(t(apply(shared_trans, 1, mean))) %*% t(rep(1, times = length(shared_trans[1,])))
 
 
+gplot.hexbin(hexbin(x = shared_prot, y = shared_trans, xbins = 25), style = "nested.centroids", colramp = rainbow, xlab = "Protein Abundance", ylab = "Transcript Abundance")
+gplot.hexbin(hexbin(x = shared_prot, y = shared_trans, xbins = 50), colramp = blue2red, xlab = "Protein Abundance", ylab = "Transcript Abundance")
+
+pt_corrs <- sapply(c(1:length(shared_prot[1,])), function(row){
+	cor(shared_prot[,row], shared_trans[,row], method = "pearson")
+	}); pt_corrs <- data.frame(correlation = pt_corrs)
+
+cor_plot <- ggplot(pt_corrs, aes(x = correlation))
+cor_plot + xlab("pearson correlation") + geom_histogram(colour = "white", fill = "limegreen", binwidth = 0.04)
 
 
+ptratio <- shared_prot - shared_trans
+tconc <- 2^shared_trans
+pconc <- 2^shared_prot
+
+heatmap.2(t(ptratio), trace = "none", Colv = NULL, dendrogram = "row", na.rm = TRUE, na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
+
+#### steady state modeling of protein abundance ####
+
+#slope = translation rate * [Tctrl]/[Pctrl]
+#intercept = -1 * degradation rate
+
+reg_coefs <- sapply(c(1:length(ptratio[1,])), function(coln){
+	predictor <- (2^(-1*ptratio[,coln]))
+	lm(prot_cond$realDR ~ predictor)$coef
+	plot(prot_cond$realDR ~ predictor, pch = 16, main = coln)
+	lines(lm(prot_cond$realDR ~ predictor)$coef[1] + lm(prot_cond$realDR ~ predictor)$coef[2]*predictor ~ predictor)
+	})
+
+#look at structured variation in the residuals of the fit
+
+reg_resids <- sapply(c(1:length(ptratio[1,])), function(coln){
+	predictor <- (2^(-1*ptratio[,coln]))
+	prot_cond$realDR - predictor*reg_coefs[2,coln] - reg_coefs[1,coln]
+	})
+
+heatmap.2(t(reg_resids), trace = "none", Colv = NULL, dendrogram = "row", na.rm = TRUE, na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(reg_resids)), max(range(reg_resids)), by = max(range(reg_resids))/250))
+
+#clearly the translation rate is an exponential function of the dilution rate
+resid_pca <- svd(t(reg_resids))
+qplot(y = resid_pca$d^2, x = 1:length(resid_pca$d), ylab = "fraction of variance explained by PC", xlab = "PC")
+
+reg_coefs <- sapply(c(1:length(ptratio[1,])), function(coln){
+	predictor <- (2^(-1*ptratio[,coln]))
+	lm(prot_cond$realDR ~ predictor + I(predictor*prot_cond$realDR))$coef
+	plot(prot_cond$realDR ~ predictor)
+	
+	})
+
+par(mfrow = c(1,2))
+for(coln in 1:20){
+	predictor <- (2^(-1*ptratio[,coln]))
+	lm1 <- lm(prot_cond$realDR ~ predictor)$coef
+	lm2 <- lm(prot_cond$realDR ~ predictor + I(predictor*prot_cond$realDR))$coef
+	ylimits <- range(c(prot_cond$realDR, lm1[1] + lm1[2]*predictor, lm2[1] + lm2[2]*predictor + lm2[3]*predictor*prot_cond$realDR))
+	print(plot(prot_cond$realDR ~ predictor, pch = 16, main = coln, ylim = ylimits))
+	points(lm1[1] + lm1[2]*predictor ~ predictor, col = "RED", lwd = 3)
+	points(lm2[1] + lm2[2]*predictor + lm2[3]*predictor*prot_cond$realDR ~ predictor, col = "GREEN", lwd = 3)
+	ylimits <- range(c(prot_cond$realDR - predictor*lm2[2] - lm2[1] - predictor*prot_cond$realDR*lm2[3], prot_cond$realDR - predictor*lm1[2] - lm1[1]))
+	plot(prot_cond$realDR - predictor*lm2[2] - lm2[1] - predictor*prot_cond$realDR*lm2[3] ~ prot_cond$realDR, col = "GREEN", pch = 16, ylim = ylimits)
+	points(prot_cond$realDR - predictor*lm1[2] - lm1[1] ~ prot_cond$realDR, col = "RED", pch = 16)
+	abline(h = 0, col = "darkgray", lwd = 3)
+	}
 
 
+#look at structured variation in the residuals of the fit
+
+reg_resids <- sapply(c(1:length(ptratio[1,])), function(coln){
+	predictor <- (2^(-1*ptratio[,coln]))
+	lm2 <- lm(prot_cond$realDR ~ predictor + I(predictor*prot_cond$realDR))$coef
+	prot_cond$realDR - predictor*lm2[2] - lm2[1] - predictor*prot_cond$realDR*lm2[3]
+	plot(prot_cond$realDR - predictor*lm2[2] - lm2[1] - predictor*prot_cond$realDR*lm2[3] ~ prot_cond$realDR)
+	})
+
+beta <- median(reg_coefs[3,]/reg_coefs[2,])
+
+prot_cond$realDR*beta
 

@@ -1,0 +1,267 @@
+\documentclass[12pt]{article}
+\usepackage[left=0.95in,top=0.95in,right=0.95in,bottom=0.95in,nohead]{geometry}
+\usepackage{geometry}                % See geometry.pdf to learn the layout options. There are lots.
+\geometry{a4paper}                   % ... or a4paper or a5paper or ... 
+\usepackage{wrapfig}	%in-line figures
+\usepackage[numbers, super]{natbib}		%bibliography
+%\usepackage{pslatex} 	%for times new roman
+\usepackage[parfill]{parskip}    % Activate to begin paragraphs with an empty line rather than an indent
+\usepackage{graphicx}
+\usepackage{amssymb}
+\usepackage{epstopdf}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{subfig}
+\usepackage{wrapfig}
+\usepackage{graphics}
+\usepackage{enumitem}
+\usepackage[T1]{fontenc}
+\usepackage{aurical}
+\usepackage[T1]{fontenc}
+\usepackage[scaled]{helvet}
+\usepackage{multicol}
+
+% This setup helps makes sure R code doesn't stretch off the side of the screen
+% Don't worry about this until you've read the rest of the document
+\SweaveOpts{keep.source=FALSE}
+<<echo=FALSE, results=hide>>=
+options(width=60)
+
+library(cacheSweave)
+setCacheDir("cache")
+
+setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
+
+load('20120807ProtPepMatrices.Rdata')
+source("pep_library.R")
+plotting_fxn()
+matrix_fxn()
+@
+
+
+\author{Sean R. Hackett}
+\title{Peptides to Protein EM and analysis} 
+\date{}
+
+\begin{document}
+
+\setlength{\parskip}{0.5mm}
+\linespread{1}
+
+\thispagestyle{empty}
+\pagestyle{empty}
+
+\maketitle
+
+
+\section*{Data Processing}
+
+\scriptsize
+
+<<cache = TRUE>>=
+
+# Filter to only look at peptides with less than quality_frac fraction of missing values
+
+quality_frac <- 0.8
+ICthreshold <- 2^15
+
+lightIC[lightIC < ICthreshold] <- NA; heavyIC[heavyIC < ICthreshold] <- NA
+
+good_samples <- rowSums(is.finite(PepMatrix) & !is.na(lightIC) & !is.na(heavyIC)) >= (length(PepMatrix[1,])*quality_frac)
+
+#the relative abundance of a peptide across conditions w.r.t a common reference
+abundMat <- PepMatrix[good_samples,]
+
+#possible mappings between a protein and all matching peptides
+mappingMat <- ProtPepMatrix[good_samples,]
+mappingMat <- mappingMat[,colSums(mappingMat) != 0]
+good_light <- lightIC[good_samples,]
+good_heavy <- heavyIC[good_samples,]
+
+#map measured peaks to unique peptide sequences
+
+pepNames <- rownames(mappingMat)
+unique_NameCorr <- sapply(pepNames, function(name){
+	unlist(strsplit(name, "\\."))[1]
+	})
+unique_pepNames <- unique(unique_NameCorr)
+unique_NameCorrCol <- sapply(unique_NameCorr, function(name){
+	c(1:length(unique_pepNames))[name == unique_pepNames]
+	})
+
+pepToUniq <- matrix(0, nrow = length(pepNames), ncol = length(unique_pepNames))
+rownames(pepToUniq) <- pepNames; colnames(pepToUniq) <- unique_pepNames
+for(i in 1:length(pepNames)){
+	pepToUniq[i,unique_NameCorrCol[i]] <- 1
+	}
+pepToUniq <- Matrix(pepToUniq)
+
+#determine the expectation of the standard deviation as a heteroschedastic fxn of IC using p0.05 light v. p0.05 heavy
+
+avgSignalSTD <- apply(cbind(heavyIC[,colnames(heavyIC) == "P0.05"], lightIC[,colnames(lightIC) == "P0.05"]), 1, mean)
+logLight <- log2(lightIC[is.finite(avgSignalSTD),colnames(lightIC) == "P0.05"])
+logHeavy <- log2(heavyIC[is.finite(avgSignalSTD),colnames(heavyIC) == "P0.05"])
+avgSignalSTD <- avgSignalSTD[is.finite(avgSignalSTD)]
+
+logLight <- logLight + optimize(normFactor, c(-1, 1), logLight = logLight, logHeavy = logHeavy)$minimum
+
+#variance of the replicate differences accounting for small sample (scaling factor of 2)
+STDvar <- (logLight - logHeavy)^2*2
+STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
+@
+
+\normalsize
+
+\begin{itemize}
+\item Remove all peptides with more than \Sexpr{1 - quality_frac} fraction of missing data
+\item Remove all peptides with less than \Sexpr{ICthreshold} ions measured
+\item This results in \Sexpr{table(good_samples)[names(table(good_samples)) == TRUE]} peptides that are retained and \Sexpr{table(good_samples)[names(table(good_samples)) == FALSE]} peptides which are discarded.
+\end{itemize}
+
+In order to determine the expected variance of the relative abundance of a peptide($\mathbf{X}_{ic}$ about the relative abundance of its corresponding protein ($\mathbf{\Omega}_{kc}$), we assume that $\mathbf{X}_{ic} \sim N(\mathbf{\Omega}_{kc}, \sigma^{2}_{ic}$) with $E[\sigma^{2}_{ic}]$ being fitted either from residuals or replicates.
+
+Fitting from replicates can be done because all of the samples are quantified with respect to a common reference p0.05, including an experimental sample of p0.05.  The difference between these  
+
+
+\begin{figure}[h!]
+<<fig = TRUE, echo = FALSE>>=
+gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
+@
+\label{heavylightcomp}
+\caption{Comparison of log$_{2}$p0.05$^{H}$ and log$_{2}$p0.05$^{L}$}
+\end{figure}
+
+
+
+\begin{figure}[h!]
+\begin{center}
+\subfloat[Linear regression]{
+<<label = ICsdreg1, fig = TRUE, echo = FALSE, include = FALSE>>=
+plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
+abline(STDvar_fit, col = "RED")
+@
+\includegraphics[width=0.4\textwidth]{Pep_Prot-ICsdreg1}
+}
+\qquad
+\subfloat[Bivariate histogram: residual variance is a decreasing function of signal strength]{
+<<label = ICsdreg2, fig = TRUE, echo = FALSE, include = FALSE>>=
+gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow)
+@
+\includegraphics[width=0.4\textwidth]{Pep_Prot-ICsdreg2}}
+\end{center}
+\label{repFitSD1}
+\caption{$\epsilon^{2}$ versus average log$_{2}$ ion counts of the heavy and light peak}
+\end{figure}
+
+\scriptsize
+<<cache = TRUE>>=
+lightHeavyCellmean <- sapply(c(1:length(heavyIC[,1]))[good_samples], function(row){
+	mapply(FUN = function(a,b){
+		if(!is.na(a) & !is.na(b)){mean(a, b)}else{NA}
+		}, lightIC[row,], heavyIC[row,])
+	})
+
+fittedVar <- var_calc(lightHeavyCellmean, STDvar_fit)
+fittedPrec <- fittedVar^-1
+
+#for each unique peptide, combine the multiple ionization states to produce a single point estimate, using integrated likelihood
+
+#set the precision of missing values to 0; equivalent to no impact, infinite variance
+
+fittedPrec[t(is.na(abundMat))] <- 0
+fittedPrec[is.na(fittedPrec)] <- 0
+abundMat[t(fittedPrec) == 0] <- 0
+
+n_p = length(unique_pepNames) #4042
+n_prot <- length(mappingMat[1,])
+n_pp = n_p + n_prot #4964
+n_c = length(abundMat[1,]) #15
+
+uniquePepMean <- matrix((((t(abundMat) * fittedPrec) %*% pepToUniq)/(fittedPrec %*% pepToUniq)), ncol = n_p, nrow = n_c)
+uniquePepPrecision <- Matrix(fittedPrec %*% pepToUniq)
+uniquePepMean[is.nan(uniquePepMean)] <- NA
+
+#change mapping from peptides to unique peptides (averaging over ionization states)
+unique_mappingMat <- as.matrix(t(pepToUniq) %*% mappingMat)
+unique_mappingMat[!(unique_mappingMat %in% c(0,1))] <- 1
+unique_mappingMat <- Matrix(unique_mappingMat)
+
+#number of non-missing values for peptides
+Nmissing_val <- table(rowSums(!is.na(t(uniquePepMean))))
+uniquePepMean[is.na(uniquePepMean)] <- 0
+@
+
+\normalsize
+\begin{figure}[h!]
+<<fig = TRUE>>=
+barplot(Nmissing_val, lwd = 5)
+@
+\caption{Distribution of non-missing values of filtered peptides}
+\label{nonmissingvals}
+\end{figure}
+
+\section*{Going from peptides to proteins via expectation-maximization}
+
+When using relative variation in peptides to predict variation in protein abundance we need to deal with two factors
+\begin{itemize}
+\item If a peptide maps to multiple proteins, it should be attributed to a protein (thereby adding signal) to the extent that its pattern matches the pattern from other peptides.
+\item Some peptides won't conform to the trends of their protein because they may be the non-covalently modified complement of a set of unascertained modified peptides.  These peptides shouldn't inform the general protein trend, and may be interesting to analyze in isolation.
+\end{itemize}
+
+\subsection*{Algorithm structure}
+
+\begin{itemize}
+\item[\textbf{X}:] [I $\cdot$ C] Data matrix: Input MS data of the relative abundance of each peptide across C conditions
+\item[\textbf{M}:] [I $\cdot$ J] Possible mappings between peptides (I) and proteins (J)
+\item[$\mathbf{\Theta}$:] [I $\cdot$ K] Responsibility matrix: prob that peptide i belongs to protein j or shows a divergent trend which should be described separately.  K = I + J
+\item[$\mathbf{\Omega}$:] [K $\cdot$ C] Point estimate for each species$\cdot$condition.
+\item[$\sigma^{2}$:] [I] Fitted variance relative to peptide IC.
+\end{itemize}
+
+\begin{align}
+p(\mathbf{\Omega}, \mathbf{\Theta} | \sigma^{2}, \textbf{X}, \textbf{M}) &\propto \prod_{i}^{I}\prod_{c}^{C} \mbox{\Large \textbf{N}}(\sum_{k}^{K} \mathbf{\Theta}_{iK}\mathbf{\Omega}_{Kc} ; \textbf{X}_{ic}, \sigma^{2}_{i}) \cdot \mathbf{\Theta}p(\mathbf{\Theta})\notag\\
+\textit{l}(\mathbf{\Omega}, \mathbf{\Theta} | \sigma^{2}, \textbf{X}, \textbf{M}) &= \sum_{i}^{I}\sum_{c}^{C} \textit{ln}\left( \mbox{\Large \textbf{N}}(\sum_{k}^{K} \mathbf{\Theta}_{iK}\mathbf{\Omega}_{Kc} ; \textbf{X}_{ic}, \sigma^{2}_{i})\right)\notag\\
++ \sum_{i}^{I}\sum_{k}^{K}\mathbf{\Theta_{ik}}p(\mathbf{\Theta_{ik}})
+\end{align}
+
+
+\subsection{Updating $\mathbf{\Theta}$}
+
+\begin{align}
+\mathbf{\Theta}_{ik} \sim \frac{\textbf{N}(\mathbf{\Omega}_{kC}; \textbf{X}_{iC}, \sigma^{2}_{i})\cdot p(\mathbf{\Theta}_{ik})}{\sum_{b = 1}^{K}\textbf{N}(\mathbf{\Omega}_{bC}; \textbf{X}_{iC}, \sigma^{2}_{i})\cdot p(\mathbf{\Theta}_{ib})}
+\end{align}
+
+\subsection{Updating $\mathbf{\Omega}$}
+
+$\tau_{y} = \prod_{z \neq y}^{Y}\sigma^{2}_{z}$
+
+\begin{align}
+\mathbf{\Omega}_{kc} \sim \mbox{\Large \textbf{N}}\left(\mu = \frac{\sum_{i = 1}^{I}\mathbf{\Theta}_{ik}\textbf{X}_{ic}\tau_{i}}{\sum_{i = 1}^{I}\mathbf{\Theta}_{ik}\tau_{i}}, \sigma^{2} =  \left(\sum_{i = 1}^{I}\frac{\mathbf{\Theta}_{ik}}{\sigma^{2}_{i}}\right)^{-1} \right)
+\end{align}
+
+\subsection*{Algorithm Implementation}
+
+\scriptsize
+<<cache = TRUE>>=
+prerun_fixed_mat <- TRUE
+prior_bound <- 0.999
+prior_p_div <- exp(-1*qchisq(prior_bound, n_c))
+
+tmp <- diag(rep(prior_p_div, times = n_p)); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
+mixing_fract <- unique_mappingMat/((1-prior_p_div)^-1*rowSums(unique_mappingMat))
+mixing_fract <- cbind(mixing_fract, tmp)
+mixing_fract <- Matrix(mixing_fract)
+prior_mat_likadj <- unique_mappingMat/((1-prior_p_div)^-1)
+prior_mat_likadj <- cbind(prior_mat_likadj, tmp)
+
+tmp[!(tmp %in% c(0,1))] <- 1 
+prior_mat <- cbind(unique_mappingMat, tmp) 
+prior_mat_logical <- prior_mat; prior_mat_logical <- prior_mat_logical == 1
+prior_mat_sparse <- Matrix(prior_mat_logical)
+prior_mat_likadj <- prior_mat_likadj*prior_mat_sparse
+prior_mat_likadj[prior_mat_sparse] <- log(prior_mat_likadj[prior_mat_sparse])
+rm(tmp, prior_mat, prior_mat_logical); gc(); gc()
+@
+
+
+\end{document}  
