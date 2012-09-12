@@ -11,19 +11,32 @@ matrix_fxn()
 
 quality_frac <- 0.8
 ICthreshold <- 2^15
+#only consider peptides that match unambiguously to a single protein
+unq_matches_only <- TRUE
+
 
 lightIC[lightIC < ICthreshold] <- NA; heavyIC[heavyIC < ICthreshold] <- NA
 
 good_samples <- rowSums(is.finite(PepMatrix) & !is.na(lightIC) & !is.na(heavyIC)) >= (length(PepMatrix[1,])*quality_frac)
 
-#the relative abundance of a peptide across conditions w.r.t a common reference
-abundMat <- PepMatrix[good_samples,]
-
 #possible mappings between a protein and all matching peptides
 mappingMat <- ProtPepMatrix[good_samples,]
+barplot(table(rowSums(mappingMat)))
+if(unq_matches_only){
+	good_samples[good_samples] <- good_samples[good_samples] & (rowSums(mappingMat) == 1)
+	mappingMat <- ProtPepMatrix[good_samples,]
+	}
 mappingMat <- mappingMat[,colSums(mappingMat) != 0]
+
+#the relative abundance of a peptide across conditions w.r.t a common reference
+abundMat <- PepMatrix[good_samples,]
 good_light <- lightIC[good_samples,]
 good_heavy <- heavyIC[good_samples,]
+
+
+
+
+
 
 #map measured peaks to unique peptide sequences
 
@@ -58,46 +71,6 @@ STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
 STDvar_fit_initial <- STDvar_fit
 
 gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
-
-sd_reg_plots <- function(STDvar, avgSignalSTD, STDvar_fit){
-
-	print(plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3))
-	abline(STDvar_fit, col = "RED")
-	abline(STDvar_fit_initial, col = "GREEN")
-	print(gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow))
-	
-	}
-
-####
-
-function(generate_plots = FALSE){
-
-n_tp <- length(good_light[,1])
-n_req_members <- 3
-
-allAttribPep <- pepToUniq %*% (mixing_fract == 1)[,1:n_prot]
-valid_prot <- c(1:n_prot)[colSums(allAttribPep) >= n_req_members]
-valid_pep <- c(1:n_tp)[rowSums(allAttribPep[,valid_prot]) == 1]
-
-nsharedpeps <- colSums(allAttribPep[,valid_prot]) %*% t(mixing_fract[,valid_prot]) %*% t(pepToUniq[valid_pep,])
-residuals <- as.matrix(prot_abund[,valid_prot]  %*% t(mixing_fract[,valid_prot]) %*% t(pepToUniq[valid_pep,]) - t(abundMat[valid_pep,]))
-sqresid_corrected <- as.vector(t(residuals^2 * (t(t(rep(1, times = n_c))) %*% (nsharedpeps/(nsharedpeps-1)))))
-
-sampleIC <- mapply(x = c(good_light[valid_pep,]), y = c(good_heavy[valid_pep,]), function(x,y){
-	if(!is.na(x) & !is.na(y)){mean(x,y)}else{NA}
-	})
-
-zero_thresh <- 0.00001
-STDvar_fit <- lm(log2(sqresid_corrected[!is.na(sampleIC) & sqresid_corrected > zero_thresh]) ~ log2(sampleIC[!is.na(sampleIC) & sqresid_corrected > zero_thresh]))
-
-if(generate_plots == TRUE){
-	sd_reg_plots(sqresid_corrected[!is.na(sampleIC) & sqresid_corrected > zero_thresh], sampleIC[!is.na(sampleIC) & sqresid_corrected > zero_thresh], STDvar_fit)
-	}
-	
-z <- cbind(log2(sqresid_corrected[!is.na(sampleIC) & sqresid_corrected > zero_thresh]), log2(sampleIC[!is.na(sampleIC) & sqresid_corrected > zero_thresh]))
-plot(z[,2] ~ z[,1])
-abline(a = mean(z[,1], b	
-
 
 
 #calculate the expected sampling variance of the heavy-low diff for experimental measurement
@@ -137,39 +110,73 @@ unique_mappingMat <- Matrix(unique_mappingMat)
 #number of non-missing values for peptides
 Nmissing_val <- table(rowSums(!is.na(t(uniquePepMean))))
 barplot(Nmissing_val, lwd = 5)
+
 uniquePepMean[is.na(uniquePepMean)] <- 0
 
+#number of non-missing values for all peptides (before uniquenss combination)
+Nmissing_val_all <- table(apply(is.finite(PepMatrix), 1, sum))
+barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", times = sum(as.numeric(names(Nmissing_val_all)) < ceiling(n_c * quality_frac))), rep("orange", times = sum(as.numeric(names(Nmissing_val_all)) >= ceiling(n_c * quality_frac))))
+)
+
+#look at structure in the missing values
+#binPepMatrix <- is.finite(PepMatrix)
+binPepMatrix <- ifelse(is.finite(lightIC), 1, 0)
+
+pnonmissingOverSingles <- matrix(NA, ncol = length(binPepMatrix[1,]), nrow = length(binPepMatrix[1,]))
+rownames(pnonmissingOverSingles) <- colnames(binPepMatrix); colnames(pnonmissingOverSingles) <- colnames(binPepMatrix)
+pnonmissingOverTotal <- pnonmissingOverSingles
+for(i in 1:length(pnonmissingOverSingles[1,])){
+	for(j in 1:length(pnonmissingOverSingles[1,])){	
+	pnonmissingOverTotal[i,j] <- sum(apply(binPepMatrix[,c(i, j)], 1, sum) == 2)/length(binPepMatrix[,1])
+  	pnonmissingOverSingles[i,j] <- sum(apply(binPepMatrix[,c(i, j)], 1, sum) == 2) / sum(apply(binPepMatrix[,c(i, j)], 1, sum) > 0)
+	}
+}
 
 
+heatmap.2(pnonmissingOverTotal, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+
+#heatmap.2(binPepMatrix, Colv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+binPepClust <- kmeans(binPepMatrix, 20)
 
 ######## EM ######
 
-save(unique_pepNames, uniquePepMean, unique_mappingMat, uniquePepPrecision, file = "peptide.files.Rdata")
-rm(list = ls()); gc()
-load("peptide.files.Rdata")
-source("pep_library.R")
-matrix_fxn()
+#save(unique_pepNames, uniquePepMean, unique_mappingMat, uniquePepPrecision, file = "peptide.files.Rdata")
+#rm(list = ls()); gc()
+#load("peptide.files.Rdata")
+#source("pep_library.R")
+#matrix_fxn()
 prerun_fixed_mat <- TRUE
 
 ### Initalization ###
 
-prior_bound <- 0.999
+prior_bound <- 0.9999
 prior_p_div <- exp(-1*qchisq(prior_bound, n_c))
 
-tmp <- diag(rep(prior_p_div, times = n_p)); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
-mixing_fract <- unique_mappingMat * (1/(t(t((1-prior_p_div)^-1*rowSums(unique_mappingMat)))) %*% rep(1, n_prot))
-mixing_fract <- cbind(mixing_fract, tmp)
-mixing_fract <- Matrix(mixing_fract)
-prior_mat_likadj <- unique_mappingMat/((1-prior_p_div)^-1)
-prior_mat_likadj <- cbind(prior_mat_likadj, tmp)
+#if a putative protein only has component peptides which are matched to other proteins than penalize any assignment to it by the supremum of the mixing fraction
 
+#number of shared peptides per protein
+pepshared <- colSums(unique_mappingMat[c(1:n_p)[rowSums(unique_mappingMat) > 1],])
+#total peptides per protein
+peptotal <- colSums(unique_mappingMat)
+ambigprots <- c(1:n_prot)[pepshared == peptotal]
+table(pepshared == peptotal)
+
+
+tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
+mixing_fract <- unique_mappingMat * (1/(t(t((1-prior_p_div)^-1*rowSums(unique_mappingMat)))) %*% rep(1, n_prot))
+mixing_fract <- cBind(mixing_fract, tmp)
+prior_mat_likadj <- unique_mappingMat/((1-prior_p_div)^-1)
+prior_mat_likadj <- cBind(prior_mat_likadj, tmp)
+
+tmp <- as.matrix(tmp)
 tmp[!(tmp %in% c(0,1))] <- 1 
-prior_mat <- cbind(unique_mappingMat, tmp) 
-prior_mat_logical <- prior_mat; prior_mat_logical <- prior_mat_logical == 1
+prior_mat_logical <- cbind(as.matrix(unique_mappingMat), tmp) 
+prior_mat_logical <- prior_mat_logical == 1
 prior_mat_sparse <- Matrix(prior_mat_logical)
-prior_mat_likadj <- prior_mat_likadj*prior_mat_sparse
+#prior_mat_likadj2 <- prior_mat_likadj*prior_mat_sparse
 prior_mat_likadj[prior_mat_sparse] <- log(prior_mat_likadj[prior_mat_sparse])
-rm(tmp, prior_mat, prior_mat_logical); gc(); gc()
+rm(tmp, prior_mat_logical); gc(); gc()
 
 #preprocess sparse data and precision matrices
 
@@ -228,11 +235,38 @@ while(continue_it){
 						}
 				}
 			}
-		
-	#adjust for prior	
-	sampleLik <- sampleLik + prior_mat_likadj
 	
-	relLik <- sampleLik - apply(sampleLik, 1, max_non_zero) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
+	#correct for purely ambiguous proteins
+	weight_store <- list()
+	for(ap in ambigprots){
+		tmp <- sampleLik[,ap][prior_mat_sparse[,ap]]
+		weights <- exp(tmp)/sum(exp(tmp))
+		weight_store[[ap]] <- weights
+		sampleLik[,ap][prior_mat_sparse[,ap]] <- tmp + sapply(log((prior_p_div^-1 * weights)^-1), function(x){min(x, 0)})
+		}
+	
+	#adjust for prior	
+	sampleLik <- prior_mat_likadj + sampleLik
+	
+	#if an ambiguous protein has the highest likelihood (besides divergent peptides), than set the divergent peptide to log(prior_p_div) + penalty applied to sampleLIk
+	
+	if(!unq_matches_only){
+	tmp <- sampleLik[,1:n_prot]; tmp[!prior_mat_sparse[,1:n_prot]] <- NA
+	ambig_good_fit <- is.finite(apply(tmp[,ambigprots], 1, max, na.rm = TRUE)) & (apply(tmp[,ambigprots], 1, max, na.rm = TRUE) == apply(tmp, 1, max, na.rm = TRUE))
+	good_fit_match <- ambigprots[apply(tmp[ambig_good_fit,ambigprots], 1, which.max)]
+	
+	div_adj2 <- sapply(1:length(good_fit_match), function(max_val){
+		tmp2 <- weight_store[[good_fit_match[max_val]]]
+		min(log((prior_p_div^-1 * tmp2[names(tmp2) == rownames(tmp)[ambig_good_fit][max_val]])^-1), 0)
+		})
+	
+	for(repl in 1:length(good_fit_match)){
+		sampleLik[c(1:n_p)[ambig_good_fit][repl], n_prot + c(1:n_p)[ambig_good_fit][repl]] <- sampleLik[c(1:n_p)[ambig_good_fit][repl], n_prot + c(1:n_p)[ambig_good_fit][repl]] + div_adj2[repl]
+		}}
+	
+	sampleLik_NA <- sampleLik
+	sampleLik_NA[!prior_mat_sparse] <- NA
+	relLik <- sampleLik - apply(sampleLik_NA, 1, max_non_NA) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
 	relLik[prior_mat_sparse] <- exp(relLik[prior_mat_sparse])
 	
 	liksums <- apply(relLik, 1, sum)
@@ -245,8 +279,10 @@ while(continue_it){
 	
 	#check for convergence
 	
-	if(abs(new_log_lik - previous_it) < 0.1){
+	if(abs(new_log_lik - previous_it) < 0.01){
 		continue_it <- FALSE
+		whole_data_logL <- c(whole_data_logL, new_log_lik)
+		t <- t + 1
 		print("done")
 		}else{
 			whole_data_logL <- c(whole_data_logL, new_log_lik)
@@ -256,8 +292,8 @@ while(continue_it){
 			}
 	}
 
-initial_convergence <- t
-save(whole_data_logL, initial_convergence,  mixing_fract, prot_abund, prot_prec, file = "EM1_results.Rdata")
+initial_convergence <- t - 1
+save(whole_data_logL, prior_mat_sparse, prior_mat_likadj, initial_convergence,  mixing_fract, prot_abund, prot_prec, file = "EM1_results.Rdata")
 load("EM1_results.Rdata")
 #rewrite prior sparse matrix of allowable states to either fully attribute a peptide to canonical protein trends or to the divergent trends
 
@@ -268,7 +304,7 @@ div_max <- n_prot < max_state
 table(div_max)
 
 #how many peptides are informing a protein trend, with only the largest effect considered
-table(table(max_state))
+barplot(table(table(max_state[max_state <= n_prot])))
 
 for(p in 1:n_p){
 	if(div_max[p] == TRUE){
@@ -309,6 +345,7 @@ while(continue_it){
 	
 	#update protein precision
 	prot_prec <- uniquePepPrecision %*% mixing_fract
+	prot_prec[prot_prec < 1] <- 0
 	
 	#update mixing fract
 	
@@ -329,13 +366,22 @@ while(continue_it){
 						}
 				}
 			}
-	#adjust likelihood 0 values so that they aren't consumed by the sparse matrix
-	sampleLik[sampleLik == 0 & prior_mat_sparse] <- -0.001
+	
+	#correct for purely ambiguous proteins
+	weight_store <- list()
+	for(ap in ambigprots){
+		tmp <- sampleLik[,ap][prior_mat_sparse[,ap]]
+		weights <- exp(tmp)/sum(exp(tmp))
+		weight_store[[ap]] <- weights
+		sampleLik[,ap][prior_mat_sparse[,ap]] <- tmp + sapply(log((prior_p_div^-1 * weights)^-1), function(x){min(x, 0)})
+		}
 	
 	#adjust for prior	
-	sampleLik <- sampleLik + prior_mat_likadj
+	sampleLik <- prior_mat_likadj + sampleLik
 	
-	relLik <- sampleLik - apply(sampleLik, 1, max_non_zero) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
+	sampleLik_NA <- sampleLik
+	sampleLik_NA[!prior_mat_sparse] <- NA
+	relLik <- sampleLik - apply(sampleLik_NA, 1, max_non_NA) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
 	relLik[prior_mat_sparse] <- exp(relLik[prior_mat_sparse])
 	
 	liksums <- apply(relLik, 1, sum)
@@ -350,6 +396,7 @@ while(continue_it){
 	
 	if(abs(new_log_lik - previous_it) < 0.01){
 		continue_it <- FALSE
+		whole_data_logL <- c(whole_data_logL, new_log_lik)
 		print("done")
 		}else{
 			whole_data_logL <- c(whole_data_logL, new_log_lik)
@@ -366,18 +413,23 @@ plot(whole_data_logL[-1], col = ifelse(c(2:length(whole_data_logL)) <= initial_c
 prot_abund_final <- prot_abund[,1:n_prot]
 prot_abund_final[prot_abund_final == 0] <- NA
 
-save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, file = "EMoutput.Rdata")
+if(unq_matches_only == TRUE){
+	save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, file = "EMoutputUnq.Rdata")
+	}else{
+		save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, file = "EMoutput.Rdata")
+	}
+
 
 pdf(file = "proteinHeat.pdf")
-heatmap.2(t(prot_abund_final[,1:n_prot]), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE)
+heatmap.2(t(prot_abund_final[,1:n_prot]), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(prot_abund_final, na.rm = TRUE)), max(range(prot_abund_final, na.rm = TRUE)), by = max(range(prot_abund_final, na.rm = TRUE))/250))
 dev.off()
 
 
 library(missMDA)
 #determine how many significant principal components should be included based on repeated random sub-sampling validation
 pcrange <- c(2,12)
-npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = "Kfold", pNA = 0.10, nbsim = 10)
-npc <- npc.compare$ncp
+npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = "Kfold", pNA = 0.10, nbsim = 50)
+npc <- npc.compare$ncp#8
 plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs")
 abline(v = npc, col = "RED", lwd = 2)
 
@@ -385,7 +437,6 @@ abline(v = npc, col = "RED", lwd = 2)
 impute_abund <- imputePCA(prot_abund_final, npc, scale = FALSE)$completeObs
 impute_abund_thresh <- impute_abund
 impute_abund_thresh[impute_abund_thresh > 5] <- 5; impute_abund_thresh[impute_abund_thresh < -5] <- -5
-heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
 pdf(file = "proteinHM.pdf")
 heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
 dev.off()
@@ -402,42 +453,16 @@ plot(multi_impute_abund)
 
 library(ggplot2)
 
-plot_protein_add <- function(prot, possibleMap, prot_abund, uniquePepMean, uniquePepPrecision){
-row_match <- c(1:n_p)[possibleMap[,prot] != 0]
-div_match <- row_match[diag(mixing_fract[row_match, n_prot + row_match]) == 1]
-mixed_match <- row_match[!(row_match %in% div_match)]
-
-prot_abundM <- cbind(prot_abund[,prot], uniquePepMean[,c(mixed_match,div_match)])
-prot_precM <- cbind(prot_prec[,prot], uniquePepPrecision[,c(mixed_match, div_match)])
-prot_abundM[prot_abundM == 0] <- NA; prot_precM[is.na(prot_abundM)] <- NA
-prot_max <- prot_abundM + 2*sqrt(1/prot_precM)
-prot_min <- prot_abundM - 2*sqrt(1/prot_precM)
-
-n_pp_plot <- length(prot_abundM[1,])
-n_c <- length(prot_abundM[,1])
-
-ncolors <- 100
-color_fac <- round(mixing_fract[mixed_match, prot], length(ncolors)+1)
-match_cols <- c(rainbow(ncolors + 1, start = 0, end = 0.8)[unique(color_fac)*ncolors + 1], "black", "darkgray")
-match_fact <- c(paste(unique(color_fac), "x", " match", sep = ""), "protein", "non-match")
-all_cols <- c("protein", paste(color_fac, "x", " match", sep = ""), rep("non-match", times = length(div_match)))
-prot_cols <- apply((rep(1, times = n_c) %*% t(c(1:n_pp_plot))), c(1,2), function(col){all_cols[col]})
-
-xpos <- (1:n_c) %*% t(rep(1, n_pp_plot)) + rep(1, n_c) %*% t(((1:n_pp_plot)-1)*n_c + ((1:n_pp_plot)-1)*2)
-all_data <- data.frame(abund = c(t(prot_abundM)), abundMax = c(t(prot_max)), abundMin = c(t(prot_min)), xpos = c(xpos), color_fact = c(t(prot_cols)))
-
-plotter <- ggplot(all_data, aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact))
-plotter <- plotter + opts(panel_background = theme_rect(colour = "pink")) + xlab("sample * peptide") + ylab("relative abundance") 
-plotter <- plotter + labs(colour = paste(colnames(possibleMap)[prot], ": protein ", prot, sep = ""))
-print(plotter + geom_linerange()
-+ scale_colour_manual(values = match_cols, limits = match_fact)
-+ opts(axis.text.y = theme_text(colour = "red")))
-}
-
+tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
+tmp <- as.matrix(tmp)
+tmp[!(tmp %in% c(0,1))] <- 1 
+prior_mat_logical <- cbind(as.matrix(unique_mappingMat), tmp) 
+prior_mat_logical <- prior_mat_logical == 1
+possibleMap <- Matrix(prior_mat_logical)
 
 pdf("prot_output_plots.pdf")
 for(p in 1:100){
-	plot_protein_add(p, possibleMap, prot_abund, uniquePepMean, uniquePepPrecision)
+	plot_protein_add(p, possibleMap, prot_abund_final, uniquePepMean, uniquePepPrecision)
 	}
 dev.off()
 
@@ -464,8 +489,8 @@ barplot(table(rowSums(is.na(transcript_brauer))))
 transcript_brauer <- transcript_brauer[rowSums(is.na(transcript_brauer)) < length(transcript.condition[1,])*0.2,]
 
 #not valid because of correlated noise?
-pcrange <- c(21, 30)
-npc.compare.trans <- estim_ncpPCA(transcript_brauer, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = "Kfold", pNA = 0.10, nbsim = 5)
+pcrange <- c(10, 20)
+npc.compare.trans <- estim_ncpPCA(transcript_brauer, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = "Kfold", pNA = 0.10, nbsim = 40)
 npc.trans <- npc.compare$ncp
 
 npc.trans <- 10
@@ -538,11 +563,11 @@ gplot.hexbin(hexbin(x = shared_prot, y = shared_trans, xbins = 25), style = "nes
 gplot.hexbin(hexbin(x = shared_prot, y = shared_trans, xbins = 50), colramp = blue2red, xlab = "Protein Abundance", ylab = "Transcript Abundance")
 
 pt_corrs <- sapply(c(1:length(shared_prot[1,])), function(row){
-	cor(shared_prot[,row], shared_trans[,row], method = "pearson")
+	cor(shared_prot[,row], shared_trans[,row], method = "spearman")
 	}); pt_corrs <- data.frame(correlation = pt_corrs)
 
 cor_plot <- ggplot(pt_corrs, aes(x = correlation))
-cor_plot + xlab("pearson correlation") + geom_histogram(colour = "white", fill = "limegreen", binwidth = 0.04)
+cor_plot + xlab("spearman correlation") + geom_histogram(colour = "white", fill = "limegreen", binwidth = 0.04)
 
 
 ptratio <- shared_prot - shared_trans
@@ -611,4 +636,88 @@ reg_resids <- sapply(c(1:length(ptratio[1,])), function(coln){
 beta <- median(reg_coefs[3,]/reg_coefs[2,])
 
 prot_cond$realDR*beta
+
+
+
+
+
+
+sd_reg_plots <- function(STDvar, avgSignalSTD, STDvar_fit){
+
+	print(plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3))
+	abline(STDvar_fit, col = "RED")
+	abline(STDvar_fit_initial, col = "GREEN")
+	print(gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow))
+	
+	}
+
+####
+
+max_non_NA <- function(vec){
+	max(vec[!is.na(vec)])
+	}
+
+
+residPrec <- function(generate_plots = FALSE){
+
+n_tp <- length(good_light[,1])
+n_req_members <- 3
+
+allAttribPep <- pepToUniq %*% (mixing_fract == 1)[,1:n_prot]
+valid_prot <- c(1:n_prot)[colSums(allAttribPep) >= n_req_members]
+valid_pep <- c(1:n_tp)[rowSums(allAttribPep[,valid_prot]) == 1]
+
+nsharedpeps <- colSums(allAttribPep[,valid_prot]) %*% t(mixing_fract[,valid_prot]) %*% t(pepToUniq[valid_pep,])
+residuals <- as.matrix(prot_abund[,valid_prot]  %*% t(mixing_fract[,valid_prot]) %*% t(pepToUniq[valid_pep,]) - t(abundMat[valid_pep,]))
+sqresid_corrected <- as.vector(t(residuals^2 * (t(t(rep(1, times = n_c))) %*% (nsharedpeps/(nsharedpeps-1)))))
+
+sampleIC <- mapply(x = c(good_light[valid_pep,]), y = c(good_heavy[valid_pep,]), function(x,y){
+	if(!is.na(x) & !is.na(y)){mean(x,y)}else{NA}
+	})
+
+zero_thresh <- 0.00001
+STDvar_fit <- lm(log2(sqresid_corrected[!is.na(sampleIC) & sqresid_corrected > zero_thresh]) ~ log2(sampleIC[!is.na(sampleIC) & sqresid_corrected > zero_thresh]))
+
+if(generate_plots == TRUE){
+	sd_reg_plots(sqresid_corrected[!is.na(sampleIC) & sqresid_corrected > zero_thresh], sampleIC[!is.na(sampleIC) & sqresid_corrected > zero_thresh], STDvar_fit)
+	}
+	
+STDvar_fit	
+}
+
+
+plot_protein_add <- function(prot, possibleMap, prot_abund, uniquePepMean, uniquePepPrecision){
+row_match <- c(1:n_p)[possibleMap[,prot]]
+#row_match <- c(1:n_p)[possibleMap[,prot] != 0]
+div_match <- row_match[diag(mixing_fract[row_match, n_prot + row_match]) == 1]
+mixed_match <- row_match[!(row_match %in% div_match)]
+
+prot_abundM <- cbind(prot_abund[,prot], uniquePepMean[,c(mixed_match,div_match)])
+prot_precM <- cbind(prot_prec[,prot], as.matrix(uniquePepPrecision[,c(mixed_match, div_match)]))
+prot_abundM[prot_abundM == 0] <- NA; prot_precM[is.na(prot_abundM)] <- NA
+prot_max <- prot_abundM + 2*sqrt(1/prot_precM)
+prot_min <- prot_abundM - 2*sqrt(1/prot_precM)
+
+n_pp_plot <- length(prot_abundM[1,])
+n_c <- length(prot_abundM[,1])
+
+ncolors <- 100
+color_fac <- round(mixing_fract[mixed_match, prot], length(ncolors)+1)
+match_cols <- c(rainbow(ncolors + 1, start = 0, end = 0.8)[unique(color_fac)*ncolors + 1], "black", "darkgray")
+match_fact <- c(paste(unique(color_fac), "x", " match", sep = ""), "protein", "non-match")
+all_cols <- c("protein", paste(color_fac, "x", " match", sep = ""), rep("non-match", times = length(div_match)))
+prot_cols <- apply((rep(1, times = n_c) %*% t(c(1:n_pp_plot))), c(1,2), function(col){all_cols[col]})
+
+xpos <- (1:n_c) %*% t(rep(1, n_pp_plot)) + rep(1, n_c) %*% t(((1:n_pp_plot)-1)*n_c + ((1:n_pp_plot)-1)*2)
+all_data <- data.frame(abund = c(t(prot_abundM)), abundMax = c(t(prot_max)), abundMin = c(t(prot_min)), xpos = c(xpos), color_fact = c(t(prot_cols)))
+
+plotter <- ggplot(all_data, aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact))
+plotter <- plotter + xlab("sample * peptide") + ylab("relative abundance") 
+plotter <- plotter + labs(colour = paste(colnames(possibleMap)[prot], ": protein ", prot, sep = ""))
+print(plotter + geom_linerange()
++ scale_colour_manual(values = match_cols, limits = match_fact)
++ opts(axis.text.y = theme_text(colour = "red")))
+}
+
+
 
