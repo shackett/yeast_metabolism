@@ -23,14 +23,15 @@
 
 % This setup helps makes sure R code doesn't stretch off the side of the screen
 % Don't worry about this until you've read the rest of the document
-\SweaveOpts{keep.source=FALSE}
-<<echo=FALSE, results=hide>>=
+\Sexpr{opts_chunk$set(tidy=TRUE, message=FALSE)}
+<<echo=FALSE,results='hide'>>=
 options(width=60)
 
-library(cacheSweave)
-setCacheDir("cache")
+library(knitr)
 
 setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
+cache.path(
+
 
 load('20120807ProtPepMatrices.Rdata')
 source("pep_library.R")
@@ -58,7 +59,7 @@ matrix_fxn()
 
 \scriptsize
 
-<<cache = TRUE>>=
+<<cache,TRUE>>=
 
 # Filter to only look at peptides with less than quality_frac fraction of missing values
 
@@ -124,7 +125,7 @@ Fitting from replicates can be done because all of the samples are quantified wi
 
 
 \begin{figure}[h!]
-<<fig = TRUE, echo = FALSE>>=
+<<fig,TRUE,echo,FALSE>>=
 gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
 @
 \label{heavylightcomp}
@@ -136,7 +137,7 @@ gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
 \begin{figure}[h!]
 \begin{center}
 \subfloat[Linear regression]{
-<<label = ICsdreg1, fig = TRUE, echo = FALSE, include = FALSE>>=
+<<label,ICsdreg1,fig,TRUE,echo,FALSE,include,FALSE>>=
 plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
 abline(STDvar_fit, col = "RED")
 @
@@ -144,7 +145,7 @@ abline(STDvar_fit, col = "RED")
 }
 \qquad
 \subfloat[Bivariate histogram: residual variance is a decreasing function of signal strength]{
-<<label = ICsdreg2, fig = TRUE, echo = FALSE, include = FALSE>>=
+<<label,ICsdreg2,fig,TRUE,echo,FALSE,include,FALSE>>=
 gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow)
 @
 \includegraphics[width=0.4\textwidth]{Pep_Prot-ICsdreg2}}
@@ -154,7 +155,7 @@ gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rai
 \end{figure}
 
 \scriptsize
-<<cache = TRUE>>=
+<<cache,TRUE>>=
 lightHeavyCellmean <- sapply(c(1:length(heavyIC[,1]))[good_samples], function(row){
 	mapply(FUN = function(a,b){
 		if(!is.na(a) & !is.na(b)){mean(a, b)}else{NA}
@@ -193,7 +194,7 @@ uniquePepMean[is.na(uniquePepMean)] <- 0
 
 \normalsize
 \begin{figure}[h!]
-<<fig = TRUE>>=
+<<fig,TRUE>>=
 barplot(Nmissing_val, lwd = 5)
 @
 \caption{Distribution of non-missing values of filtered peptides}
@@ -242,7 +243,7 @@ $\tau_{y} = \prod_{z \neq y}^{Y}\sigma^{2}_{z}$
 \subsection*{Algorithm Implementation}
 
 \scriptsize
-<<cache = TRUE>>=
+<<cache,TRUE>>=
 prerun_fixed_mat <- TRUE
 prior_bound <- 0.999
 prior_p_div <- exp(-1*qchisq(prior_bound, n_c))
