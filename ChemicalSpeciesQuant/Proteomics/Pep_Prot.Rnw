@@ -32,6 +32,8 @@ source("pep_library.R")
 plotting_fxn()
 matrix_fxn()
 library(ggplot2)
+library(flexclust)
+
 @
 
 
@@ -217,7 +219,6 @@ Nmissing_val_all <- table(apply(is.finite(PepMatrix), 1, sum))
 
 @
 
-\normalsize
 \begin{figure}[h!]
 <<mvbarplot, dependson = "EMsetup", echo = FALSE>>=
 barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", times = sum(as.numeric(names(Nmissing_val_all)) < ceiling(n_c * quality_frac))), rep("orange", times = sum(as.numeric(names(Nmissing_val_all)) >= ceiling(n_c * quality_frac)))))
@@ -260,7 +261,7 @@ heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", co
 \subfloat[A $\cap$ B / max(A, B)]{
 \includegraphics[width=0.4\textwidth]{figure/missingOverlap2.pdf}}
 \end{center}
-\label{repFitSD1}
+\label{repFitSD2}
 \caption{Overlap of missing ascertained peptides across conditions}
 \end{figure}
 
@@ -275,7 +276,7 @@ blackOrange <- function (n){colorpanel(n, "black", "black", "orange")}
 
 @
 
-\begin{figure}
+\begin{figure}[h!]
 <<misval_HM, dependson = "mvmat_red", echo = FALSE, warning = FALSE>>=
 man_dist <- function(x){dist(x, method = "manhattan")}
 heatmap.2(cond_peps, Rowv = TRUE, Colv = FALSE, trace = "none", col=blackOrange(100), distfun = man_dist, cexRow = 0.1)
@@ -284,18 +285,18 @@ heatmap.2(cond_peps, Rowv = TRUE, Colv = FALSE, trace = "none", col=blackOrange(
 \end{figure}
 
 <<cluster_misval, dependson = "mvmat_red", cache = TRUE>>=
-library(flexclust)
 
-kvals <- c(2:20)
-data_clust <- stepFlexclust(cond_peps, k = kvals, nrep=20, verbose=FALSE, FUN = kcca, family = kccaFamily(which = "kmedians"))
+#kvals <- c(2:20)
+#data_clust <- stepFlexclust(cond_peps, k = kvals, nrep=20, verbose=FALSE, FUN = kcca, family = kccaFamily(which = "kmedians"))
 
 
-WICSS <- sapply(1:length(kvals), function(k_num){
-	cSS <- apply(getModel(data_clust, which = k_num)@cldist, 2, sum)
-	cSS[1] * length(cond_peps[,1])/(length(cond_peps[,1]) - kvals[k_num])
-	})
+#WICSS <- sapply(1:length(kvals), function(k_num){
+#	cSS <- apply(getModel(data_clust, which = k_num)@cldist, 2, sum)
+#	cSS[1] * length(cond_peps[,1])/(length(cond_peps[,1]) - kvals[k_num])
+#	})
 	
-k_clust_misVal <- kvals[WICSS/WICSS[1] < 0.4][1]
+#k_clust_misVal <- kvals[WICSS/WICSS[1] < 0.4][1]
+k_clust_misVal <- 5
 
 mv_clust <- stepFlexclust(cond_peps, k = k_clust_misVal, nrep=100, verbose=FALSE, FUN = kcca, family = kccaFamily(which = "kmedians"))
 
@@ -315,7 +316,7 @@ clust_plot_df <- data.frame(condition = c(c(clust_xpos), c(clust_xpos)), cluster
 
 @
 
-\begin{figure}
+\begin{figure}[h!]
 <<plot_missingvalClusters, dependson = "cluster_misval", echo = FALSE>>=
 clust_plot <- ggplot(clust_plot_df, aes(x = condition, y = cluster_val, size = counts, color = medianoid))
 clust_plot <- clust_plot + theme(axis.text.y = element_blank(), axis.title.y = element_blank())
@@ -335,29 +336,56 @@ goAllFrame=GOAllFrame(goFrame)
 gsc <- GeneSetCollection(goAllFrame, setType = GOCollection())
 @
 
-<<perform_GSEA, dependson="GSEA_prep">>=
+<<perform_GSEA, dependson= c("GSEA_prep", "cluster_misval")>>=
 library(methods)
 library(GOstats)
 library(GSEABase)
 FDR = .05
 
-GSEA.test = function(genes) {
+#MF - molecular function, BP - biological process, CC cellular component
+GSEA.test = function(genes, category) {
 	universe = rownames(cond_peps)
 	
 	params <- GSEAGOHyperGParams(name="GSEA for Bar-Seq data",
 		geneSetCollection=gsc,
 		geneIds = genes,
 		universeGeneIds = universe,
-		ontology = "MF",
+		ontology = category,
 		pvalueCutoff = 1,
 		conditional = FALSE,
 		testDirection = "over")
 	hyperGTest(params)
 	}
 
-test <- names(mv_clust@cluster[mv_clust@cluster == 2])
-x <- GSEA.test(test)
+#save(mv_clust, GSEA.test, cond_peps, file = "GSCAclust.Rdata")
 
+sum_list <- list()
+
+for(kval in 1:k_clust_misVal){
+	test <- names(mv_clust@cluster[mv_clust@cluster == kval])
+	go_sum <- summary(GSEA.test(test, "MF"))
+	sum_list$MF[[kval]] <- go_sum[go_sum$Pvalue < 0.01,]
+	go_sum <- summary(GSEA.test(test, "BP"))
+	sum_list$BP[[kval]] <- go_sum[go_sum$Pvalue < 0.01,]
+	go_sum <- summary(GSEA.test(test, "CC"))
+	sum_list$CC[[kval]] <- go_sum[go_sum$Pvalue < 0.01,]
+	}
+
+
+xtable(sum_table)
+
+@
+
+<<GSEAtable, dependson = "perform_GSEA", results = "tex">>=
+library(stable)
+sum_table <- NULL
+for(kval in 1:k_clust_misVal){
+	test <- names(mv_clust@cluster[mv_clust@cluster == kval])
+	for(ont in c("MF", "BP", "CC")){
+		go_sum <- summary(GSEA.test(test, ont)
+		sum_table <- rbind(sum_table, cbind(k = oval, category = not, go_sum[go_sum$Pvalue < 0.01,]))
+	}
+xtable(sum_table)
 @
 
 
@@ -368,7 +396,7 @@ When using relative variation in peptides to predict variation in protein abunda
 \begin{itemize}
 \item If a peptide maps to multiple proteins, it should be attributed to a protein (thereby adding signal) to the extent that its pattern matches the pattern from other peptides.
 \item Some peptides won't conform to the trends of their protein because they may be the non-covalently modified complement of a set of unascertained modified peptides.  These peptides shouldn't inform the general protein trend, and may be interesting to analyze in isolation.
-\end{itemize}
+\end{itemize}sum_list
 
 \subsection*{Algorithm structure}
 
