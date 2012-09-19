@@ -31,6 +31,7 @@ load('20120807ProtPepMatrices.Rdata')
 source("pep_library.R")
 plotting_fxn()
 matrix_fxn()
+library(ggplot2)
 @
 
 
@@ -53,7 +54,7 @@ matrix_fxn()
 
 \small
 
-<<cache=TRUE>>=
+<<dataImp, cache=TRUE>>=
 
 quality_frac <- 0.8
 ICthreshold <- 2^15
@@ -117,7 +118,7 @@ STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
 \normalsize
 
 \begin{figure}[h!]
-<<echo = FALSE>>=
+<<nshare, dependson = "dataImp", echo = FALSE>>=
 barplot(nsharedpep)
 @
 \caption{Number of proteins that a measured peptide matches}
@@ -134,19 +135,19 @@ In order to determine the expected variance of the relative abundance of a pepti
 Fitting from replicates can be done because all of the samples are quantified with respect to a common reference p0.05, including an experimental sample of p0.05.  The difference between these  
 
 \begin{figure}[h!]
-<<echo = FALSE>>=
+<<repdiffplot1, dependson = "dataImp", echo = FALSE>>=
 gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
 @
 \label{heavylightcomp}
 \caption{Comparison of log$_{2}$p0.05$^{H}$ and log$_{2}$p0.05$^{L}$}
 \end{figure}
 
-<<label = "ICsdreg1", echo = FALSE, include = FALSE>>=
+<<repdiffplot2, dependson = "dataImp", label = "ICsdreg1", echo = FALSE, include = FALSE>>=
 plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
 abline(STDvar_fit, col = "RED")
 @
 
-<<label = "ICsdreg2", echo = FALSE, include = FALSE>>=
+<<repdiffplot3, dependson = "dataImp", label = "ICsdreg2", echo = FALSE, include = FALSE>>=
 gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow)
 @
 
@@ -170,7 +171,7 @@ gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rai
 
 \small
 
-<<cache = TRUE>>=
+<<EMsetup, dependson = "dataImp", cache = TRUE>>=
 
 #calculate the expected sampling variance of the heavy-low diff for experimental measurement
 
@@ -218,17 +219,16 @@ Nmissing_val_all <- table(apply(is.finite(PepMatrix), 1, sum))
 
 \normalsize
 \begin{figure}[h!]
-<<echo = FALSE>>=
+<<mvbarplot, dependson = "EMsetup", echo = FALSE>>=
 barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", times = sum(as.numeric(names(Nmissing_val_all)) < ceiling(n_c * quality_frac))), rep("orange", times = sum(as.numeric(names(Nmissing_val_all)) >= ceiling(n_c * quality_frac)))))
 @
 \caption{Distribution of non-missing values for all peptides.  Peptides with non-missing values over the cutoff are shown in orange}
 \label{nonmissingvals}
 \end{figure}
 
-<<cache = TRUE>>=
+<<mvmat, dependson = "EMsetup", cache = TRUE>>=
 
 #look at structure in the missing values
-#binPepMatrix <- is.finite(PepMatrix)
 binPepMatrix <- ifelse(is.finite(lightIC), 1, 0)
 
 pnonmissingOverSingles <- matrix(NA, ncol = length(binPepMatrix[1,]), nrow = length(binPepMatrix[1,]))
@@ -241,19 +241,13 @@ for(i in 1:length(pnonmissingOverSingles[1,])){
 	}
 }
 
-
-
 @
 
-
-
-
-
-<<label = "missingOverlap1", echo = FALSE, include = FALSE>>=
+<<mvplot1, dependson = "mvmat", label = "missingOverlap1", echo = FALSE, include = FALSE>>=
 heatmap.2(pnonmissingOverTotal, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
 @
 
-<<label = "missingOverlap2", echo = FALSE, include = FALSE>>=
+<<mvplot2, dependson = "mvmat", label = "missingOverlap2", echo = FALSE, include = FALSE>>=
 heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
 @
 
@@ -269,6 +263,103 @@ heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", co
 \label{repFitSD1}
 \caption{Overlap of missing ascertained peptides across conditions}
 \end{figure}
+
+<<mvmat_red, dependson = "mvmat">>=
+uq_ProtPepMatrix <- ProtPepMatrix[rowSums(ProtPepMatrix) == 1,]
+uq_binPepMatrix <- binPepMatrix[rowSums(ProtPepMatrix) == 1,]
+
+cond_peps <- t(((t(uq_binPepMatrix) %*% uq_ProtPepMatrix) != 0)*1)
+cond_peps <- cond_peps[!(rowSums(cond_peps) %in% c(0, length(cond_peps[1,]))),]
+
+blackOrange <- function (n){colorpanel(n, "black", "black", "orange")}
+
+@
+
+\begin{figure}
+<<misval_HM, dependson = "mvmat_red", echo = FALSE, warning = FALSE>>=
+man_dist <- function(x){dist(x, method = "manhattan")}
+heatmap.2(cond_peps, Rowv = TRUE, Colv = FALSE, trace = "none", col=blackOrange(100), distfun = man_dist, cexRow = 0.1)
+@
+\caption{hierarchical clustering of proteins missing in a subset of conditions using manhattan distance}
+\end{figure}
+
+<<cluster_misval, dependson = "mvmat_red", cache = TRUE>>=
+library(flexclust)
+
+kvals <- c(2:20)
+data_clust <- stepFlexclust(cond_peps, k = kvals, nrep=20, verbose=FALSE, FUN = kcca, family = kccaFamily(which = "kmedians"))
+
+
+WICSS <- sapply(1:length(kvals), function(k_num){
+	cSS <- apply(getModel(data_clust, which = k_num)@cldist, 2, sum)
+	cSS[1] * length(cond_peps[,1])/(length(cond_peps[,1]) - kvals[k_num])
+	})
+	
+k_clust_misVal <- kvals[WICSS/WICSS[1] < 0.4][1]
+
+mv_clust <- stepFlexclust(cond_peps, k = k_clust_misVal, nrep=100, verbose=FALSE, FUN = kcca, family = kccaFamily(which = "kmedians"))
+
+clust_counts1 <- matrix(NA, nrow = k_clust_misVal, ncol = n_c)
+clust_counts0 <- matrix(NA, nrow = k_clust_misVal, ncol = n_c)
+
+for(kval in 1:k_clust_misVal){
+	binsub <- cond_peps[mv_clust@cluster == kval,]
+	clust_counts1[kval,] <- colSums(binsub)
+	clust_counts0[kval,] <- length(binsub[,1]) - colSums(binsub)
+	}
+clust_ypos_adj <- matrix(5*rep(0:(k_clust_misVal-1), each = n_c), nrow = k_clust_misVal, ncol = n_c, byrow = TRUE)
+clust_xpos <- matrix(rep(1:n_c, times = k_clust_misVal), nrow = k_clust_misVal, ncol = n_c, byrow = TRUE)
+clust_num <- matrix(rep(1:(k_clust_misVal), each = n_c), nrow = k_clust_misVal, ncol = n_c, byrow = TRUE)
+
+clust_plot_df <- data.frame(condition = c(c(clust_xpos), c(clust_xpos)), cluster_val = c(c(1 + clust_ypos_adj), c(clust_ypos_adj)),counts = c(c(clust_counts1), c(clust_counts0)), shape = as.factor(c(c(clust_num), c(clust_num))), medianoid = as.factor(c(c(mv_clust@centers), c(1 - mv_clust@centers))))
+
+@
+
+\begin{figure}
+<<plot_missingvalClusters, dependson = "cluster_misval", echo = FALSE>>=
+clust_plot <- ggplot(clust_plot_df, aes(x = condition, y = cluster_val, size = counts, color = medianoid))
+clust_plot <- clust_plot + theme(axis.text.y = element_blank(), axis.title.y = element_blank())
+clust_plot + geom_point()
+@
+\end{figure}
+
+<<GSEA_prep, cache = TRUE>>=
+library(GSEABase)
+library(org.Sc.sgd.db)
+
+frame = toTable(org.Sc.sgdGO)
+
+goframeData = data.frame(frame$go_id, frame$Evidence, frame$systematic_name)
+goFrame=GOFrame(goframeData,organism="Saccharomyces cerevisiae")
+goAllFrame=GOAllFrame(goFrame)
+gsc <- GeneSetCollection(goAllFrame, setType = GOCollection())
+@
+
+<<perform_GSEA, dependson="GSEA_prep">>=
+library(methods)
+library(GOstats)
+library(GSEABase)
+FDR = .05
+
+GSEA.test = function(genes) {
+	universe = rownames(cond_peps)
+	
+	params <- GSEAGOHyperGParams(name="GSEA for Bar-Seq data",
+		geneSetCollection=gsc,
+		geneIds = genes,
+		universeGeneIds = universe,
+		ontology = "MF",
+		pvalueCutoff = 1,
+		conditional = FALSE,
+		testDirection = "over")
+	hyperGTest(params)
+	}
+
+test <- names(mv_clust@cluster[mv_clust@cluster == 2])
+x <- GSEA.test(test)
+
+@
+
 
 \clearpage
 \section*{Going from peptides to proteins via expectation-maximization}
