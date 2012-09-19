@@ -21,18 +21,12 @@
 \usepackage[scaled]{helvet}
 \usepackage{multicol}
 
-% This setup helps makes sure R code doesn't stretch off the side of the screen
-% Don't worry about this until you've read the rest of the document
 \Sexpr{opts_chunk$set(tidy=TRUE, message=FALSE)}
 <<echo=FALSE,results='hide'>>=
-options(width=60)
-
+options(width=80)
 library(knitr)
 
 setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
-cache.path(
-
-
 load('20120807ProtPepMatrices.Rdata')
 source("pep_library.R")
 plotting_fxn()
@@ -57,25 +51,31 @@ matrix_fxn()
 
 \section*{Data Processing}
 
-\scriptsize
+\small
 
-<<cache,TRUE>>=
-
-# Filter to only look at peptides with less than quality_frac fraction of missing values
+<<cache=TRUE>>=
 
 quality_frac <- 0.8
 ICthreshold <- 2^15
+#only consider peptides that match unambiguously to a single protein
+unq_matches_only <- FALSE
 
 lightIC[lightIC < ICthreshold] <- NA; heavyIC[heavyIC < ICthreshold] <- NA
 
 good_samples <- rowSums(is.finite(PepMatrix) & !is.na(lightIC) & !is.na(heavyIC)) >= (length(PepMatrix[1,])*quality_frac)
 
-#the relative abundance of a peptide across conditions w.r.t a common reference
-abundMat <- PepMatrix[good_samples,]
-
 #possible mappings between a protein and all matching peptides
 mappingMat <- ProtPepMatrix[good_samples,]
+nsharedpep <- table(rowSums(mappingMat))
+
+if(unq_matches_only){
+	good_samples[good_samples] <- good_samples[good_samples] & (rowSums(mappingMat) == 1)
+	mappingMat <- ProtPepMatrix[good_samples,]
+	}
 mappingMat <- mappingMat[,colSums(mappingMat) != 0]
+
+#the relative abundance of a peptide across conditions w.r.t a common reference
+abundMat <- PepMatrix[good_samples,]
 good_light <- lightIC[good_samples,]
 good_heavy <- heavyIC[good_samples,]
 
@@ -103,15 +103,25 @@ avgSignalSTD <- apply(cbind(heavyIC[,colnames(heavyIC) == "P0.05"], lightIC[,col
 logLight <- log2(lightIC[is.finite(avgSignalSTD),colnames(lightIC) == "P0.05"])
 logHeavy <- log2(heavyIC[is.finite(avgSignalSTD),colnames(heavyIC) == "P0.05"])
 avgSignalSTD <- avgSignalSTD[is.finite(avgSignalSTD)]
-
+#remove this step to increase variance, since this factor isnt known in principle
 logLight <- logLight + optimize(normFactor, c(-1, 1), logLight = logLight, logHeavy = logHeavy)$minimum
 
 #variance of the replicate differences accounting for small sample (scaling factor of 2)
 STDvar <- (logLight - logHeavy)^2*2
 STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
+
+
+
 @
 
 \normalsize
+
+\begin{figure}[h!]
+<<echo = FALSE>>=
+barplot(nsharedpep)
+@
+\caption{Number of proteins that a measured peptide matches}
+\end{figure}
 
 \begin{itemize}
 \item Remove all peptides with more than \Sexpr{1 - quality_frac} fraction of missing data
@@ -123,39 +133,47 @@ In order to determine the expected variance of the relative abundance of a pepti
 
 Fitting from replicates can be done because all of the samples are quantified with respect to a common reference p0.05, including an experimental sample of p0.05.  The difference between these  
 
-
 \begin{figure}[h!]
-<<fig,TRUE,echo,FALSE>>=
+<<echo = FALSE>>=
 gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
 @
 \label{heavylightcomp}
 \caption{Comparison of log$_{2}$p0.05$^{H}$ and log$_{2}$p0.05$^{L}$}
 \end{figure}
 
+<<label = "ICsdreg1", echo = FALSE, include = FALSE>>=
+plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
+abline(STDvar_fit, col = "RED")
+@
+
+<<label = "ICsdreg2", echo = FALSE, include = FALSE>>=
+gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow)
+@
 
 
 \begin{figure}[h!]
 \begin{center}
 \subfloat[Linear regression]{
-<<label,ICsdreg1,fig,TRUE,echo,FALSE,include,FALSE>>=
-plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
-abline(STDvar_fit, col = "RED")
-@
-\includegraphics[width=0.4\textwidth]{Pep_Prot-ICsdreg1}
+\includegraphics[width=0.4\textwidth]{figure/ICsdreg1.pdf}
 }
 \qquad
 \subfloat[Bivariate histogram: residual variance is a decreasing function of signal strength]{
-<<label,ICsdreg2,fig,TRUE,echo,FALSE,include,FALSE>>=
-gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow)
-@
-\includegraphics[width=0.4\textwidth]{Pep_Prot-ICsdreg2}}
+\includegraphics[width=0.4\textwidth]{figure/ICsdreg2.pdf}}
 \end{center}
 \label{repFitSD1}
 \caption{$\epsilon^{2}$ versus average log$_{2}$ ion counts of the heavy and light peak}
 \end{figure}
 
-\scriptsize
-<<cache,TRUE>>=
+
+
+
+
+\small
+
+<<cache = TRUE>>=
+
+#calculate the expected sampling variance of the heavy-low diff for experimental measurement
+
 lightHeavyCellmean <- sapply(c(1:length(heavyIC[,1]))[good_samples], function(row){
 	mapply(FUN = function(a,b){
 		if(!is.na(a) & !is.na(b)){mean(a, b)}else{NA}
@@ -187,20 +205,72 @@ unique_mappingMat <- as.matrix(t(pepToUniq) %*% mappingMat)
 unique_mappingMat[!(unique_mappingMat %in% c(0,1))] <- 1
 unique_mappingMat <- Matrix(unique_mappingMat)
 
+
 #number of non-missing values for peptides
 Nmissing_val <- table(rowSums(!is.na(t(uniquePepMean))))
+
 uniquePepMean[is.na(uniquePepMean)] <- 0
+
+#number of non-missing values for all peptides (before uniquenss combination)
+Nmissing_val_all <- table(apply(is.finite(PepMatrix), 1, sum))
+
 @
 
 \normalsize
 \begin{figure}[h!]
-<<fig,TRUE>>=
-barplot(Nmissing_val, lwd = 5)
+<<echo = FALSE>>=
+barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", times = sum(as.numeric(names(Nmissing_val_all)) < ceiling(n_c * quality_frac))), rep("orange", times = sum(as.numeric(names(Nmissing_val_all)) >= ceiling(n_c * quality_frac)))))
 @
-\caption{Distribution of non-missing values of filtered peptides}
+\caption{Distribution of non-missing values for all peptides.  Peptides with non-missing values over the cutoff are shown in orange}
 \label{nonmissingvals}
 \end{figure}
 
+<<cache = TRUE>>=
+
+#look at structure in the missing values
+#binPepMatrix <- is.finite(PepMatrix)
+binPepMatrix <- ifelse(is.finite(lightIC), 1, 0)
+
+pnonmissingOverSingles <- matrix(NA, ncol = length(binPepMatrix[1,]), nrow = length(binPepMatrix[1,]))
+rownames(pnonmissingOverSingles) <- colnames(binPepMatrix); colnames(pnonmissingOverSingles) <- colnames(binPepMatrix)
+pnonmissingOverTotal <- pnonmissingOverSingles
+for(i in 1:length(pnonmissingOverSingles[1,])){
+	for(j in 1:length(pnonmissingOverSingles[1,])){	
+	pnonmissingOverTotal[i,j] <- sum(apply(binPepMatrix[,c(i, j)], 1, sum) == 2)/length(binPepMatrix[,1])
+  	pnonmissingOverSingles[i,j] <- sum(apply(binPepMatrix[,c(i, j)], 1, sum) == 2) / sum(apply(binPepMatrix[,c(i, j)], 1, sum) > 0)
+	}
+}
+
+
+
+@
+
+
+
+
+
+<<label = "missingOverlap1", echo = FALSE, include = FALSE>>=
+heatmap.2(pnonmissingOverTotal, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+@
+
+<<label = "missingOverlap2", echo = FALSE, include = FALSE>>=
+heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+@
+
+\begin{figure}[h!]
+\begin{center}
+\subfloat[p(A $\cap$ B)]{
+\includegraphics[width=0.4\textwidth]{figure/missingOverlap1}
+}
+\qquad
+\subfloat[A $\cap$ B / max(A, B)]{
+\includegraphics[width=0.4\textwidth]{figure/missingOverlap2.pdf}}
+\end{center}
+\label{repFitSD1}
+\caption{Overlap of missing ascertained peptides across conditions}
+\end{figure}
+
+\clearpage
 \section*{Going from peptides to proteins via expectation-maximization}
 
 When using relative variation in peptides to predict variation in protein abundance we need to deal with two factors
@@ -241,28 +311,6 @@ $\tau_{y} = \prod_{z \neq y}^{Y}\sigma^{2}_{z}$
 \end{align}
 
 \subsection*{Algorithm Implementation}
-
-\scriptsize
-<<cache,TRUE>>=
-prerun_fixed_mat <- TRUE
-prior_bound <- 0.999
-prior_p_div <- exp(-1*qchisq(prior_bound, n_c))
-
-tmp <- diag(rep(prior_p_div, times = n_p)); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
-mixing_fract <- unique_mappingMat/((1-prior_p_div)^-1*rowSums(unique_mappingMat))
-mixing_fract <- cbind(mixing_fract, tmp)
-mixing_fract <- Matrix(mixing_fract)
-prior_mat_likadj <- unique_mappingMat/((1-prior_p_div)^-1)
-prior_mat_likadj <- cbind(prior_mat_likadj, tmp)
-
-tmp[!(tmp %in% c(0,1))] <- 1 
-prior_mat <- cbind(unique_mappingMat, tmp) 
-prior_mat_logical <- prior_mat; prior_mat_logical <- prior_mat_logical == 1
-prior_mat_sparse <- Matrix(prior_mat_logical)
-prior_mat_likadj <- prior_mat_likadj*prior_mat_sparse
-prior_mat_likadj[prior_mat_sparse] <- log(prior_mat_likadj[prior_mat_sparse])
-rm(tmp, prior_mat, prior_mat_logical); gc(); gc()
-@
 
 
 \end{document}  
