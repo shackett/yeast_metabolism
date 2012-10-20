@@ -19,6 +19,7 @@
 \usepackage{aurical}
 \usepackage[scaled]{helvet}
 \usepackage{multicol}
+\usepackage{upquote}
 
 \Sexpr{opts_chunk$set(tidy=TRUE, message=FALSE)}
 <<echo=FALSE,results='hide'>>=
@@ -30,14 +31,11 @@ load('20120807ProtPepMatrices.Rdata')
 source("pep_library.R")
 plotting_fxn()
 matrix_fxn()
-library(ggplot2)
-library(flexclust)
-
 @
 
 
 \author{Sean R. Hackett}
-\title{Peptides to Protein EM and analysis} 
+\title{Aggregator: Peptides to Protein EM and analysis} 
 \date{}
 
 \begin{document}
@@ -76,6 +74,28 @@ if(unq_matches_only){
 	}
 mappingMat <- mappingMat[,colSums(mappingMat) != 0]
 
+#combine degenerate proteins together if all the peptides associated with multiple proteins are shared
+
+degen_prots <- apply(mappingMat, 2, function(prot){
+	paste(prot, collapse = "")
+	})
+
+degen_prot_patterns <- names(table(degen_prots))[unname(table(degen_prots)) > 1]
+
+degen_prot_matches <- list()
+degen_mappings <- NULL
+for(pat in 1:length(degen_prot_patterns)){
+	
+	degen_prot_matches[[paste(colnames(mappingMat)[degen_prots %in% degen_prot_patterns[pat]], collapse = "/")]] <- colnames(mappingMat)[degen_prots %in% degen_prot_patterns[pat]]
+	degen_mappings <- cbind(degen_mappings, mappingMat[,degen_prots %in% degen_prot_patterns[pat]][,1])
+	
+	}
+colnames(degen_mappings) <- names(degen_prot_matches)	
+
+mappingMat <- cbind(mappingMat[,!(degen_prots %in% degen_prot_patterns)], degen_mappings)	
+	
+
+
 #the relative abundance of a peptide across conditions w.r.t a common reference
 abundMat <- PepMatrix[good_samples,]
 good_light <- lightIC[good_samples,]
@@ -112,18 +132,7 @@ logLight <- logLight + optimize(normFactor, c(-1, 1), logLight = logLight, logHe
 STDvar <- (logLight - logHeavy)^2*2
 STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
 
-
-
 @
-
-\normalsize
-
-\begin{figure}[h!]
-<<nshare, dependson = "dataImp", echo = FALSE>>=
-barplot(nsharedpep)
-@
-\caption{Number of proteins that a measured peptide matches}
-\end{figure}
 
 \begin{itemize}
 \item Remove all peptides with more than \Sexpr{1 - quality_frac} fraction of missing data
@@ -131,9 +140,7 @@ barplot(nsharedpep)
 \item This results in \Sexpr{table(good_samples)[names(table(good_samples)) == TRUE]} peptides that are retained and \Sexpr{table(good_samples)[names(table(good_samples)) == FALSE]} peptides which are discarded.
 \end{itemize}
 
-In order to determine the expected variance of the relative abundance of a peptide($\mathbf{X}_{ic}$ about the relative abundance of its corresponding protein ($\mathbf{\Omega}_{kc}$), we assume that $\mathbf{X}_{ic} \sim N(\mathbf{\Omega}_{kc}, \sigma^{2}_{ic}$) with $E[\sigma^{2}_{ic}]$ being fitted either from residuals or replicates.
-
-Fitting from replicates can be done because all of the samples are quantified with respect to a common reference p0.05, including an experimental sample of p0.05.  The difference between these  
+Some of the proteins are totally degenerate, i.e. all of the peptides that match them, also match one or more other effectively identical proteins.  To deal with this, These degenerate proteins were combined and the mapping matrix (of peptides - proteins) was consolidated removing these degeneracies, the degenerate proteins were then combined and named according to the genes that they encompass.  These proteins shouldn't be used for transcript $\sim$ protein association, but will be useful for other purposes.
 
 \begin{figure}[h!]
 <<repdiffplot1, dependson = "dataImp", echo = FALSE>>=
@@ -143,12 +150,12 @@ gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
 \caption{Comparison of log$_{2}$p0.05$^{H}$ and log$_{2}$p0.05$^{L}$}
 \end{figure}
 
-<<repdiffplot2, dependson = "dataImp", label = "ICsdreg1", echo = FALSE, include = FALSE>>=
+<<ICsdreg1, dependson = "dataImp", echo = FALSE, include = FALSE>>=
 plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
 abline(STDvar_fit, col = "RED")
 @
 
-<<repdiffplot3, dependson = "dataImp", label = "ICsdreg2", echo = FALSE, include = FALSE>>=
+<<ICsdreg2, dependson = "dataImp", echo = FALSE, include = FALSE>>=
 gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow)
 @
 
@@ -166,6 +173,59 @@ gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rai
 \caption{$\epsilon^{2}$ versus average log$_{2}$ ion counts of the heavy and light peak}
 \end{figure}
 
+<<pooled_variance, dependson = "dataImp">>=
+
+meanCtrlIC <- mapply(mean, logHeavy, logLight)
+nbins <- 100
+binsize <- floor(length(meanCtrlIC)/nbins)
+error_bins <- data.frame(val_mean = meanCtrlIC[order(meanCtrlIC)], light_val = logLight[order(meanCtrlIC)], bin = c(rep(1:(length(meanCtrlIC) %% nbins), each = binsize + 1), rep(((length(meanCtrlIC) %% nbins) + 1):nbins, each = binsize)))
+
+bin_var <- data.frame(logIC = rep(NA, times = nbins), MLE_var = rep(NA, times = nbins),  MLE_var2 = rep(NA, times = nbins))
+bin_dist_plot <- NULL
+
+for(bin in 1:nbins){
+	bin_var$logIC[bin] <- mean(error_bins[error_bins$bin == bin,]$val_mean)
+	
+	#calculate unbiased estimate of variance
+	resid_dist <- (error_bins[error_bins$bin == bin,]$light_val - error_bins[error_bins$bin == bin,]$val_mean)*sqrt(2)
+	#get the average residual magnitude and then square for the varianace
+	bin_var$MLE_var2[bin] <- mean(abs(resid_dist[abs(resid_dist) < sd(resid_dist)*3]))^2
+	
+	}
+
+var_spline <- smooth.spline(x = bin_var$logIC, y = bin_var$MLE_var2, df = 5)
+
+@
+
+\begin{figure}
+<<pooled_var_plot, echo = FALSE>>=
+plot(var_spline, type = "l", lwd = 2, ylim = c(0, range(c(predict(var_spline, bin_var$logIC)$y, bin_var$MLE_var2))[2]))
+points(bin_var$logIC, bin_var$MLE_var2, pch = 16, cex = 0.8, col = "RED")
+@
+\caption{pooling peptides by mean($log_{2}^{H}, log_{2}^{L}$) and within these pools looking at the average variance}
+\label{poole_var_fig}
+\end{figure}
+
+From the results above, the variance of peptide abundances is clearly a decreasing function of peak size.  In order to form a more robust estimate of variance as a function of ion-count, peptides were sorted by mean($log_{2}X^{H}, log_{2}X^{L}$) and pooled into \Sexpr{nbins} binds,  containing \Sexpr{binsize}-\Sexpr{binsize+1} peptides.  The variance within these bins was calculated as according to equation \ref{poolvar}, and a 5$^{th}$ degree spline was fit through these points (figure \ref{poole_var_fig}).  This estimate of V(IC) can be used as a prediction of how close a peptides relative abundance is to the population parameter of interest, the protein mean. 
+
+\begin{align}
+\epsilon_{p} &= X_{p}^{H} - X_{p}^{L}\notag\\
+\sigma^{2} &= mean(|\epsilon_{p} * \sqrt{2}|)^{2}\label{poolvar}
+\end{align}
+
+\normalsize
+
+\begin{figure}[h!]
+<<nshare, dependson = "dataImp", echo = FALSE>>=
+barplot(nsharedpep)
+@
+\caption{Number of proteins that a measured peptide matches}
+\end{figure}
+
+In order to determine the expected variance of the relative abundance of a peptide($\mathbf{X}_{ic}$ about the relative abundance of its corresponding protein ($\mathbf{\Omega}_{kc}$), we assume that $\mathbf{X}_{ic} \sim N(\mathbf{\Omega}_{kc}, \sigma^{2}_{ic}$) with $E[\sigma^{2}_{ic}]$ being fitted either from residuals or replicates.
+
+Fitting from replicates can be done because all of the samples are quantified with respect to a common reference p0.05, including an experimental sample of p0.05.  The difference between these  
+
 
 
 
@@ -182,7 +242,16 @@ lightHeavyCellmean <- sapply(c(1:length(heavyIC[,1]))[good_samples], function(ro
 		}, lightIC[row,], heavyIC[row,])
 	})
 
-fittedVar <- var_calc(lightHeavyCellmean, STDvar_fit)
+
+
+#fittedVar <- var_calc(lightHeavyCellmean, STDvar_fit)
+
+fittedVar <- apply(log2(lightHeavyCellmean), c(1,2), function(x){
+	if(is.na(x)){NA}else{
+		predict(var_spline, x)$y
+		}
+	})
+
 fittedPrec <- fittedVar^-1
 
 #for each unique peptide, combine the multiple ionization states to produce a single point estimate, using integrated likelihood
@@ -218,6 +287,12 @@ Nmissing_val_all <- table(apply(is.finite(PepMatrix), 1, sum))
 
 @
 
+<<results = "asis", echo = FALSE>>=
+library(xtable)
+print(xtable(data.frame(Proteins = n_prot, Peptides = n_p, Conditions = n_c), display = c("s", "d", "d", "d")), include.rownames = FALSE)
+@
+
+
 \begin{figure}[h!]
 <<mvbarplot, dependson = "EMsetup", echo = FALSE>>=
 barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", times = sum(as.numeric(names(Nmissing_val_all)) < ceiling(n_c * quality_frac))), rep("orange", times = sum(as.numeric(names(Nmissing_val_all)) >= ceiling(n_c * quality_frac)))))
@@ -225,6 +300,7 @@ barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", time
 \caption{Distribution of non-missing values for all peptides.  Peptides with non-missing values over the cutoff are shown in orange}
 \label{nonmissingvals}
 \end{figure}
+
 
 <<mvmat, dependson = "EMsetup", cache = TRUE>>=
 
@@ -264,6 +340,14 @@ heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", co
 \caption{Overlap of missing ascertained peptides across conditions}
 \end{figure}
 
+\begin{figure}
+<<>>=
+plot(apply(is.na(lightIC), 2, sum) ~ c(apply(lightIC, 2, sum, na.rm = TRUE) + apply(heavyIC, 2, sum, na.rm = TRUE)), col = rep(c("RED", "ORANGE", "GREEN"), each = 5), pch = 16)
+@
+\caption{Number of missing peptide values for an experiment versus limitation and TIC}
+\end{figure}
+
+
 <<mvmat_red, dependson = "mvmat">>=
 uq_ProtPepMatrix <- ProtPepMatrix[rowSums(ProtPepMatrix) == 1,]
 uq_binPepMatrix <- binPepMatrix[rowSums(ProtPepMatrix) == 1,]
@@ -272,8 +356,11 @@ cond_peps <- t(((t(uq_binPepMatrix) %*% uq_ProtPepMatrix) != 0)*1)
 cond_peps <- cond_peps[!(rowSums(cond_peps) %in% c(0, length(cond_peps[1,]))),]
 
 blackOrange <- function (n){colorpanel(n, "black", "black", "orange")}
-
 @
+
+
+
+
 
 \begin{figure}[h!]
 <<misval_HM, dependson = "mvmat_red", echo = FALSE, warning = FALSE>>=
@@ -284,20 +371,10 @@ heatmap.2(cond_peps, Rowv = TRUE, Colv = FALSE, trace = "none", col=blackOrange(
 \end{figure}
 
 <<cluster_misval, dependson = "mvmat_red", cache = TRUE>>=
-
-#kvals <- c(2:20)
-#data_clust <- stepFlexclust(cond_peps, k = kvals, nrep=20, verbose=FALSE, FUN = kcca, family = kccaFamily(which = "kmedians"))
-
-
-#WICSS <- sapply(1:length(kvals), function(k_num){
-#	cSS <- apply(getModel(data_clust, which = k_num)@cldist, 2, sum)
-#	cSS[1] * length(cond_peps[,1])/(length(cond_peps[,1]) - kvals[k_num])
-#	})
 	
-#k_clust_misVal <- kvals[WICSS/WICSS[1] < 0.4][1]
 k_clust_misVal <- 5
 
-mv_clust <- stepFlexclust(cond_peps, k = k_clust_misVal, nrep=100, verbose=FALSE, FUN = kcca, family = kccaFamily(which = "kmedians"))
+mv_clust <- stepFlexclust(cond_peps, k = k_clust_misVal, nrep=100, verbose=FALSE, FUN = kcca, family = kccaFamily(which = 'kmedians'))
 
 clust_counts1 <- matrix(NA, nrow = k_clust_misVal, ncol = n_c)
 clust_counts0 <- matrix(NA, nrow = k_clust_misVal, ncol = n_c)
@@ -384,7 +461,7 @@ When using relative variation in peptides to predict variation in protein abunda
 \begin{itemize}
 \item If a peptide maps to multiple proteins, it should be attributed to a protein (thereby adding signal) to the extent that its pattern matches the pattern from other peptides.
 \item Some peptides won't conform to the trends of their protein because they may be the non-covalently modified complement of a set of unascertained modified peptides.  These peptides shouldn't inform the general protein trend, and may be interesting to analyze in isolation.
-\end{itemize}sum_list
+\end{itemize}
 
 \subsection*{Algorithm structure}
 
@@ -417,11 +494,22 @@ $\tau_{y} = \prod_{z \neq y}^{Y}\sigma^{2}_{z}$
 \mathbf{\Omega}_{kc} \sim \mbox{\Large \textbf{N}}\left(\mu = \frac{\sum_{i = 1}^{I}\mathbf{\Theta}_{ik}\textbf{X}_{ic}\tau_{i}}{\sum_{i = 1}^{I}\mathbf{\Theta}_{ik}\tau_{i}}, \sigma^{2} =  \left(\sum_{i = 1}^{I}\frac{\mathbf{\Theta}_{ik}}{\sigma^{2}_{i}}\right)^{-1} \right)
 \end{align}
 
+\subsubsection*{Notes}
+
+\begin{itemize}
+\item For every protein that only has peptides that are shared by other proteins, there is little evidence that this protein exists unless the shared peptides exhibit a trend that diverges from the behavior of the shared proteins (as determined by its unique peptides).  
+\end{itemize}
+
+
+
 \subsection*{Algorithm Implementation}
 
 \scriptsize
 
-<<EMprep, dependson = "dataImp", cache = TRUE, warning = FALSE>>=
+<<EMprep>>=	
+			
+### Iteration ###
+
 prerun_fixed_mat <- TRUE
 
 ### Initalization ###
@@ -437,41 +525,6 @@ pepshared <- colSums(unique_mappingMat[c(1:n_p)[rowSums(unique_mappingMat) > 1],
 peptotal <- colSums(unique_mappingMat)
 ambigprots <- c(1:n_prot)[pepshared == peptotal]
 
-
-
-tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
-mixing_fract <- unique_mappingMat * (1/(t(t((1-prior_p_div)^-1*rowSums(unique_mappingMat)))) %*% rep(1, n_prot))
-mixing_fract <- cBind(mixing_fract, tmp)
-prior_mat_likadj <- unique_mappingMat/((1-prior_p_div)^-1)
-prior_mat_likadj <- cBind(prior_mat_likadj, tmp)
-
-tmp <- as.matrix(tmp)
-tmp[!(tmp %in% c(0,1))] <- 1 
-prior_mat_logical <- cbind(as.matrix(unique_mappingMat), tmp) 
-prior_mat_logical <- prior_mat_logical == 1
-prior_mat_sparse <- Matrix(prior_mat_logical)
-#prior_mat_likadj2 <- prior_mat_likadj*prior_mat_sparse
-prior_mat_likadj[prior_mat_sparse] <- log(prior_mat_likadj[prior_mat_sparse])
-rm(tmp, prior_mat_logical)
-
-#preprocess sparse data and precision matrices
-
-if(prerun_fixed_mat == TRUE){
-#lower processor usage, higher memory
-sampleEst_list <- list()
-samplePrec_list <- list()
-for(c in 1:n_c){
-	sampleEst_list[[c]] <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-	samplePrec_list[[c]] <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
-	}
-	}
-	
-@
-
-<<EMrun, dependson = "EMprep">>=	
-			
-### Iteration ###
-
 if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_only == FALSE & file.exists("EMoutputDeg.Rdata"))){
 	if(unq_matches_only == TRUE){
 		load("EMoutputUnq.Rdata")
@@ -479,207 +532,10 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 			load("EMoutputDeg.Rdata")
 			}
 	}else{
-
-whole_data_logL <- NULL
-previous_it <- -Inf
-continue_it <- TRUE
-
-t <- 1
-while(continue_it){
-	
-	#update protein abundances: using integrated likelihood
-	#update protein means
-	prot_abund = ((uniquePepMean*uniquePepPrecision) %*% mixing_fract)/(uniquePepPrecision %*% mixing_fract)
-	prot_abund <- as.matrix(Matrix(prot_abund, sparse = FALSE))
-	prot_abund[is.nan(prot_abund)] <- 0
-	
-	#update protein precision
-	prot_prec <- uniquePepPrecision %*% mixing_fract
-	
-	#update mixing fract
-	
-	#evaluate the log-likelihood of sample abundances about the inferred protein abundances with a precision-specific to the signal strength of the samples
-	if(prerun_fixed_mat == TRUE){
-	sampleLik <- -1*((sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[1]])
-	for(c in 2:n_c){
-		sampleLik <- sampleLik - ((sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[c]])
-			}
-		}else{
-			for(c in 1:n_c){
-				sampleEst <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-				samplePrec <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
-				if(c == 1){
-					sampleLik <- -1*((sampleEst - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec)
-					}else{
-						sampleLik <- sampleLik - ((sampleEst - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec)
-						}
-				}
-			}
-	
-	#correct for purely ambiguous proteins
-	weight_store <- list()
-	for(ap in ambigprots){
-		tmp <- sampleLik[,ap][prior_mat_sparse[,ap]]
-		weights <- exp(tmp)/sum(exp(tmp))
-		weight_store[[ap]] <- weights
-		sampleLik[,ap][prior_mat_sparse[,ap]] <- tmp + sapply(log((prior_p_div^-1 * weights)^-1), function(x){min(x, 0)})
-		}
-	
-	#adjust for prior	
-	sampleLik <- prior_mat_likadj + sampleLik
-	
-	#if an ambiguous protein has the highest likelihood (besides divergent peptides), than set the divergent peptide to log(prior_p_div) + penalty applied to sampleLIk
-	
-	if(!unq_matches_only){
-	tmp <- sampleLik[,1:n_prot]; tmp[!prior_mat_sparse[,1:n_prot]] <- NA
-	ambig_good_fit <- is.finite(apply(tmp[,ambigprots], 1, max, na.rm = TRUE)) & (apply(tmp[,ambigprots], 1, max, na.rm = TRUE) == apply(tmp, 1, max, na.rm = TRUE))
-	good_fit_match <- ambigprots[apply(tmp[ambig_good_fit,ambigprots], 1, which.max)]
-	
-	div_adj2 <- sapply(1:length(good_fit_match), function(max_val){
-		tmp2 <- weight_store[[good_fit_match[max_val]]]
-		min(log((prior_p_div^-1 * tmp2[names(tmp2) == rownames(tmp)[ambig_good_fit][max_val]])^-1), 0)
-		})
-	
-	for(repl in 1:length(good_fit_match)){
-		sampleLik[c(1:n_p)[ambig_good_fit][repl], n_prot + c(1:n_p)[ambig_good_fit][repl]] <- sampleLik[c(1:n_p)[ambig_good_fit][repl], n_prot + c(1:n_p)[ambig_good_fit][repl]] + div_adj2[repl]
-		}}
-	
-	sampleLik_NA <- sampleLik
-	sampleLik_NA[!prior_mat_sparse] <- NA
-	relLik <- sampleLik - apply(sampleLik_NA, 1, max_non_NA) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-	relLik[prior_mat_sparse] <- exp(relLik[prior_mat_sparse])
-	
-	liksums <- apply(relLik, 1, sum)
-	
-	mixing_fract <- 1/liksums %*% t(rep(1, times = n_pp)) * prior_mat_sparse * relLik
-	
-	#update complete data log-likelihood
-	
-	new_log_lik <- logL(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision)
-	
-	#check for convergence
-	
-	if(abs(new_log_lik - previous_it) < 0.01 | (t > 30)){
-		continue_it <- FALSE
-		whole_data_logL <- c(whole_data_logL, new_log_lik)
-		t <- t + 1
-		}else{
-			whole_data_logL <- c(whole_data_logL, new_log_lik)
-			t <- t + 1
-			previous_it <- new_log_lik
-			}
+	save(unq_matches_only, prerun_fixed_mat, prior_p_div, uniquePepMean, uniquePepPrecision, unique_pepNames, unique_mappingMat, n_p, n_pp, n_prot, n_c, ambigprots, file = "EMimport.Rdata")
+	#system("R64 callEM.R")
 	}
-
-initial_convergence <- t - 1
-
-max_state <- apply(mixing_fract, 1, which.max)
-div_max <- n_prot < max_state
-
-for(p in 1:n_p){
-	if(div_max[p] == TRUE){
-		prior_mat_sparse[p, -(p + n_prot)] <- FALSE
-		prior_mat_likadj[p, -(p + n_prot)] <- 0
-		}else{
-			prior_mat_sparse[p, p + n_prot] <- FALSE
-			prior_mat_likadj[p, p + n_prot] <- 0
-			}
-	}
-
-##### Run the EM again with the new sparse prior
-
-if(prerun_fixed_mat == TRUE){
-#lower processor usage, higher memory
-sampleEst_list <- list()
-samplePrec_list <- list()
-for(c in 1:n_c){
-	sampleEst_list[[c]] <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-	samplePrec_list[[c]] <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
-	}
-	}
-
-previous_it <- -Inf
-continue_it <- TRUE
-
-while(continue_it){
 	
-	#update protein abundances: using integrated likelihood
-	#update protein means
-	prot_abund = ((uniquePepMean*uniquePepPrecision) %*% mixing_fract)/(uniquePepPrecision %*% mixing_fract)
-	prot_abund <- as.matrix(Matrix(prot_abund, sparse = FALSE))
-	prot_abund[is.nan(prot_abund)] <- 0
-	
-	#update protein precision
-	prot_prec <- uniquePepPrecision %*% mixing_fract
-	prot_prec[prot_prec < 1] <- 0
-	
-	#update mixing fract
-	
-	#evaluate the log-likelihood of sample abundances about the inferred protein abundances with a precision-specific to the signal strength of the samples
-	if(prerun_fixed_mat == TRUE){
-	sampleLik <- -1*((sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[1]])
-	for(c in 2:n_c){
-		sampleLik <- sampleLik - ((sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[c]])
-			}
-		}else{
-			for(c in 1:n_c){
-				sampleEst <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-				samplePrec <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
-				if(c == 1){
-					sampleLik <- -1*((sampleEst - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec)
-					}else{
-						sampleLik <- sampleLik - ((sampleEst - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec)
-						}
-				}
-			}
-	
-	#correct for purely ambiguous proteins
-	weight_store <- list()
-	for(ap in ambigprots){
-		tmp <- sampleLik[,ap][prior_mat_sparse[,ap]]
-		weights <- exp(tmp)/sum(exp(tmp))
-		weight_store[[ap]] <- weights
-		sampleLik[,ap][prior_mat_sparse[,ap]] <- tmp + sapply(log((prior_p_div^-1 * weights)^-1), function(x){min(x, 0)})
-		}
-	
-	#adjust for prior	
-	sampleLik <- prior_mat_likadj + sampleLik
-	
-	sampleLik_NA <- sampleLik
-	sampleLik_NA[!prior_mat_sparse] <- NA
-	relLik <- sampleLik - apply(sampleLik_NA, 1, max_non_NA) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-	relLik[prior_mat_sparse] <- exp(relLik[prior_mat_sparse])
-	
-	liksums <- apply(relLik, 1, sum)
-	
-	mixing_fract <- 1/liksums %*% t(rep(1, times = n_pp)) * prior_mat_sparse * relLik
-	
-	#update complete data log-likelihood
-	
-	new_log_lik <- logL(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision)
-	
-	#check for convergence
-	
-	if(abs(new_log_lik - previous_it) < 0.01){
-		continue_it <- FALSE
-		whole_data_logL <- c(whole_data_logL, new_log_lik)
-		}else{
-			whole_data_logL <- c(whole_data_logL, new_log_lik)
-			t <- t + 1
-			previous_it <- new_log_lik
-			}
-	}
-
-
-prot_abund_final <- prot_abund[,1:n_prot]
-prot_abund_final[prot_abund_final == 0] <- NA
-
-if(unq_matches_only == TRUE){
-	save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, file = "EMoutputUnq.Rdata")
-	}else{
-		save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, file = "EMoutputDeg.Rdata")
-	}
-
-}
 @
 
 \begin{figure}
@@ -709,12 +565,13 @@ heatmap.2(t(prot_abund_final[,1:n_prot]), trace = "none", Colv = NULL, dendrogra
 \caption{Relative protein abundance across \Sexpr{n_c} conditions, after running EM}
 \end{figure}
 
-<<mv_impute, dependson = "EMrun">>=
+<<mv_impute, dependson = "EMrun", cache = TRUE>>=
 library(missMDA)
 #determine how many significant principal components should be included based on repeated random sub-sampling validation
 pcrange <- c(2,12)
-npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = "Kfold", pNA = 0.10, nbsim = 50)
-npc <- npc.compare$ncp#8
+npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 50)
+
+npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.01 + min(npc.compare$criterion)][1]
 
 #determine the most likely values of the missing data
 impute_abund <- imputePCA(prot_abund_final, npc, scale = FALSE)$completeObs
@@ -737,49 +594,297 @@ heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row
 \caption{Relative protein abundance across \Sexpr{n_c} conditions, after running EM and imputing missing values with missMDA}
 \end{figure}
 
+\begin{figure}
+<<>>=
+library(reshape)
+
+impSVD_pcs <- svd(t(impute_abund_thresh), nu = npc, nv = npc)$v
+colnames(impSVD_pcs) <- paste("PC", c(1:npc), "")
+
+pc_plot_df <- melt(impSVD_pcs)
+colnames(pc_plot_df) <- c("condition", "PC", "value")
+
+factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, col = factor(PC)))
+print(factor_plot + geom_line())
+@
+\end{figure}
 
 
-<<plot_proteinTrends>>=
+
+<<plot_proteinTrends, dependson = "mv_impute", cache = TRUE, warning = FALSE>>=
 tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
 tmp <- as.matrix(tmp)
 tmp[!(tmp %in% c(0,1))] <- 1 
 prior_mat_logical <- cbind(as.matrix(unique_mappingMat), tmp) 
 prior_mat_logical <- prior_mat_logical == 1
 possibleMap <- Matrix(prior_mat_logical)
-
-prot_plot_list <- list()
-for(p in 1:25){
-	prot_plot_list[[p]] <- plot_protein_add(p, possibleMap, prot_abund_final, uniquePepMean, uniquePepPrecision)
-	}
-
-multiplot(prot_plot_list, cols =5)
 @
+
+<<>>=
+plot_protein_lattice(c(1:25), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract)
+@
+
+<<>>=
+plot_protein_lattice(c(26:50), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract)
+@
+
+
+
+
+
+
+
 
 Determine the abundance of transcripts corresponding to ascertained proteins
 
-<<>>=
+<<ModifyTransc, dependson = "mv_impute">>=
+library("missMDA")
+
+transcript_brauer <- read.delim("../brauer-microarray/Brauer_2008.pcl")
+rownames(transcript_brauer) <- transcript_brauer$SYSTEMATIC_NAME
+transcript_brauer <- transcript_brauer[-1,-c(1:3)]
+
+transcript.condition <- as.data.frame(matrix(NA, ncol = 36, nrow = 2))
+colnames(transcript.condition) <- colnames(transcript_brauer)
+rownames(transcript.condition) <- c("limitation", "GR")
+limitations <- c("C", "N", "P", "S", "L", "U")
+transcript.condition[1,] <- rep(limitations, each = 6)
+transcript.condition[2,] <- rep(c(0.05, 0.10, 0.15, 0.20, 0.25, 0.30), times = 6)
+
+#barplot(table(rowSums(is.na(transcript_brauer))))
+
+#filter genes with many missing values
+transcript_brauer <- transcript_brauer[rowSums(is.na(transcript_brauer)) < length(transcript.condition[1,])*0.2,]
+
+npc.trans <- 10
+
+#impute missing values (very few)
+
+transcript_brauer_impute <- imputePCA(transcript_brauer, npc, scale = FALSE)$completeObs
+
+#missing mappings
+missing_on_array <- colnames(impute_abund_thresh)[!(colnames(impute_abund_thresh) %in% rownames(transcript_brauer_impute))]
+length(missing_on_array)
+genes_to_compare <- colnames(impute_abund)[colnames(impute_abund) %in% rownames(transcript_brauer_impute)]
+
+#determine the relative abundance of array data by looking at the corresponding condition and imputing unobserved growth rates by drawing a line between the abundance of flanking conditions
+
+tmp <- sapply(genes_to_compare, function(match){
+	transcript_brauer_impute[rownames(transcript_brauer_impute) == match,]
+	})
+transcript_brauer_reduced <- matrix(unlist(tmp), ncol = length(tmp[1,]), nrow = length(tmp[,1]))
+colnames(transcript_brauer_reduced) <- colnames(tmp); rownames(transcript_brauer_reduced) <- rownames(tmp)
+
+
+#load true dilution rates for each of the proteomics samples
+load('~/Desktop/Composition/RNA_abundance/RNAabundance.R')
+
+prot_cond <- as.data.frame(matrix(NA, ncol = n_c, nrow = 2))
+prot_cond <- sapply(rownames(impute_abund), function(cond){
+	c(unlist(strsplit(cond, '[0-9]+'))[1], unlist(strsplit(cond, '[A-Z]'))[2])
+	})
+colnames(prot_cond) <- rownames(impute_abund)
+rownames(prot_cond) <- c("limitation", "GR")
+prot_cond <- as.data.frame(cbind(t(prot_cond), realDR = NA), stringsAsFactors = FALSE)
+prot_cond$realDR <- sapply(1:length(prot_cond[,1]), function(cond){
+	RNAabund$actual.dr[grep(paste(prot_cond$limitation[cond], prot_cond$GR[cond], sep = ""), RNAabund$condition, ignore.case = TRUE)[1]]
+	})
+
+DR_change_mat <- matrix(0, nrow = length(transcript.condition[1,]), ncol = length(prot_cond[,1]))
+colnames(DR_change_mat) <- rownames(prot_cond); rownames(DR_change_mat) <- colnames(transcript.condition)
+for(cond in 1:length(prot_cond[,1])){
+	#find the 2 closest DR within the same limitation
+	c_match <- c(1:length(transcript.condition[1,]))[transcript.condition[1,] %in% prot_cond[cond,]$limitation]
+	flanking_match <- c_match[order(abs(as.numeric(transcript.condition[2,c_match]) - prot_cond[cond,]$realDR))[1:2]]
+	lb_diff <- (prot_cond$realDR[cond] - as.numeric(transcript.condition[2,flanking_match])[1])/diff(as.numeric(transcript.condition[2,flanking_match]))
+	DR_change_mat[flanking_match,cond] <- c((1-lb_diff), lb_diff)
+	}
+	
+remapped_transc <- t(transcript_brauer_reduced) %*% DR_change_mat
+@
+
+\begin{figure}
+<<transHM, dependson = "ModifyTransc", echo = FALSE>>=
+heatmap.2(remapped_transc, trace = "none", Colv = NULL, dendrogram = "row", na.rm = TRUE, na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
+@
+\label{Hierarchical clustering of interpolated transcript values of transcripts corresponding to ascertained proteins}
+\end{figure}
+
+<<PTcor, dependson = "ModifyTransc", cache = TRUE>>=
+#measure the correlation of the transcript and protein matrix
+
+shared_prot <- impute_abund[,(colnames(impute_abund) %in% rownames(transcript_brauer))] 
+shared_trans <- t(remapped_transc)
+
+#center each sample #remove when normalization factor is known
+shared_prot <- shared_prot - t(t(apply(shared_prot, 1, mean))) %*% t(rep(1, times = length(shared_prot[1,])))
+shared_trans <- shared_trans - t(t(apply(shared_trans, 1, mean))) %*% t(rep(1, times = length(shared_trans[1,])))
+
+pt_corrs <- sapply(c(1:length(shared_prot[1,])), function(row){
+	cor(shared_prot[,row], shared_trans[,row], method = "spearman")
+	}); pt_corrs <- data.frame(correlation = pt_corrs)
+
+save(shared_prot, shared_trans, file = "shared_prot_trans.Rdata")
 
 @
 
+\begin{figure}
+<<echo = FALSE>>=
+gplot.hexbin(hexbin(x = shared_prot, y = shared_trans, xbins = 50), colramp = blue2red, xlab = "Protein Abundance", ylab = "Transcript Abundance")
+@
+\caption{No global correlation between relative protein abundance and relative transcript abundance}
+\end{figure}
 
 
+\begin{figure}
+<<echo = FALSE>>=
+cor_plot <- ggplot(pt_corrs, aes(x = correlation))
+cor_plot + xlab("spearman correlation") + geom_histogram(colour = "white", fill = "limegreen", binwidth = 0.04)
+@
+\caption{Distribution of spearman correlations across transcript-protein pairs}
+\end{figure}
+
+<<fileDump1, dependson = "c(mvmat_red, mv_impute)", echo = FALSE>>=
+#file dump
+#add gene descriptions
+rownames(cond_peps) <- orf2desc(rownames(cond_peps))
+impute_abund_thresh_store <- impute_abund_thresh
+colnames(impute_abund_thresh_store) <- orf2desc(colnames(impute_abund_thresh_store))
+
+#save(cond_peps, impute_abund_thresh, file = "protMatrices.Rdata")
+if(unq_matches_only == TRUE){
+write.table(cond_peps, file = "run_Unq/mvMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(impute_abund_thresh_store), file = "run_Unq/relAbundMatrix_desc.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(impute_abund_thresh), file = "run_Unq/relAbundMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(shared_prot - shared_trans), file = "run_Unq/TPdiffMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+}
+if(unq_matches_only == FALSE){
+write.table(cond_peps, file = "run_Deg/mvMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(impute_abund_thresh_store), file = "run_Deg/relAbundMatrix_desc.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(impute_abund_thresh), file = "run_Deg/relAbundMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(shared_prot - shared_trans), file = "run_Deg/TPdiffMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+}
+@
+
+Determine how many clusters should be used for K-means clustering of protein abundance \& protein - transcript difference matrices.
+<<kmeansNclust, dependson = "transHM", cache = TRUE>>=
+
+kvals <- c(2:30)
+data_clust <- stepFlexclust(t(impute_abund_thresh), k = kvals, nrep=10, verbose=FALSE, FUN = kcca)
+
+WICSS_prot <- sapply(1:length(kvals), function(k_num){
+	cSS <- apply(getModel(data_clust, which = k_num)@cldist, 2, sum)
+	cSS[1] * length(cond_peps[,1])/(length(cond_peps[,1]) - kvals[k_num])
+	})
+	
+data_clust <- stepFlexclust(t(shared_prot - shared_trans), k = kvals, nrep=10, verbose=FALSE, FUN = kcca)
+
+WICSS_pt <- sapply(1:length(kvals), function(k_num){
+	cSS <- apply(getModel(data_clust, which = k_num)@cldist, 2, sum)
+	cSS[1] * length(cond_peps[,1])/(length(cond_peps[,1]) - kvals[k_num])
+	})	
+	
+@
+
+<<kmeanBarplot, dependson = "kmeansNclust", warning = FALSE, echo = FALSE>>=
+plot_df <- data.frame(WICSSdiff = c(-1*diff(WICSS_prot), -1*diff(WICSS_pt)), nclusters = rep(kvals[-length(kvals)], times = 2), class = rep(c("Protein Abundance", "Protein - Transcript Abundance"), each = (length(kvals) - 1)))
+
+clusterN_plot <- ggplot(plot_df, aes(x = nclusters, y = WICSSdiff)) + facet_grid(class ~ ., scales = "free_y")
+clusterN_plot + geom_bar(stat = "identity")
+@
 
 
+Read in cluster assignments from Cluster2.0
 
+<<prot_clust>>=
 
+if(unq_matches_only == TRUE){
+	prot_kmeans_ass <- read.delim("run_Unq/relAbundMatrix_K_G20.kgg")
+	}
+if(unq_matches_only == FALSE){
+	prot_kmeans_ass <- read.delim("run_Deg/relAbundMatrix_K_G20.kgg")
+	}
 
+clusteredDat <- t(impute_abund_thresh)
+#make sure that this data has the same gene names as the clustered data
 
+if(!(length(union(rownames(clusteredDat), prot_kmeans_ass[,1])) == length(prot_kmeans_ass[,1])) | !(length(union(rownames(clusteredDat), prot_kmeans_ass[,1])) == length(clusteredDat[,1]))){
+	print("mismatched clusters")
+	}
+	
+nclust <- length(unique(prot_kmeans_ass$GROUP))
+Centroids <- matrix(NA, ncol = n_c, nrow = nclust)
 
+for(clust in 0:(nclust-1)){
+	Centroids[clust+1,] <- apply(clusteredDat[rownames(clusteredDat) %in% prot_kmeans_ass[,1][prot_kmeans_ass$GROUP == clust],], 2, mean)
+	}
 
+gene_cluster <- sapply(rownames(clusteredDat), function(gene){
+	prot_kmeans_ass$GROUP[prot_kmeans_ass[,1] == gene]
+	})
 
+clust_yval <- rbind(clusteredDat, Centroids)
+clust_xval <- t(t(rep(1, times = length(clust_yval[,1])))) %*% t(rep(1:n_c, times = 1))
+clust_num <- t(t(c(gene_cluster, 0:(nclust-1)))) %*% t(rep(1, times = n_c))
+centroid_size_adj <- t(t(c(rep(1, times = length(clusteredDat[,1])), rep(4, times = nclust)))) %*% t(rep(1, times = n_c))
+clust_datatype <- centroid_size_adj; clust_datatype[clust_datatype == 1] <- "Protein"; clust_datatype[clust_datatype == 4] <- "Centroid"
 
+clust_plot_df <- data.frame(condition = c(clust_xval), abundance = c(clust_yval), cluster = c(clust_num), dataType = as.factor(c(clust_datatype)), clustersize = c(centroid_size_adj))
 
+@
 
+\begin{figure}
+<<protclustplot, dependson = "prot_clust", echo = FALSE>>=
+clust_plotterer <- ggplot(clust_plot_df, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
+clust_plotterer + geom_point()
+@
+\caption{Trace of proteins in a cluster (teal) and the centroid itself (orange)}
+\end{figure}
 
+<<tn_clust>>=
 
+if(unq_matches_only == TRUE){
+	pt_kmeans_ass <- read.delim("run_Unq/TPdiffMatrix_K_G20.kgg")
+	}
+if(unq_matches_only == FALSE){
+	pt_kmeans_ass <- read.delim("run_Deg/TPdiffMatrix_K_G20.kgg")
+	}
 
+clusteredDat <- t(shared_prot - shared_trans)
+#make sure that this data has the same gene names as the clustered data
 
+if(!(length(union(rownames(clusteredDat), pt_kmeans_ass[,1])) == length(pt_kmeans_ass[,1])) | !(length(union(rownames(clusteredDat), pt_kmeans_ass[,1])) == length(clusteredDat[,1]))){
+	print("mismatched clusters")
+	}
 
+nclust <- length(unique(pt_kmeans_ass$GROUP))
+Centroids <- matrix(NA, ncol = n_c, nrow = nclust)
+
+for(clust in 0:(nclust-1)){
+	Centroids[clust+1,] <- apply(clusteredDat[rownames(clusteredDat) %in% pt_kmeans_ass[,1][pt_kmeans_ass$GROUP == clust],], 2, mean)
+	}
+
+gene_cluster <- sapply(rownames(clusteredDat), function(gene){
+	pt_kmeans_ass$GROUP[pt_kmeans_ass[,1] == gene]
+	})
+
+clust_yval <- rbind(clusteredDat, Centroids)
+clust_xval <- t(t(rep(1, times = length(clust_yval[,1])))) %*% t(rep(1:n_c, times = 1))
+clust_num <- t(t(c(gene_cluster, 0:(nclust-1)))) %*% t(rep(1, times = n_c))
+centroid_size_adj <- t(t(c(rep(1, times = length(clusteredDat[,1])), rep(4, times = nclust)))) %*% t(rep(1, times = n_c))
+clust_datatype <- centroid_size_adj; clust_datatype[clust_datatype == 1] <- "Protein"; clust_datatype[clust_datatype == 4] <- "Centroid"
+
+clust_plot_df <- data.frame(condition = c(clust_xval), abundance = c(clust_yval), cluster = c(clust_num), dataType = as.factor(c(clust_datatype)), clustersize = c(centroid_size_adj))
+
+@
+
+\begin{figure}
+<<tnclustplot, dependson = "tn_clust", echo = FALSE>>=
+clust_plotterer <- ggplot(clust_plot_df, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
+clust_plotterer + geom_point()
+@
+\caption{Trace of proteins - transcript differences; clusters (teal) and the centroid itself (orange)}
+\end{figure}
 
 
 

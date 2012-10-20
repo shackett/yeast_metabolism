@@ -14,8 +14,7 @@ ICthreshold <- 2^15
 #only consider peptides that match unambiguously to a single protein
 unq_matches_only <- TRUE
 
-
-lightIC[lightIC < ICthreshold] <- NA; heavyIC[heavyIC < ICthreshold] <- NA
+#lightIC[lightIC < ICthreshold] <- NA; heavyIC[heavyIC < ICthreshold] <- NA
 
 good_samples <- rowSums(is.finite(PepMatrix) & !is.na(lightIC) & !is.na(heavyIC)) >= (length(PepMatrix[1,])*quality_frac)
 
@@ -32,11 +31,6 @@ mappingMat <- mappingMat[,colSums(mappingMat) != 0]
 abundMat <- PepMatrix[good_samples,]
 good_light <- lightIC[good_samples,]
 good_heavy <- heavyIC[good_samples,]
-
-
-
-
-
 
 #map measured peaks to unique peptide sequences
 
@@ -68,10 +62,42 @@ logLight <- logLight + optimize(normFactor, c(-1, 1), logLight = logLight, logHe
 #variance of the replicate differences accounting for small sample (scaling factor of 2)
 STDvar <- (logLight - logHeavy)^2*2
 STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
-STDvar_fit_initial <- STDvar_fit
 
 gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
 
+##### bin adjacent values and calculate the variance within the bin ####
+
+meanCtrlIC <- mapply(mean, logHeavy, logLight)
+nbins <- 100
+binsize <- floor(length(meanCtrlIC)/nbins)
+error_bins <- data.frame(val_mean = meanCtrlIC[order(meanCtrlIC)], light_val = logLight[order(meanCtrlIC)], bin = c(rep(1:(length(meanCtrlIC) %% nbins), each = binsize + 1), rep(((length(meanCtrlIC) %% nbins) + 1):nbins, each = binsize)))
+
+bin_var <- data.frame(logIC = rep(NA, times = nbins), MLE_var = rep(NA, times = nbins),  MLE_var2 = rep(NA, times = nbins))
+bin_dist_plot <- NULL
+
+for(bin in 1:nbins){
+	bin_var$logIC[bin] <- mean(error_bins[error_bins$bin == bin,]$val_mean)
+	
+	#taking the mean of the variances between pairs of measurements
+	resid_dist <- (error_bins[error_bins$bin == bin,]$light_val - error_bins[error_bins$bin == bin,]$val_mean)*sqrt(2)
+	bin_var$MLE_var[bin] <- mean((resid_dist[abs(resid_dist) < sd(resid_dist)*3])^2)
+	#alternatively get the average residual magnitude and then square for the varinace
+	bin_var$MLE_var2[bin] <- mean(abs(resid_dist[abs(resid_dist) < sd(resid_dist)*3]))^2
+	
+	}
+
+#plot(bin_var[,1], bin_var[,2], pch = 16)
+
+#plot(spline(bin_var$logIC, bin_var$MLE_var, method = "natural"))
+var_spline <- smooth.spline(x = bin_var$logIC, y = bin_var$MLE_var, df = 5)
+plot(var_spline, type = "l", lwd = 2, ylim = c(0, range(c(predict(var_spline, bin_var$logIC)$y, bin_var$MLE_var))[2]))
+points(bin_var$logIC, bin_var$MLE_var, pch = 16, cex = 0.8, col = "RED")
+
+var_spline <- smooth.spline(x = bin_var$logIC, y = bin_var$MLE_var2, df = 5)
+plot(var_spline, type = "l", lwd = 2, ylim = c(0, range(c(predict(var_spline, bin_var$logIC)$y, bin_var$MLE_var2))[2]))
+points(bin_var$logIC, bin_var$MLE_var2, pch = 16, cex = 0.8, col = "RED")
+
+plot(bin_var$MLE_var2 ~ bin_var$MLE_var)
 
 #calculate the expected sampling variance of the heavy-low diff for experimental measurement
 
@@ -82,6 +108,13 @@ lightHeavyCellmean <- sapply(c(1:length(heavyIC[,1]))[good_samples], function(ro
 	})
 
 fittedVar <- var_calc(lightHeavyCellmean, STDvar_fit)
+fittedVar2 <- apply(log2(lightHeavyCellmean), c(1,2), function(x){
+	if(is.na(x)){NA}else{
+		predict(var_spline, x)$y
+		}
+	})
+
+
 fittedPrec <- fittedVar^-1
 
 #for each unique peptide, combine the multiple ionization states to produce a single point estimate, using integrated likelihood
@@ -279,7 +312,7 @@ while(continue_it){
 	
 	#check for convergence
 	
-	if(abs(new_log_lik - previous_it) < 0.01){
+	if(abs(new_log_lik - previous_it) < 0.01 | (t > 30)){
 		continue_it <- FALSE
 		whole_data_logL <- c(whole_data_logL, new_log_lik)
 		t <- t + 1

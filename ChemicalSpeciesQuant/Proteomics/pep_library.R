@@ -6,13 +6,14 @@
 plotting_fxn <- function(){
 	library(hexbin)
 	library(gplots)
+	library(ggplot2)
 	library(colorRamps)	
 	}
 
 matrix_fxn <- function(){
 	library(Matrix)
+	library(flexclust)
 	}
-
 
 
 var_calc <- function(sampleIC, STDvar_fit){
@@ -39,6 +40,22 @@ logL <- function(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision){
 
 max_non_NA <- function(vec){
 	max(vec[!is.na(vec)])
+	}
+
+orf2desc <- function(x) {
+	
+	require(org.Sc.sgd.db)
+	
+	 d = org.Sc.sgdDESCRIPTION
+	 mapped_probes <- mappedkeys(d)
+	 dd = as.list(d[mapped_probes])
+	 out = sapply(x, function(x) {dd[as.character(x)][[1]]})
+	 name_frame <- data.frame(geneName = names(out), geneDescrip = out, stringsAsFactors = FALSE)
+	 name_out <- apply(name_frame, 1, function(gene){
+	 	paste(gene, collapse = ": ")
+	 	})
+	 name_out <- unname(name_out)
+	 name_out
 	}
 
 
@@ -68,6 +85,58 @@ if(generate_plots == TRUE){
 	
 STDvar_fit	
 }
+
+plot_protein_lattice <- function(prots, possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract){
+
+prots <- c(26:50)
+mix_frac_set <- c()
+all_data_bind <- NULL
+for(prot in prots){
+	row_match <- c(1:n_p)[possibleMap[,prot]]
+	div_match <- row_match[diag(mixing_fract[row_match, n_prot + row_match]) == 1]
+	mixed_match <- row_match[!(row_match %in% div_match)]
+	
+	prot_abundM <- cbind(prot_abund[,prot], uniquePepMean[,c(mixed_match,div_match)])
+	prot_precM <- cbind(prot_prec[,prot], as.matrix(uniquePepPrecision[,c(mixed_match, div_match)]))
+	prot_abundM[prot_abundM == 0] <- NA; prot_precM[is.na(prot_abundM)] <- NA
+	prot_max <- prot_abundM + 2*sqrt(1/prot_precM)
+	prot_min <- prot_abundM - 2*sqrt(1/prot_precM)
+	
+	n_pp_plot <- length(prot_abundM[1,])
+	n_c <- length(prot_abundM[,1])
+	
+	ncolors <- 100
+	color_fac <- round(mixing_fract[mixed_match, prot], length(ncolors)+1)
+	mix_frac_set <- union(mix_frac_set, color_fac)
+	match_fact <- c(paste(unique(color_fac), "x", " match", sep = ""), "protein", "non-match")
+	all_cols <- c("protein", paste(color_fac, "x", " match", sep = ""), rep("non-match", times = length(div_match)))
+	prot_cols <- apply((rep(1, times = n_c) %*% t(c(1:n_pp_plot))), c(1,2), function(col){all_cols[col]})
+	
+	xpos <- (1:n_c) %*% t(rep(1, n_pp_plot)) + rep(1, n_c) %*% t(((1:n_pp_plot)-1)*n_c + ((1:n_pp_plot)-1)*2)
+	all_data <- data.frame(abund = c(t(prot_abundM)), abundMax = c(t(prot_max)), abundMin = c(t(prot_min)), xpos = c(xpos), color_fact = c(t(prot_cols)), stringsAsFactors = FALSE)
+	all_data_bind <- rbind(all_data_bind, cbind(proteinNumber = prot, all_data))
+}
+all_data_bind$proteinNumber <- as.factor(all_data_bind$proteinNumber)
+
+match_cols <- c(rainbow(ncolors + 1, start = 0, end = 0.8)[unique(sort(mix_frac_set))*ncolors + 1], "black", "darkgray")
+match_fact <- c(paste(sort(mix_frac_set), "x", " match", sep = ""), "protein", "non-match")
+
+all_data_bind$color_fact <- as.factor(all_data_bind$color_fact)
+
+
+plotter <- ggplot(all_data_bind, aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact))
+plotter <- plotter + xlab("sample * peptide") + ylab("relative abundance") 
+plotter <- plotter + labs(colour = "Color label")
+plotter <- plotter + facet_wrap( ~ proteinNumber, ncol = 5, scales = "free")
+print(plotter + geom_linerange()
++ scale_colour_manual(values = match_cols, limits = match_fact)
++ opts(axis.text.y = theme_text(colour = "red")))
+}
+
+
+
+
+
 
 
 plot_protein_add <- function(prot, possibleMap, prot_abund, uniquePepMean, uniquePepPrecision){
@@ -102,7 +171,6 @@ print(plotter + geom_linerange()
 + scale_colour_manual(values = match_cols, limits = match_fact)
 + opts(axis.text.y = theme_text(colour = "red")))
 }
-
 
 
 #from Cookbook for R
