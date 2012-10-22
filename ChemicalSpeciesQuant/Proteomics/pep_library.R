@@ -86,9 +86,8 @@ if(generate_plots == TRUE){
 STDvar_fit	
 }
 
-plot_protein_lattice <- function(prots, possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract){
+plot_protein_lattice <- function(prots, possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, num.cols = 5){
 
-prots <- c(26:50)
 mix_frac_set <- c()
 all_data_bind <- NULL
 for(prot in prots){
@@ -127,7 +126,7 @@ all_data_bind$color_fact <- as.factor(all_data_bind$color_fact)
 plotter <- ggplot(all_data_bind, aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact))
 plotter <- plotter + xlab("sample * peptide") + ylab("relative abundance") 
 plotter <- plotter + labs(colour = "Color label")
-plotter <- plotter + facet_wrap( ~ proteinNumber, ncol = 5, scales = "free")
+plotter <- plotter + facet_wrap( ~ proteinNumber, ncol = num.cols, scales = "free")
 print(plotter + geom_linerange()
 + scale_colour_manual(values = match_cols, limits = match_fact)
 + opts(axis.text.y = theme_text(colour = "red")))
@@ -219,4 +218,40 @@ multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
     }
   }
 }
+
+
+
+knownPsites <- function(pepSummary, phospho_sites_red){
+
+#For a data.frame with the protein matches to a given peptide, go through peptides 1 by 1 and determine all of the phospho-sites for proteins matching that peptide.  If the peptide is known to be phosphorylated return TRUE and then count up the number of matches
+
+phospho_match <- sapply(c(1:length(pepSummary[,1])), function(pep){
+	#for(pep in c(1:length(pepSummary[,1]))){
+	
+	known_prot_mods <- phospho_sites_red[phospho_sites_red$A %in% unlist(strsplit(pepSummary$prot_matches[pep], "/")),]
+	if(length(known_prot_mods[,1]) != 0){
+		match_ev <- sapply(1:length(known_prot_mods[,1]), function(p_site){
+			#find the position of the relevent peptide in the matched protein: compare this interval ot the phosphosites
+			pep_pos <- str_locate(known_prot_mods[p_site,3], tolower(pepSummary$peptide[pep]))
+			if(is.na(pep_pos[1,1])){
+				NA
+				}else{
+					pep_interval <- str_locate(known_prot_mods[p_site,3], tolower(pepSummary$peptide[pep]))
+					if(sub('[A-Za-z]+', '', known_prot_mods[p_site,2]) >= pep_interval[1] & sub('[A-Za-z]+', '', known_prot_mods[p_site,2]) <= pep_interval[2]){
+						TRUE
+						}else{
+							FALSE
+							}
+					}
+		})
+		data.frame(nTRUE = sum(match_ev[!is.na(match_ev)]), nFALSE = sum(match_ev[!is.na(match_ev)] == FALSE), nNA = sum(is.na(match_ev)))
+		}else{
+			data.frame(nTRUE = 0, nFALSE = 0, nNA = 0)
+			}
+	})
+	
+	phospho_match <- matrix(unlist(t(phospho_match)), ncol = 3)	
+	table(phospho_match[,1] != 0)
+	}
+
 

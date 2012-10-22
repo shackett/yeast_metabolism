@@ -31,6 +31,10 @@ load('20120807ProtPepMatrices.Rdata')
 source("pep_library.R")
 plotting_fxn()
 matrix_fxn()
+
+blackOrange <- function(n){colorpanel(n, "black", "black", "orange")}
+greenBlackRed <- function(n){colorpanel(n, "green", "black", "red")}
+
 @
 
 
@@ -320,11 +324,11 @@ for(i in 1:length(pnonmissingOverSingles[1,])){
 @
 
 <<missingOverlap1, dependson = "mvmat", label = "missingOverlap1", echo = FALSE, include = FALSE>>=
-heatmap.2(pnonmissingOverTotal, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+heatmap.2(pnonmissingOverTotal, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2red(100), dendrogram = "none")
 @
 
 <<missingOverlap2, dependson = "mvmat", label = "missingOverlap2", echo = FALSE, include = FALSE>>=
-heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2red(100), dendrogram = "none")
 @
 
 \begin{figure}[h!]
@@ -355,7 +359,6 @@ uq_binPepMatrix <- binPepMatrix[rowSums(ProtPepMatrix) == 1,]
 cond_peps <- t(((t(uq_binPepMatrix) %*% uq_ProtPepMatrix) != 0)*1)
 cond_peps <- cond_peps[!(rowSums(cond_peps) %in% c(0, length(cond_peps[1,]))),]
 
-blackOrange <- function (n){colorpanel(n, "black", "black", "orange")}
 @
 
 
@@ -534,9 +537,13 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 	}else{
 	save(unq_matches_only, prerun_fixed_mat, prior_p_div, uniquePepMean, uniquePepPrecision, unique_pepNames, unique_mappingMat, n_p, n_pp, n_prot, n_c, ambigprots, file = "EMimport.Rdata")
 	#system("R64 callEM.R")
+
 	}
-	
+n_prot <- length(prot_abund_final[1,])	
 @
+
+After carrying out EM, \Sexpr{n_prot_nonmatched} proteins were discarded because they overlapped ascertained proteins and had no strong solitary evidence of being present.  This leaves\Sexpr{n_prot} proteins for further analysis.  
+
 
 \begin{figure}
 <<pepResp, echo = FALSE>>=
@@ -560,12 +567,12 @@ plot(whole_data_logL[-1], col = ifelse(c(2:length(whole_data_logL)) <= initial_c
 
 \begin{figure}
 <<rawHM, echo = FALSE>>=
-heatmap.2(t(prot_abund_final[,1:n_prot]), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(prot_abund_final, na.rm = TRUE)), max(range(prot_abund_final, na.rm = TRUE)), by = max(range(prot_abund_final, na.rm = TRUE))/250))
+heatmap.2(t(prot_abund_final), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = greenred(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "white", breaks = seq(-1*max(range(prot_abund_final, na.rm = TRUE)), max(range(prot_abund_final, na.rm = TRUE)), by = max(range(prot_abund_final, na.rm = TRUE))/250))
 @
 \caption{Relative protein abundance across \Sexpr{n_c} conditions, after running EM}
 \end{figure}
 
-<<mv_impute, dependson = "EMrun", cache = TRUE>>=
+<<MVimputeCompare, dependson = "EMrun", cache = TRUE>>=
 library(missMDA)
 #determine how many significant principal components should be included based on repeated random sub-sampling validation
 pcrange <- c(2,12)
@@ -573,23 +580,31 @@ npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pc
 
 npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.01 + min(npc.compare$criterion)][1]
 
+@
+
+<<MVimputeData, dependson = "MVimputeCompare", cache = TRUE>>=
 #determine the most likely values of the missing data
 impute_abund <- imputePCA(prot_abund_final, npc, scale = FALSE)$completeObs
 impute_abund_thresh <- impute_abund
 impute_abund_thresh[impute_abund_thresh > 5] <- 5; impute_abund_thresh[impute_abund_thresh < -5] <- -5
 @
 
+%<<>>=
+%save(impute_abund_thresh, "tmp.Rdata")
+%@
+
 \begin{figure}
 <<mvNpc, echo = FALSE>>=
 plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs")
 abline(v = npc, col = "RED", lwd = 2)
+save(impute_abund_thresh, file = "tmp.Rdata")
 @
 \caption{Reconstruction error of raw matrix using PC-based imputation}
 \end{figure}
 
 \begin{figure}
 <<impHM, echo = FALSE>>=
-heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
+heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = greenred(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "white", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
 @
 \caption{Relative protein abundance across \Sexpr{n_c} conditions, after running EM and imputing missing values with missMDA}
 \end{figure}
@@ -611,7 +626,7 @@ print(factor_plot + geom_line())
 
 
 
-<<plot_proteinTrends, dependson = "mv_impute", cache = TRUE, warning = FALSE>>=
+<<plot_proteinTrends, dependson = "MVimputeData", cache = TRUE, warning = FALSE>>=
 tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
 tmp <- as.matrix(tmp)
 tmp[!(tmp %in% c(0,1))] <- 1 
@@ -621,11 +636,16 @@ possibleMap <- Matrix(prior_mat_logical)
 @
 
 <<>>=
-plot_protein_lattice(c(1:25), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract)
+plot_protein_lattice(c(1:10), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, 2)
+@
+
+
+<<>>=
+plot_protein_lattice(c(11:35), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, 5)
 @
 
 <<>>=
-plot_protein_lattice(c(26:50), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract)
+plot_protein_lattice(c(36:60), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, 5)
 @
 
 
@@ -637,7 +657,7 @@ plot_protein_lattice(c(26:50), possibleMap, prot_abund_final, prot_prec, uniqueP
 
 Determine the abundance of transcripts corresponding to ascertained proteins
 
-<<ModifyTransc, dependson = "mv_impute">>=
+<<ModifyTransc, dependson = "MVimputeData">>=
 library("missMDA")
 
 transcript_brauer <- read.delim("../brauer-microarray/Brauer_2008.pcl")
@@ -705,7 +725,7 @@ remapped_transc <- t(transcript_brauer_reduced) %*% DR_change_mat
 
 \begin{figure}
 <<transHM, dependson = "ModifyTransc", echo = FALSE>>=
-heatmap.2(remapped_transc, trace = "none", Colv = NULL, dendrogram = "row", na.rm = TRUE, na.color = "white", col = blue2red(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
+heatmap.2(remapped_transc, trace = "none", Colv = NULL, dendrogram = "row", na.rm = TRUE, na.color = "white", col = greenBlackRed(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "black", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250))
 @
 \label{Hierarchical clustering of interpolated transcript values of transcripts corresponding to ascertained proteins}
 \end{figure}
