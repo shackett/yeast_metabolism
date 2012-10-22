@@ -18,7 +18,7 @@ prior_mat_logical <- prior_mat_logical == 1
 prior_mat_sparse <- Matrix(prior_mat_logical)
 #prior_mat_likadj2 <- prior_mat_likadj*prior_mat_sparse
 prior_mat_likadj[prior_mat_sparse] <- log(prior_mat_likadj[prior_mat_sparse])
-colnames(prior_mat_sparse) <- colnames(mixing_fract) <- colnames(prot_abund)
+colnames(prior_mat_sparse) <- colnames(mixing_fract) <- colnames(mixing_fract)
 rm(tmp, prior_mat_logical); gc(); gc()
 
 
@@ -31,8 +31,8 @@ samplePrec_list <- list()
 for(c in 1:n_c){
 	sampleEst_list[[c]] <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
 	samplePrec_list[[c]] <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
-	colnames(sampleEst_list[[c]]) <- colnames(prot_abund)
-	colnames(samplePrec_list[[c]]) <- colnames(prot_abund)
+	colnames(sampleEst_list[[c]]) <- colnames(mixing_fract)
+	colnames(samplePrec_list[[c]]) <- colnames(mixing_fract)
 	print(c)
 	}
 	};gc()
@@ -105,7 +105,6 @@ while(continue_it){
 	
 		}
 	
-	
 	# a peptide is attributed to a protein proportionally to its likelihood of that match - ideally it would fit the residuals in an iterative fashion (gibbs sampling), but it shouldn't be crucial.
 	
 	sampleLik_NA <- sampleLik
@@ -119,7 +118,8 @@ while(continue_it){
 	
 	#update complete data log-likelihood
 	
-	new_log_lik <- logL(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision)
+	new_log_lik <- sum(apply(log(mixing_fract) + sampleLik_NA, 1, max, na.rm = TRUE))
+	
 	
 	#check for convergence
 	
@@ -136,14 +136,33 @@ while(continue_it){
 			}
 	}
 
+initial_convergence <- t - 1
+#rewrite prior sparse matrix of allowable states to either fully attribute a peptide to canonical protein trends or to the divergent trends
+
+max_state <- apply(mixing_fract, 1, which.max)
+div_max <- apply(mixing_fract[,1:n_prot], 1, sum) <= 0.5
+
+#number of peptides not-conforming to some general protein trend
+table(div_max)
+
+
+# for each model compare the best peptide-protein match with the non-match likelihood*prior
+
+likdiff <- apply(sampleLik_NA[,1:n_prot], 1, max, na.rm = TRUE) - diag(sampleLik_NA[1:n_p,(n_prot+1):n_pp])
+
+likdiff_df <- data.frame(likelihood = likdiff, matched = ifelse(likdiff >= 0, "Protein-match", "Divergent-trend"))
+likdiff_df$likelihood[likdiff_df$likelihood <= -400] <- -400
+
+likdiff_plot <- ggplot(likdiff_df, aes(x = likelihood, fill = matched))
+likdiff_plot + geom_histogram()
+
+
 #for each peptide compare a model where peptide patterns are equivalent to protein patterns with one where a peptide doesn't match - the divergent model will fit perfectly vs. the alternative where the protein fits
 
-likPmatch <- -1*uniquePepPrecision*(uniquePepMean - prot_abund %*% t(mixing_fract))^2
-likPmatch <- apply(likPmatch, 2, sum)
 
-divergentPep_summary <- data.frame(peptide = names(likPmatch)[likPmatch < log(prior_p_div)], prot_matches = NA, likelihood = unname(likPmatch[likPmatch < log(prior_p_div)]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
+divergentPep_summary <- data.frame(peptide = names(likPmatch)[div_max], prot_matches = NA, likelihood = unname(likPmatch[div_max]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
 
-poor_match_redMat <- prior_mat_sparse[likPmatch < log(prior_p_div), 1:n_prot]
+poor_match_redMat <- prior_mat_sparse[div_max, 1:n_prot]
 
 for(pep in 1:length(poor_match_redMat[,1])){
 	divergentPep_summary$prot_matches[pep] <- paste(colnames(poor_match_redMat)[poor_match_redMat[pep,]], collapse = "/")
@@ -154,9 +173,9 @@ for(pep in 1:length(poor_match_redMat[,1])){
 divergentPep_summary$phosphoSite <- divergentPep_summary$nS != 0 | divergentPep_summary$nR != 0 | divergentPep_summary$nY != 0
 
 
-background_SRYfreq <- data.frame(peptide = names(likPmatch)[likPmatch >= log(prior_p_div)], prot_matches = NA, likelihood = unname(likPmatch[likPmatch >= log(prior_p_div)]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
+background_SRYfreq <- data.frame(peptide = names(likPmatch)[!div_max], prot_matches = NA, likelihood = unname(likPmatch[!div_max]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
 
-good_match_redMat <- prior_mat_sparse[likPmatch >= log(prior_p_div), 1:n_prot]
+good_match_redMat <- prior_mat_sparse[!div_max, 1:n_prot]
 
 for(pep in 1:length(good_match_redMat[,1])){
 	background_SRYfreq$prot_matches[pep] <- paste(colnames(good_match_redMat)[good_match_redMat[pep,]], collapse = "/")
@@ -167,30 +186,8 @@ for(pep in 1:length(good_match_redMat[,1])){
 background_SRYfreq$phosphoSite <- background_SRYfreq$nS != 0 | background_SRYfreq$nR != 0 | background_SRYfreq$nY != 0
 
 
-#background_SRYfreq <- data.frame(nS = rep(0, 15), nR = rep(0, 15), nY = rep(0, 15), all = rep(0, 15))
-#rownames(background_SRYfreq) <- 0:14
-
-#for(pep in names(likPmatch)){
-#	background_SRYfreq$nS[length(grep("S", unlist(strsplit(pep, ""))))] <- background_SRYfreq$nS[length(grep("S", unlist(strsplit(pep, ""))))] + 1
-#	background_SRYfreq$nR[length(grep("R", unlist(strsplit(pep, ""))))] <- background_SRYfreq$nR[length(grep("R", unlist(strsplit(pep, ""))))] + 1
-#	background_SRYfreq$nY[length(grep("Y", unlist(strsplit(pep, ""))))] <- background_SRYfreq$nY[length(grep("Y", unlist(strsplit(pep, ""))))] + 1
-#	background_SRYfreq$all[length(grep("S", unlist(strsplit(pep, "")))) + length(grep("R", unlist(strsplit(pep, "")))) + length(grep("Y", unlist(strsplit(pep, ""))))] <- background_SRYfreq$all[length(grep("S", unlist(strsplit(pep, "")))) + length(grep("R", unlist(strsplit(pep, "")))) + length(grep("Y", unlist(strsplit(pep, ""))))] + 1
-#	}
 
 
-hist(likPmatch, xlab = "Peptide log-likelihood", col = "orangered")
-abline(v = log(prior_p_div), lwd = 3)
-
-
-initial_convergence <- t - 1
-#rewrite prior sparse matrix of allowable states to either fully attribute a peptide to canonical protein trends or to the divergent trends
-
-max_state <- apply(mixing_fract, 1, which.max)
-div_max <- apply(mixing_fract[,1:n_prot], 1, sum) <= 0.5
-#div_max <- n_prot < max_state
-
-#number of peptides not-conforming to some general protein trend
-table(div_max)
 
 #how many peptides are informing a protein trend, with only the largest effect considered
 barplot(table(table(max_state[max_state <= n_prot])))
@@ -279,7 +276,7 @@ while(continue_it){
 	
 	#update complete data log-likelihood
 	
-	new_log_lik <- logL(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision)
+	new_log_lik <- sum(apply(log(mixing_fract) + sampleLik_NA, 1, max, na.rm = TRUE))
 	
 	#check for convergence
 	
@@ -307,9 +304,9 @@ prot_abund_final[prot_abund_final == 0] <- NA
 
 
 if(unq_matches_only == TRUE){
-	save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, n_prot_nonmatched, div_max, divergentPep_summary, background_SRYfreq, file = "EMoutputUnq.Rdata")
+	save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, n_prot_nonmatched, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, file = "EMoutputUnq.Rdata")
 	}else{
-		save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, n_prot_nonmatched, div_max, divergentPep_summary, background_SRYfreq, file = "EMoutputDeg.Rdata")
+		save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, n_prot_nonmatched, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, file = "EMoutputDeg.Rdata")
 	}
 
 
