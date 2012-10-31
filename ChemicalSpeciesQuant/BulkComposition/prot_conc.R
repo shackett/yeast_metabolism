@@ -1,7 +1,7 @@
 setwd("~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/BulkComposition")
 options(stringsAsFactors = FALSE)
 library(reshape)
-
+library(ggplot2)
 
 chemoStat <- read.table("releventDR.csv", sep = ",", header = TRUE)
 chemo.cols <- c("Chemostat", "DR", "colterVol.uL.mL")
@@ -148,6 +148,16 @@ plot(conclm2, which = 2)
 plot(conclm2, which = 3)
 #conforms to the assumption of equivariance gaussian residuals fairly well
 
+#fitting a glm treating protConc as gamma and using the "inverse" link
+conclm3 <- glm(data = wellInfo, formula = protConc ~ factor(limitation) + actualDR + factor(limitation)*actualDR, family = "Gamma")
+plot(conclm3, which = 2)
+plot(conclm3, which = 3)
+
+#fitting a glm treating protConc as gamma and using the "inverse" link
+conclm4 <- glm(data = wellInfo, formula = protConc ~ factor(limitation) + actualDR + factor(limitation)*actualDR, family = gaussian(link = "log"))
+plot(conclm3, which = 2)
+plot(conclm3, which = 3)
+
 rmse <- sqrt(sum(conclm2$resid^2)/(length(wellInfo[,1]) - 10))
 
 shrinkFrac <- 1 - 1/(abs(conclm2$resid)^2*(length(wellInfo[,1])/(length(wellInfo[,1]) - 10))/(rmse^2))
@@ -157,12 +167,13 @@ shrinkFrac <- sapply(shrinkFrac, function(x){max(0, x)})
 
 
 refittedconc <- matrix(wellInfo$protConc, ncol = length(wellInfo[,1]))
-SS_track <- sum((log(wellInfo$protConc) - mean(log(wellInfo$protConc)))^2)
+SS_track <- Inf#sum((log(wellInfo$protConc) - mean(log(wellInfo$protConc)))^2)
 SS_change <- Inf
 it_continue <- TRUE
 while(it_continue){
 	
 	fit_linMod <- lm(data = wellInfo, formula = log(refittedconc[length(refittedconc[,1]),]) ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
+	#fit_linMod <- glm(data = wellInfo, formula = refittedconc[length(refittedconc[,1]),] ~ factor(limitation) + actualDR + factor(limitation)*actualDR, family = gaussian(link = "log"))
 
 	#rmse <- sqrt(sum(fit_linMod$resid^2)/(length(wellInfo[,1]) - 10))
 	rmse <- sqrt(sum((fit_linMod$fitted - log(wellInfo$protConc))^2)/(length(wellInfo[,1]) - 10))
@@ -202,45 +213,28 @@ while(it_continue){
 
 plot(refittedconc[length(refittedconc[,1]),] ~ factor(wellInfo$Sample)) 
 plot(refittedconc[1,] ~ factor(wellInfo$Sample))
-
-rownames(refittedconc) <- paste("It", 0:(length(refittedconc[,1]) - 1))
-
-
-melt(refittedconc)
+#the log
+plot(log(refittedconc[length(refittedconc[,1]),]) ~ factor(wellInfo$Sample)) 
+plot(log(refittedconc[1,]) ~ factor(wellInfo$Sample))
 
 
+rownames(refittedconc) <- paste("It", 0:(length(refittedconc[,1]) - 1)); colnames(refittedconc) <- wellInfo$Sample
+#choosing which iterations to display: intial, 1/3, 2/3 and final
+if(length(refittedconc[,1]) > 4){
+	col_det <- sapply(1 + c((length(refittedconc[,1])-2)/3, 2*(length(refittedconc[,1])-2)/3), function(x){
+		c(2:(length(refittedconc[,1])-1))[which.min(abs(c(2:(length(refittedconc[,1])-1)) - x))]
+		})
+	refittedconc <- refittedconc[c(1, col_det, length(refittedconc[,1])),]
+	}
+refittedconc <- refittedconc[c(1, length(refittedconc[,1])),]
 
-#determine the measurement variance
-log(standards$abs)
+plotting_DF <- melt(refittedconc)
+levels(plotting_DF[,1]) <- levels(plotting_DF[,1])[order(as.numeric(sapply(levels(plotting_DF[,1]), function(x){unlist(strsplit(x, split = " "))[2]})))]
+colnames(plotting_DF) <- c("Iteration", "Condition", "Concentration")
+plotting_DF$limitation <- sapply(as.character(plotting_DF$Condition), function(cond){
+	wellInfo$limitation[wellInfo$Sample == cond][1]
+	})
 
-#the logs of absorbance are approximately equivariance
-log_tech_sd <- mean(sapply(unique(standards$conc), function(abs){sd(log(standards$abs[standards$conc == abs]))}))
-
-standard_bound <- exp(data.frame(log(standards$abs) - log_tech_sd, log(standards$abs) + log_tech_sd))
-standard_pred <- fit_lt2k$coef[1] + fit_lt2k$coef[2]*standard_bound
-log(standard_pred)[,2] - log(standard_pred)[,1]
-
-(log(standard_pred)[,2] - log(standard_pred)[,1])/2 + log(standard_pred)[,1]
-fit_lt2k$coef[1] + fit_lt2k$coef[2]*standards$abs
-
-
-sapply(unique(standards$conc), function(abs){sd(standards$fitted_conc[standards$conc == abs])})	
-	
-		
-
-
-
-
-#shrink by p = epsilon^2/(epsilon^2 + sd^2) towards the fitted value
-
-
-
-
-
-
-
-
-unique(standards$conc)
-
-
+plotting_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1)
+plotting_plot + geom_boxplot()
 
