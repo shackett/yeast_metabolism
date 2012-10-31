@@ -99,39 +99,38 @@ for(i in 1:length(conditions[,1])){
 sampleInfo <- read.table("sampleInfo.txt", sep = "\t", header = TRUE)
 sampleInfo <- sampleInfo[sapply(sampleInfo$Sample, function(x){c(1:length(sampleInfo[,1]))[conditions$condition %in% x]}),]
 
-plot(conditions$assayConc_mean/sampleInfo$homog_weight)
-
-
+#plot(conditions$assayConc_mean/sampleInfo$homog_weight)
 
 #ug in assay
-conditions$assayConc_mean * 9/1000
+#conditions$assayConc_mean * 9/1000
 #mg in original plate
-conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000
+#conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000
 #% Dry-weight
-conditions$protein_DW_frac <- (conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)/sampleInfo$homog_weight
+#conditions$protein_DW_frac <- (conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)/sampleInfo$homog_weight
 #mg protein per ml culture
-(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV
+#(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV
 #concentration mg protein per uL cellular volume - check
-(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV * conditions$cellVol_mean
+#(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV * conditions$cellVol_mean
 #grams protein per 100mL cellular volume
-(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV * conditions$cellVol_mean/1000 * 10^5
+#(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV * conditions$cellVol_mean/1000 * 10^5
 
 
 #use shrinkage towards fitted values to improve point-estimate
 
-conditions
-
-wellInfo$limitation <- NA; wellInfo$actualDR <- NA; wellInfo$cellVol <- NA; wellInfo$DWperCultmL <- NA
+wellInfo$limitation <- NA; wellInfo$actualDR <- NA; wellInfo$cellVol <- NA; wellInfo$DWcorrPermL <- NA; wellInfo$DWperCultmL <- NA
 for(well in 1:length(wellInfo[,1])){
 	
 	wellInfo$limitation[well] <- conditions$limitation[conditions$condition == wellInfo$Sample[well]]
 	wellInfo$actualDR[well] <- conditions$actualDR[conditions$condition == wellInfo$Sample[well]]
-	wellInfo$DWperCultmL[well] <- ((sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV)[sampleInfo$Sample == wellInfo$Sample[well]]
+	#correction for fraction of dried material homogenized and culture volume dried
+	wellInfo$DWcorrPermL[well] <- ((sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV)[sampleInfo$Sample == wellInfo$Sample[well]]
+	#coulter counter-measured uL of cellular volume per mL culture
 	wellInfo$cellVol[well] <- conditions$cellVol_mean[conditions$condition == wellInfo$Sample[well]]
-	
+	#mg dry-weight per mL culture
+	wellInfo$DWperCultmL[well] <- (sampleInfo$DryWeight/sampleInfo$cultureV)[sampleInfo$Sample == wellInfo$Sample[well]]
 	}
-
-wellInfo$protConc <- wellInfo$conc * 9/1000 * 200/9 * 90 * 1/1000 * wellInfo$DWperCultmL * wellInfo$cellVol
+# 9 uL loaded * 200/9 fraction of dilution plate loaded * 900/10 fraction of homogenate in dilution plate - gives mg protein dry weight
+wellInfo$protConc <- wellInfo$conc * 9/1000 * 200/9 * 90 * 1/1000 * wellInfo$DWcorrPermL * 1/wellInfo$cellVol
 
 plot(wellInfo$protConc ~ factor(wellInfo$Sample))
 plot(log(wellInfo$protConc) ~ factor(wellInfo$Sample))
@@ -153,39 +152,27 @@ conclm3 <- glm(data = wellInfo, formula = protConc ~ factor(limitation) + actual
 plot(conclm3, which = 2)
 plot(conclm3, which = 3)
 
-#fitting a glm treating protConc as gamma and using the "inverse" link
-conclm4 <- glm(data = wellInfo, formula = protConc ~ factor(limitation) + actualDR + factor(limitation)*actualDR, family = gaussian(link = "log"))
-plot(conclm3, which = 2)
-plot(conclm3, which = 3)
-
-rmse <- sqrt(sum(conclm2$resid^2)/(length(wellInfo[,1]) - 10))
-
-shrinkFrac <- 1 - 1/(abs(conclm2$resid)^2*(length(wellInfo[,1])/(length(wellInfo[,1]) - 10))/(rmse^2))
-shrinkFrac <- sapply(shrinkFrac, function(x){max(0, x)})
-
-
 
 
 refittedconc <- matrix(wellInfo$protConc, ncol = length(wellInfo[,1]))
-SS_track <- Inf#sum((log(wellInfo$protConc) - mean(log(wellInfo$protConc)))^2)
+SS_track <- Inf
 SS_change <- Inf
 it_continue <- TRUE
 while(it_continue){
 	
 	fit_linMod <- lm(data = wellInfo, formula = log(refittedconc[length(refittedconc[,1]),]) ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
-	#fit_linMod <- glm(data = wellInfo, formula = refittedconc[length(refittedconc[,1]),] ~ factor(limitation) + actualDR + factor(limitation)*actualDR, family = gaussian(link = "log"))
-
-	#rmse <- sqrt(sum(fit_linMod$resid^2)/(length(wellInfo[,1]) - 10))
+	#fit_linMod <- lm(data = wellInfo, formula = refittedconc[length(refittedconc[,1]),] ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
+	
+	
 	rmse <- sqrt(sum((fit_linMod$fitted - log(wellInfo$protConc))^2)/(length(wellInfo[,1]) - 10))
 	
-	
 	#MS logCond - mean(logCond) #should this be about the mean or the fitted value
-	MSlog <- sapply(conditions$condition, function(x){
-		sum((log(wellInfo$protConc[wellInfo$Sample == x]) - mean(log(wellInfo$protConc[wellInfo$Sample == x])))^2)/sum(wellInfo$Sample == x)
-		})
 	#MSlog <- sapply(conditions$condition, function(x){
-	#	sum((log(wellInfo$protConc[wellInfo$Sample == x]) - fit_linMod$fitted[wellInfo$Sample == x])^2)/sum(wellInfo$Sample == x)
+	#	sum((log(wellInfo$protConc[wellInfo$Sample == x]) - mean(log(wellInfo$protConc[wellInfo$Sample == x])))^2)/sum(wellInfo$Sample == x)
 	#	})
+	MSlog <- sapply(conditions$condition, function(x){
+		sum((log(wellInfo$protConc[wellInfo$Sample == x]) - fit_linMod$fitted[wellInfo$Sample == x])^2)/sum(wellInfo$Sample == x)
+		})
 	
 	
 	shrinkFrac <- sapply(wellInfo$Sample, function(x){MSlog[conditions$condition == x]})/(sapply(wellInfo$Sample, function(x){MSlog[conditions$condition == x]}) + rmse^2)
@@ -235,6 +222,21 @@ plotting_DF$limitation <- sapply(as.character(plotting_DF$Condition), function(c
 	wellInfo$limitation[wellInfo$Sample == cond][1]
 	})
 
-plotting_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1)
-plotting_plot + geom_boxplot()
+pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1)
+pconc_plot + geom_boxplot()
+
+conditions$prot_conc <- sapply(conditions$condition, function(cond){
+	mean(refittedconc[length(refittedconc[,1]),][names(refittedconc[length(refittedconc[,1]),]) == cond])
+	})
+
+conditions$logSF <- log2(conditions$prot_conc) - mean(log2(conditions$prot_conc)[conditions$condition %in% c("p0.05H1", "p0.05H2")])
+conditions$logSF[conditions$condition %in% c("p0.05H1", "p0.05H2")] <- NA
+
+
+#backcalculating fraction of dry-weight from shrunk protein concentration values
+dry_weight_frac <- refittedconc[length(refittedconc[,1]),] * wellInfo$cellVol/wellInfo$DWperCultmL
+dry_weight_DF <- melt(dry_weight_frac); colnames(dry_weight_DF) <- "ProteinDW_fraction"; dry_weight_DF$condition <- names(dry_weight_frac); dry_weight_DF$limitation <-  sapply(as.character(dry_weight_DF$condition), function(cond){wellInfo$limitation[wellInfo$Sample == cond][1]})
+
+dw_plot <- ggplot(dry_weight_DF, aes(x = factor(condition), y = ProteinDW_fraction, col = limitation))
+dw_plot + geom_boxplot()
 
