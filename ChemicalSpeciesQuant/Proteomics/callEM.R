@@ -123,7 +123,7 @@ while(continue_it){
 	
 	#check for convergence
 	
-	if(abs(new_log_lik - previous_it) < 0.01 | (t > 30)){
+	if(new_log_lik - previous_it < 0.01 | (t > 30)){
 		continue_it <- FALSE
 		whole_data_logL <- c(whole_data_logL, new_log_lik)
 		t <- t + 1
@@ -160,7 +160,7 @@ likdiff_plot + geom_histogram()
 #for each peptide compare a model where peptide patterns are equivalent to protein patterns with one where a peptide doesn't match - the divergent model will fit perfectly vs. the alternative where the protein fits
 
 
-divergentPep_summary <- data.frame(peptide = names(likPmatch)[div_max], prot_matches = NA, likelihood = unname(likPmatch[div_max]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
+divergentPep_summary <- data.frame(peptide = names(likdiff)[div_max], prot_matches = NA, likelihood = unname(likdiff[div_max]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
 
 poor_match_redMat <- prior_mat_sparse[div_max, 1:n_prot]
 
@@ -170,10 +170,10 @@ for(pep in 1:length(poor_match_redMat[,1])){
 	divergentPep_summary$nR[pep] <- length(grep("R", unlist(strsplit(divergentPep_summary$peptide[pep], ""))))
 	divergentPep_summary$nY[pep] <- length(grep("Y", unlist(strsplit(divergentPep_summary$peptide[pep], ""))))
 	}
-divergentPep_summary$phosphoSite <- divergentPep_summary$nS != 0 | divergentPep_summary$nR != 0 | divergentPep_summary$nY != 0
+divergentPep_summary$possible_phosphoSite <- divergentPep_summary$nS != 0 | divergentPep_summary$nR != 0 | divergentPep_summary$nY != 0
 
 
-background_SRYfreq <- data.frame(peptide = names(likPmatch)[!div_max], prot_matches = NA, likelihood = unname(likPmatch[!div_max]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
+background_SRYfreq <- data.frame(peptide = names(likdiff)[!div_max], prot_matches = NA, likelihood = unname(likdiff[!div_max]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
 
 good_match_redMat <- prior_mat_sparse[!div_max, 1:n_prot]
 
@@ -183,7 +183,7 @@ for(pep in 1:length(good_match_redMat[,1])){
 	background_SRYfreq$nR[pep] <- length(grep("R", unlist(strsplit(background_SRYfreq$peptide[pep], ""))))
 	background_SRYfreq$nY[pep] <- length(grep("Y", unlist(strsplit(background_SRYfreq$peptide[pep], ""))))
 	}
-background_SRYfreq$phosphoSite <- background_SRYfreq$nS != 0 | background_SRYfreq$nR != 0 | background_SRYfreq$nY != 0
+background_SRYfreq$possible_phosphoSite <- background_SRYfreq$nS != 0 | background_SRYfreq$nR != 0 | background_SRYfreq$nY != 0
 
 
 
@@ -280,7 +280,7 @@ while(continue_it){
 	
 	#check for convergence
 	
-	if(abs(new_log_lik - previous_it) < 0.01){
+	if(new_log_lik - previous_it < 0.01){
 		continue_it <- FALSE
 		whole_data_logL <- c(whole_data_logL, new_log_lik)
 		print("done")
@@ -293,20 +293,10 @@ while(continue_it){
 	}
 
 
-#prot_abund_final <- prot_abund[,1:n_prot]
-prot_abund_final[prot_abund_final == 0] <- NA
-
-#Remove proteins with less than 0.5 peptides attributed to them
-n_prot_nonmatched <- sum(apply(mixing_fract[,1:n_prot], 2, sum) <= 0.5)
-
-prot_abund_final <- prot_abund[,c(1:n_prot)[apply(mixing_fract[,1:n_prot], 2, sum) > 0.5]]
-prot_abund_final[prot_abund_final == 0] <- NA
-
-
 if(unq_matches_only == TRUE){
-	save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, n_prot_nonmatched, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, file = "EMoutputUnq.Rdata")
+	save(prot_abund, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, file = "EMoutputUnq.Rdata")
 	}else{
-		save(prot_abund_final, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, n_prot_nonmatched, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, file = "EMoutputDeg.Rdata")
+		save(prot_abund, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, file = "EMoutputDeg.Rdata")
 	}
 
 

@@ -35,6 +35,8 @@ matrix_fxn()
 blackOrange <- function(n){colorpanel(n, "black", "black", "orange")}
 greenBlackRed <- function(n){colorpanel(n, "green", "black", "red")}
 
+library(xtable)
+
 @
 
 
@@ -102,6 +104,8 @@ mappingMat <- cbind(mappingMat[,!(degen_prots %in% degen_prot_patterns)], degen_
 
 #the relative abundance of a peptide across conditions w.r.t a common reference
 abundMat <- PepMatrix[good_samples,]
+abundMat[is.infinite(abundMat)] <- NA
+
 good_light <- lightIC[good_samples,]
 good_heavy <- heavyIC[good_samples,]
 
@@ -232,6 +236,64 @@ Fitting from replicates can be done because all of the samples are quantified wi
 
 
 
+\clearpage
+\normalsize
+
+\subsection*{Normalization to account for differences in protein concentrations across conditions}
+
+Determining the intracellular concentration of proteins, the desired normalization measurement required integrating data from several other documents.  Briefly the method involved.
+
+\begin{itemize}
+\item For each condition (25 experimental and 2 reference chemostats), 80-400mL was collected on ice and spun down to gather a large pellet of cells.
+\item The dry weight of each sample was determined after 36 hours of lyophilization on a speed-vacuum at \textcolor{red}{50$^{o}$C - check}.
+\item The sample was resuspended in 900$\mu$L KH$_{2}$PO$_{4}$-EDTA with 0.5\% Triton-X-100, split into 3 replicates and 20$\mu$L of each sub-sample was aliquoted into 12 96-well plates.
+\item For the protein assay, 10$\mu$L of one such plate was diluted in 190$\mu$L of the $\mu$L KH$_{2}$PO$_{4}$-EDTA-Triton-X buffer and 9$\mu$L of this diluted sample was quantified using the Thermo BCA protein assay kit. 
+\item For cellular volume per mL of media, a Coulter counter was used to count the number and volume of cells in a dilution of media.  The product of the mean cellular volume, number of cells and dilution factor gives the correct quantity.
+\item Fraction of protein was calculated by correcting for dilution and splitting and then compared to dry weight.  The concentration of proteins per cell was found by determining the concentration of proteins per mL of media and dividing by the cellular volume per mL of media
+\end{itemize}
+
+To correct for differences in protein concentrations between samples, the relative abundances were corrected by adding a factor $\Delta_{j}$, as per equation \ref{normalizeC}.
+\begin{align}
+\text{Initial loading disparity}&\notag\\
+\delta^{o}_{j} &= log_{2}(\text{med}[P^{L}_{j}] - \text{med}[P^{H}_{j}])\notag\\
+\text{Desired concentration offset}&\notag\\
+\delta_{j} &= log_{2}([protein^{L}_{j}] - [protein^{H}_{j}])\notag\\
+\Delta_{j} &= \delta_{j}  - \delta^{o}_{j}\notag\\
+X^{*}_{ij} &= X_{ij} + \Delta_{j}\label{normalizeC}
+\end{align}
+
+<<normalizeProtAbund, dependson = "EMprep">>=
+load('../BulkComposition/protSpecQuantOut.Rdata')
+
+initial_offset = log2(apply(good_light, 2, median, na.rm = TRUE)/apply(good_heavy, 2, median, na.rm = TRUE))
+conc_diff <- conditions$logSF[sapply(colnames(good_light), grep, x = conditions$condition[!(conditions$condition %in% c("p0.05H1", "p0.05H2"))], ignore.case = TRUE)]
+
+abundMat <- abundMat + rep(1, times = length(abundMat[,1])) %*% t(conc_diff - initial_offset)
+
+@
+
+\begin{figure}[h!]
+<<prot_cellular_conc, echo = FALSE, cache = TRUE>>=
+pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1) + theme(axis.text.x = element_text(size = 4, face = "bold"))
+pconc_plot + geom_boxplot()
+@
+\caption{Concentration of proteins (mg) per $\mu$L cellular volume}
+\label{prot_cellular_conc}
+\end{figure}
+
+\begin{figure}[h!]
+<<prot_frac_DW, echo = FALSE, cache = TRUE>>=
+dw_plot <- ggplot(dry_weight_DF, aes(x = factor(condition), y = ProteinDW_fraction, col = limitation)) + theme(axis.text.x = element_text(size = 4, face = "bold"))
+dw_plot + geom_boxplot()
+@
+\caption{Fraction of dry weight taken up by proteins}
+\label{prot_frac_DW}
+\end{figure}
+
+
+
+
+
 
 
 \small
@@ -292,7 +354,6 @@ Nmissing_val_all <- table(apply(is.finite(PepMatrix), 1, sum))
 @
 
 <<results = "asis", echo = FALSE>>=
-library(xtable)
 print(xtable(data.frame(Proteins = n_prot, Peptides = n_p, Conditions = n_c), display = c("s", "d", "d", "d")), include.rownames = FALSE)
 @
 
@@ -361,17 +422,14 @@ cond_peps <- cond_peps[!(rowSums(cond_peps) %in% c(0, length(cond_peps[1,]))),]
 
 @
 
-
-
-
-
 \begin{figure}[h!]
 <<misval_HM, dependson = "mvmat_red", echo = FALSE, warning = FALSE>>=
 man_dist <- function(x){dist(x, method = "manhattan")}
 heatmap.2(cond_peps, Rowv = TRUE, Colv = FALSE, trace = "none", col=blackOrange(100), distfun = man_dist, cexRow = 0.1)
 @
-\caption{hierarchical clustering of proteins missing in a subset of conditions using manhattan distance}
+\caption{hierarchical clustering of proteins missing in a subset of conditions using manhattan distance - a similarly clustered matrix for peptides is outputted but beyond R's clustering capabilities}
 \end{figure}
+
 
 <<cluster_misval, dependson = "mvmat_red", cache = TRUE>>=
 	
@@ -451,9 +509,12 @@ for(kval in 1:k_clust_misVal){
 @
 
 <<GSEAtable, dependson = "perform_GSEA", results = "asis", echo = FALSE>>=
-library(xtable)
 xtable(sum_table, digits = 5)
 @
+
+
+
+
 
 
 \clearpage
@@ -539,10 +600,22 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 	#system("R64 callEM.R")
 
 	}
+
+matched_prots <- apply(mixing_fract[,1:n_prot], 2, sum) > 0.5
+
+prot_abund_final <- prot_abund[,c(1:n_prot)[matched_prots]]
+prot_prec <- prot_prec[,-c(1:n_prot)[!matched_prots]]
+mixing_fract <- mixing_fract[,-c(1:n_prot)[!matched_prots]]
+
+
+
+prot_abund_final[prot_abund_final == 0] <- NA
+
 n_prot <- length(prot_abund_final[1,])	
 @
 
-After carrying out EM, \Sexpr{n_prot_nonmatched} proteins were discarded because they overlapped ascertained proteins and had no strong solitary evidence of being present.  This leaves\Sexpr{n_prot} proteins for further analysis.  
+\normalsize
+After carrying out EM, \Sexpr{sum(!matched_prots)} proteins were discarded because they overlapped ascertained proteins and had no strong solitary evidence of being present.  This leaves\Sexpr{n_prot} proteins for further analysis.  
 
 
 \begin{figure}
@@ -554,7 +627,6 @@ barplot(table(table(max_state[max_state <= n_prot])))
 \end{figure}
 
 <<results = "asis", echo = FALSE, >>=
-library(xtable)
 xtable(table(div_max), caption = "Number of peptides not-conforming to some general protein trend")
 @
 
@@ -566,11 +638,44 @@ plot(whole_data_logL[-1], col = ifelse(c(2:length(whole_data_logL)) <= initial_c
 \end{figure}
 
 \begin{figure}
+<<div_match_comp, dependson = "EMprep", echo = FALSE>>=
+likdiff_plot <- ggplot(likdiff_df, aes(x = likelihood, fill = matched))
+likdiff_plot + geom_histogram()
+@
+\caption{difference between the log-likelihood of a peptide-protein match and a peptide failing to match.  Matches are colored teal and non-matched orange}
+\label{likdiff_plot}
+\end{figure}
+
+\normalsize
+
+Peptides that conform to a protein well will have a moderately high log-likelihood, bounded on the top by 0.  An alternative option is when a peptide fails to conform to a protein.  Because this protein's mean across conditions will be free, the log-likelihood of this unconstrained model will equal zero.  The difference in degrees of freedom between these two models is equal to the number of experimental conditions.  Comparing a model where the mean is constrained across \Sexpr{n_c} conditions, with it being unconstrained.  The change in log-likelihood that we would expect this constraint to cause would be $\chi^{2}_{\Sexpr{n_c}}$ distributed.  The equivalent of having a $\frac{1}{10000}$ chance of as large an increase in logL happening by chance given that a peptide actually has the same trend as a protein would be an increase in the logL of \Sexpr{qchisq(prior_bound, n_c)}.  To implicitly carry out this hypothesis during optimization, the likelihood of the peptide not matching is penalized by the subtraction of this prior and compared to the likelihood of the best peptide-protein match.  A plot of the log-likelihood difference between a fit between a peptide and the best-fitting protein is shown in figure \ref{likdiff_plot}.  
+
+<<phosphoSiteEnrich, results = "asis", cache = TRUE>>=
+### Read in phospho peptide data from phosphoGRID ###
+library("stringr")
+
+phospho_sites <- read.delim('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics/phosphosites.txt', skip = 32, header = TRUE, stringsAsFactors = FALSE)
+
+phospho_sites_red <- phospho_sites[,colnames(phospho_sites) %in% c("A", "C", "R")]
+
+Psites <- cbind(knownPsites(divergentPep_summary, phospho_sites_red), knownPsites(background_SRYfreq, phospho_sites_red))
+colnames(Psites) <- c("Divergent", "Matched")
+
+xtable(Psites, caption = "Number of peptides within the protein-matched and non-matched classes which contain a phosphoGRID-annotated phosphorylation site", label = "phosphoSites")
+@
+
+
+In order to see if divergent peptides were enriched for phosphorylation sites, they were compared with known phosphorylation sites from phosphoGRID, to determine how many of the peptide intervals of matched and non-matched peptides contained known phospho-sites.  This produced the contingency table (table \ref{phosphoSites}), which has a significant enrichment of phospho-sites (\Sexpr{round(Psites[2,1]/sum(Psites[,1]), 3)} vs. \Sexpr{round(Psites[2,2]/sum(Psites[,2]), 3)}) according to a chi-square test (p-value: \Sexpr{signif(chisq.test(Psites)$p.value)}).
+
+
+\begin{figure}
 <<rawHM, echo = FALSE>>=
 heatmap.2(t(prot_abund_final), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = greenred(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "white", breaks = seq(-1*max(range(prot_abund_final, na.rm = TRUE)), max(range(prot_abund_final, na.rm = TRUE)), by = max(range(prot_abund_final, na.rm = TRUE))/250))
 @
 \caption{Relative protein abundance across \Sexpr{n_c} conditions, after running EM}
 \end{figure}
+
+
 
 <<MVimputeCompare, dependson = "EMrun", cache = TRUE>>=
 library(missMDA)
@@ -582,6 +687,8 @@ npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterio
 
 @
 
+
+
 <<MVimputeData, dependson = "MVimputeCompare", cache = TRUE>>=
 #determine the most likely values of the missing data
 impute_abund <- imputePCA(prot_abund_final, npc, scale = FALSE)$completeObs
@@ -589,15 +696,10 @@ impute_abund_thresh <- impute_abund
 impute_abund_thresh[impute_abund_thresh > 5] <- 5; impute_abund_thresh[impute_abund_thresh < -5] <- -5
 @
 
-%<<>>=
-%save(impute_abund_thresh, "tmp.Rdata")
-%@
-
 \begin{figure}
 <<mvNpc, echo = FALSE>>=
 plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs")
 abline(v = npc, col = "RED", lwd = 2)
-save(impute_abund_thresh, file = "tmp.Rdata")
 @
 \caption{Reconstruction error of raw matrix using PC-based imputation}
 \end{figure}
@@ -610,30 +712,38 @@ heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row
 \end{figure}
 
 \begin{figure}
-<<>>=
-library(reshape)
-
+<<PC_heatmap.>>=
 impSVD_pcs <- svd(t(impute_abund_thresh), nu = npc, nv = npc)$v
 colnames(impSVD_pcs) <- paste("PC", c(1:npc), "")
+rownames(impSVD_pcs) <- rownames(impute_abund_thresh)
+
+heatmap.2(t(impSVD_pcs), Colv = FALSE, Rowv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10), denscol = "white")
+@
+\caption{Significant principal components governing variation across conditions in relative protein abundance}
+\label{protPCHM}
+\end{figure}
+
+<<PC_traces>>=
+library(reshape)
 
 pc_plot_df <- melt(impSVD_pcs)
 colnames(pc_plot_df) <- c("condition", "PC", "value")
+pc_plot_df$cond <- factor(sapply(as.character(pc_plot_df$condition), function(x){unlist(strsplit(x, ""))[1]})) 
 
-factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, col = factor(PC)))
-print(factor_plot + geom_line())
+factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol =1, scales = "free_y")
+factor_plot + geom_line()
 @
-\end{figure}
-
-
 
 <<plot_proteinTrends, dependson = "MVimputeData", cache = TRUE, warning = FALSE>>=
 tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
 tmp <- as.matrix(tmp)
 tmp[!(tmp %in% c(0,1))] <- 1 
-prior_mat_logical <- cbind(as.matrix(unique_mappingMat), tmp) 
+prior_mat_logical <- cbind(as.matrix(unique_mappingMat[,matched_prots]), tmp) 
 prior_mat_logical <- prior_mat_logical == 1
 possibleMap <- Matrix(prior_mat_logical)
 @
+
+
 
 <<>>=
 plot_protein_lattice(c(1:10), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, 2)
@@ -641,12 +751,35 @@ plot_protein_lattice(c(1:10), possibleMap, prot_abund_final, prot_prec, uniquePe
 
 
 <<>>=
-plot_protein_lattice(c(11:35), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, 5)
+plot_protein_lattice(c(11:26), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, 4)
 @
 
 <<>>=
-plot_protein_lattice(c(36:60), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, 5)
+plot_protein_lattice(c(27:42), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, 4)
 @
+
+
+<<metGenerep, dependson = "EMprep", results = "asis">>=
+
+rxnFile <- read.delim('~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/rxn_yeast.tsv', stringsAsFactors = FALSE)
+met_genes <- NULL
+for(met_gene in rxnFile$MetName[is.na(rxnFile$StoiCoef)]){
+	met_genes <- c(met_genes, unlist(met_gene))
+	}
+met_genes <- unique(met_genes)
+measured_genes <- unlist(sapply(colnames(prot_abund_final), function(x){strsplit(x, "/")}))
+
+overlapping_geneN <- length(intersect(met_genes, measured_genes))
+
+met_gene_overlap <- data.frame(intersection = overlapping_geneN, metTot = length(met_genes), measuredTot = length(measured_genes))
+
+print(xtable(met_gene_overlap, caption = "Investigating the overlap of metabolic enzymes (from the yeast consensus metabolic network (v5) and the proteins measured in our dataset"), include.rownames = FALSE)
+@
+
+
+How many metabolic genes are represented in our ascertained proteins: Using the Yeast consensus metabolic reconstruction (version 5), \Sexpr{length(met_genes)} genes involved in some reaction were assembled.  
+
+
 
 
 
@@ -774,12 +907,15 @@ colnames(impute_abund_thresh_store) <- orf2desc(colnames(impute_abund_thresh_sto
 #save(cond_peps, impute_abund_thresh, file = "protMatrices.Rdata")
 if(unq_matches_only == TRUE){
 write.table(cond_peps, file = "run_Unq/mvMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(uq_binPepMatrix[apply(uq_binPepMatrix != 0, 1, sum) != 0,], file = "run_Deg/mvMatrixpeps.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+
 write.table(t(impute_abund_thresh_store), file = "run_Unq/relAbundMatrix_desc.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 write.table(t(impute_abund_thresh), file = "run_Unq/relAbundMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 write.table(t(shared_prot - shared_trans), file = "run_Unq/TPdiffMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 }
 if(unq_matches_only == FALSE){
 write.table(cond_peps, file = "run_Deg/mvMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(uq_binPepMatrix[apply(uq_binPepMatrix != 0, 1, sum) != 0,], file = "run_Deg/mvMatrixpeps.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 write.table(t(impute_abund_thresh_store), file = "run_Deg/relAbundMatrix_desc.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 write.table(t(impute_abund_thresh), file = "run_Deg/relAbundMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 write.table(t(shared_prot - shared_trans), file = "run_Deg/TPdiffMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
@@ -849,13 +985,13 @@ clust_num <- t(t(c(gene_cluster, 0:(nclust-1)))) %*% t(rep(1, times = n_c))
 centroid_size_adj <- t(t(c(rep(1, times = length(clusteredDat[,1])), rep(4, times = nclust)))) %*% t(rep(1, times = n_c))
 clust_datatype <- centroid_size_adj; clust_datatype[clust_datatype == 1] <- "Protein"; clust_datatype[clust_datatype == 4] <- "Centroid"
 
-clust_plot_df <- data.frame(condition = c(clust_xval), abundance = c(clust_yval), cluster = c(clust_num), dataType = as.factor(c(clust_datatype)), clustersize = c(centroid_size_adj))
+clust_plot_df1 <- data.frame(condition = c(clust_xval), abundance = c(clust_yval), cluster = c(clust_num), dataType = as.factor(c(clust_datatype)), clustersize = c(centroid_size_adj))
 
 @
 
 \begin{figure}
 <<protclustplot, dependson = "prot_clust", echo = FALSE>>=
-clust_plotterer <- ggplot(clust_plot_df, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
+clust_plotterer <- ggplot(clust_plot_df1, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
 clust_plotterer + geom_point()
 @
 \caption{Trace of proteins in a cluster (teal) and the centroid itself (orange)}
@@ -894,13 +1030,13 @@ clust_num <- t(t(c(gene_cluster, 0:(nclust-1)))) %*% t(rep(1, times = n_c))
 centroid_size_adj <- t(t(c(rep(1, times = length(clusteredDat[,1])), rep(4, times = nclust)))) %*% t(rep(1, times = n_c))
 clust_datatype <- centroid_size_adj; clust_datatype[clust_datatype == 1] <- "Protein"; clust_datatype[clust_datatype == 4] <- "Centroid"
 
-clust_plot_df <- data.frame(condition = c(clust_xval), abundance = c(clust_yval), cluster = c(clust_num), dataType = as.factor(c(clust_datatype)), clustersize = c(centroid_size_adj))
+clust_plot_df2 <- data.frame(condition = c(clust_xval), abundance = c(clust_yval), cluster = c(clust_num), dataType = as.factor(c(clust_datatype)), clustersize = c(centroid_size_adj))
 
 @
 
 \begin{figure}
 <<tnclustplot, dependson = "tn_clust", echo = FALSE>>=
-clust_plotterer <- ggplot(clust_plot_df, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
+clust_plotterer <- ggplot(clust_plot_df2, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
 clust_plotterer + geom_point()
 @
 \caption{Trace of proteins - transcript differences; clusters (teal) and the centroid itself (orange)}
