@@ -4,25 +4,56 @@ library(reshape)
 library(ggplot2)
 
 chemoStat <- read.table("releventDR.csv", sep = ",", header = TRUE)
-chemo.cols <- c("Chemostat", "DR", "colterVol.uL.mL")
-chemoStat <- chemoStat[,colnames(chemoStat) %in% chemo.cols]
 chemoStat <- chemoStat[apply(is.na(chemoStat), 1, sum) < 2,]
 
-conditions <- data.frame(condition = rep(NA, times = 27), limitation = c(rep(c("p", "c", "n", "L", "u"), each = 5), "p", "p"), DRgoal = c(rep(c("0.05", "0.11", "0.16", "0.22", "0.30"), times = 5), c(0.05, 0.05)), actualDR = rep(NA, times = 27), cellVol_mean = rep(NA, times = 27), cellVol_SD = rep(NA, times = 27))
+#plot(chemoStat$colterVol.uL.mL ~ chemoStat$PCMVol.mL)
+#the coulter counter under-estimates volume by ~20%
+coulter_underest <- median(chemoStat$colterVol.uL.mL/chemoStat$PCMVol.mL, na.rm = TRUE)
+
+#determine whether the coulter counter, packed cell volume (PCV) or klett have lower relative error
+
+klettTab <- chemoStat[!is.na(chemoStat$Klett),]
+coultTab <- chemoStat[!is.na(chemoStat$colterVol.uL.mL),]
+pcvTab <- chemoStat[!is.na(chemoStat$PCMVol.mL),]
+
+anova(lm(klettTab$Klett ~ factor(klettTab$Chemostat)))
+anova(lm(coultTab$colterVol.uL.mL ~ factor(coultTab$Chemostat)))
+anova(lm(pcvTab$PCMVol.mL ~ factor(pcvTab$Chemostat)))
+
+#klett has the greatest signal to noise and should be used as the normalization factor, but it needs to be scaled using the coulter-counter to give cellular volumes
+
+lm(data = chemoStat, formula = colterVol.uL.mL ~ Klett)$coef
+
+coultReg <- lm(data = chemoStat, formula = colterVol.uL.mL ~ Klett)
+pcvReg <- lm(data = chemoStat, formula = PCMVol.mL ~ Klett)
+
+coult_pred <- predict(coultReg, newdata = chemoStat)/coulter_underest
+pcv_pred <- predict(pcvReg, newdata = chemoStat)
+
+plot(chemoStat$colterVol.uL.mL ~ chemoStat$Klett); lines(coultReg$coef[1] + coultReg$coef[2]*seq(0, 200, by = 1) ~ seq(0, 200, by = 1))
+plot(chemoStat$PCMVol.mL ~ chemoStat$Klett); lines(pcvReg$coef[1] + pcvReg$coef[2]*seq(0, 200, by = 1) ~ seq(0, 200, by = 1))
+
+#### Klett has the lowest relative error, coulter counter has the best linear relationship with klett.  Klett will be scaled to coulter abundance via a lm and then this intracellular volume will be adjusted to account for the underestimation of volume by coulter relative to the packed cell volume
+
+chemo.cols <- c("Chemostat", "DR", "coulterMed")
+chemoStat <- chemoStat[,colnames(chemoStat) %in% chemo.cols]
+chemoStat$cellularVolFrac = coult_pred
+
+
+conditions <- data.frame(condition = rep(NA, times = 27), limitation = c(rep(c("p", "c", "n", "L", "u"), each = 5), "p", "p"), DRgoal = c(rep(c("0.05", "0.11", "0.16", "0.22", "0.30"), times = 5), c(0.05, 0.05)), actualDR = rep(NA, times = 27), VolFrac_mean = rep(NA, times = 27), VolFrac_SD = rep(NA, times = 27), medcellVol = rep(NA, times = 27))
 conditions[,2] <- as.character(conditions[,2])
 conditions[,3] <- as.character(conditions[,3])
 conditions$condition <- apply(conditions[,c(2,3)], 1, paste, collapse = "")
 conditions$condition[c(26,27)] <- c("ctrl1_0.05", "ctrl2_0.05")
 
-#chemoStat$Chemostat[!(chemoStat$Chemostat %in% conditions$condition)]
-
-for(i in 1:27){
+for(i in 1:length(conditions[,1])){
 	
 	condSubset <- chemoStat[chemoStat$Chemostat == conditions$condition[i],]
 	
-	conditions$cellVol_mean[i] <- mean(condSubset$colterVol.uL.mL[!is.na(condSubset$colterVol.uL.mL)])
-	conditions$cellVol_SD[i] <- sd(condSubset$colterVol.uL.mL[!is.na(condSubset$colterVol.uL.mL)])
+	conditions$VolFrac_mean[i] <- mean(condSubset$cellularVolFrac[!is.na(condSubset$cellularVolFrac)])
+	conditions$VolFrac_SD[i] <- sd(condSubset$cellularVolFrac[!is.na(condSubset$cellularVolFrac)])
 	conditions$actualDR[i] <- mean(condSubset$DR[!is.na(condSubset$DR)])
+	conditions$medcellVol[i] <- mean(condSubset$coulterMed)
 	
 	}
 conditions$condition[c(26,27)] <- c("p0.05H1", "p0.05H2")
@@ -110,9 +141,9 @@ sampleInfo <- sampleInfo[sapply(sampleInfo$Sample, function(x){c(1:length(sample
 #mg protein per ml culture
 #(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV
 #concentration mg protein per uL cellular volume - check
-#(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV * conditions$cellVol_mean
+#(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV * conditions$VolFrac_mean
 #grams protein per 100mL cellular volume
-#(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV * conditions$cellVol_mean/1000 * 10^5
+#(conditions$assayConc_mean * 9/1000 * 200/9 * 90 * 1/1000)*(sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV * conditions$VolFrac_mean/1000 * 10^5
 
 
 #use shrinkage towards fitted values to improve point-estimate
@@ -125,7 +156,7 @@ for(well in 1:length(wellInfo[,1])){
 	#correction for fraction of dried material homogenized and culture volume dried
 	wellInfo$DWcorrPermL[well] <- ((sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV)[sampleInfo$Sample == wellInfo$Sample[well]]
 	#coulter counter-measured uL of cellular volume per mL culture
-	wellInfo$cellVol[well] <- conditions$cellVol_mean[conditions$condition == wellInfo$Sample[well]]
+	wellInfo$cellVol[well] <- conditions$VolFrac_mean[conditions$condition == wellInfo$Sample[well]]
 	#mg dry-weight per mL culture
 	wellInfo$DWperCultmL[well] <- (sampleInfo$DryWeight/sampleInfo$cultureV)[sampleInfo$Sample == wellInfo$Sample[well]]
 	}
@@ -160,9 +191,9 @@ SS_change <- Inf
 it_continue <- TRUE
 while(it_continue){
 	
-	fit_linMod <- lm(data = wellInfo, formula = log(refittedconc[length(refittedconc[,1]),]) ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
-	#fit_linMod <- lm(data = wellInfo, formula = refittedconc[length(refittedconc[,1]),] ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
-	
+	#fit_linMod <- lm(data = wellInfo, formula = log(refittedconc[length(refittedconc[,1]),]) ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
+	fit_linMod <- lm(data = wellInfo, formula = refittedconc[length(refittedconc[,1]),] ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
+	#fit_linMod <- glm(data = wellInfo, formula = refittedconc[length(refittedconc[,1]),] ~ factor(limitation) + actualDR + factor(limitation)*actualDR, family = Gamma(link = "log"))
 	
 	rmse <- sqrt(sum((fit_linMod$fitted - log(wellInfo$protConc))^2)/(length(wellInfo[,1]) - 10))
 	
@@ -184,7 +215,8 @@ while(it_continue){
 	#shrinkFrac <- 1 - 1/(abs(conclm2$resid)^2*(length(wellInfo[,1])/(length(wellInfo[,1]) - 10))/(rmse^2))
 	#shrinkFrac <- sapply(shrinkFrac, function(x){max(0, x)})
 
-	updated_conc <- exp(fit_linMod$fitted)*shrinkFrac + (1-shrinkFrac)*wellInfo$protConc
+	#updated_conc <- exp(fit_linMod$fitted)*shrinkFrac + (1-shrinkFrac)*wellInfo$protConc
+	updated_conc <- fit_linMod$fitted*shrinkFrac + (1-shrinkFrac)*wellInfo$protConc
 	refittedconc <- rbind(refittedconc, updated_conc)
 	
 	SS_change <- SS_track[length(SS_track)] - sum(fit_linMod$resid^2)
@@ -222,7 +254,7 @@ plotting_DF$limitation <- sapply(as.character(plotting_DF$Condition), function(c
 	wellInfo$limitation[wellInfo$Sample == cond][1]
 	})
 
-pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1)
+pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1) + theme(axis.text.x = element_text(size = 4, face = "bold"))
 pconc_plot + geom_boxplot()
 
 conditions$prot_conc <- sapply(conditions$condition, function(cond){
@@ -240,3 +272,4 @@ dry_weight_DF <- melt(dry_weight_frac); colnames(dry_weight_DF) <- "ProteinDW_fr
 dw_plot <- ggplot(dry_weight_DF, aes(x = factor(condition), y = ProteinDW_fraction, col = limitation))
 dw_plot + geom_boxplot()
 
+save(conditions, plotting_DF, dry_weight_DF, file = "protSpecQuantOut.Rdata")
