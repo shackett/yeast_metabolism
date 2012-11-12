@@ -25,9 +25,12 @@
 <<echo=FALSE,results='hide'>>=
 options(width=80)
 library(knitr)
+opts_knit$set(progress = TRUE, verbose = TRUE)
+opts_chunk$set(echo = TRUE, cache = TRUE)
+
 
 setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
-load('20120807ProtPepMatrices.Rdata')
+load('20121109ProtPepMatrices.Rdata')
 source("pep_library.R")
 plotting_fxn()
 matrix_fxn()
@@ -143,7 +146,7 @@ STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
 @
 
 \begin{itemize}
-\item Remove all peptides with more than \Sexpr{1 - quality_frac} fraction of missing data
+\item Remove all peptides with more than \Sexpr{(1 - quality_frac)*100}\% missing data
 \item Remove all peptides with less than \Sexpr{ICthreshold} ions measured
 \item This results in \Sexpr{table(good_samples)[names(table(good_samples)) == TRUE]} peptides that are retained and \Sexpr{table(good_samples)[names(table(good_samples)) == FALSE]} peptides which are discarded.
 \end{itemize}
@@ -255,7 +258,7 @@ Determining the intracellular concentration of proteins, the desired normalizati
 To correct for differences in protein concentrations between samples, the relative abundances were corrected by adding a factor $\Delta_{j}$, as per equation \ref{normalizeC}.
 \begin{align}
 \text{Initial loading disparity}&\notag\\
-\delta^{o}_{j} &= log_{2}(\text{med}[P^{L}_{j}] - \text{med}[P^{H}_{j}])\notag\\
+\delta^{o}_{j} &= log_{2}(\text{med}[\frac{P^{L}_{j}}{P^{H}_{j}}])\notag\\
 \text{Desired concentration offset}&\notag\\
 \delta_{j} &= log_{2}([protein^{L}_{j}] - [protein^{H}_{j}])\notag\\
 \Delta_{j} &= \delta_{j}  - \delta^{o}_{j}\notag\\
@@ -265,32 +268,81 @@ X^{*}_{ij} &= X_{ij} + \Delta_{j}\label{normalizeC}
 <<normalizeProtAbund, dependson = "EMprep">>=
 load('../BulkComposition/protSpecQuantOut.Rdata')
 
-initial_offset = log2(apply(good_light, 2, median, na.rm = TRUE)/apply(good_heavy, 2, median, na.rm = TRUE))
-conc_diff <- conditions$logSF[sapply(colnames(good_light), grep, x = conditions$condition[!(conditions$condition %in% c("p0.05H1", "p0.05H2"))], ignore.case = TRUE)]
+added_conds <- conditions[conditions$condition == "p0.30",]; added_conds$condition <- "p0.30_ORBI"
+conditions <- rbind(conditions, added_conds)
 
-abundMat <- abundMat + rep(1, times = length(abundMat[,1])) %*% t(conc_diff - initial_offset)
+cond_info <- sapply(colnames(good_light), function(cond){
+	if(strsplit(cond, "")[[1]][1] == "L"){
+		tmp <- cond
+		}else{
+			tmp <- paste(c(tolower(strsplit(cond, "")[[1]][1]), strsplit(cond, "")[[1]][-1]), collapse = "")
+			}
+		c(1:length(conditions[,1]))[conditions$condition == tmp]
+		})
+
+conditions <- conditions[cond_info,]
+
+initial_offset = log2(apply(good_light/good_heavy, 2, median, na.rm = TRUE))
+
+abundMat <- abundMat + rep(1, times = length(abundMat[,1])) %*% t(-1*initial_offset)
 
 @
 
 \begin{figure}[h!]
 <<prot_cellular_conc, echo = FALSE, cache = TRUE>>=
-pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1) + theme(axis.text.x = element_text(size = 4, face = "bold"))
-pconc_plot + geom_boxplot()
+pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("mg protein/uL cellular volume") + scale_x_discrete("Experimental condition")
+pconc_plot + geom_boxplot() 
 @
-\caption{Concentration of proteins (mg) per $\mu$L cellular volume}
+\caption{Concentration of proteins (mg) per $\mu$L cellular volume.  The top panel contains the raw transformed protein concentrations.  It is notable that some treatments are measured poorly, with a great discordance between technical replicates.  There is a strong linear trend across dilution rates within each limitation, so this could serve as a fitted value for each condition.  To minimize the influence of outliers, we want to find a point estimate of the concentration of protein in each condition that balances the actual possibly noisy value measured, with the predicted value from the structure of the data.  The balance of using the experimental measurement or the fitted value is determined by how noisy the experimental measurement is relative to the residual mean square error of the regression fit.  
+
+ }
 \label{prot_cellular_conc}
 \end{figure}
 
 \begin{figure}[h!]
 <<prot_frac_DW, echo = FALSE, cache = TRUE>>=
-dw_plot <- ggplot(dry_weight_DF, aes(x = factor(condition), y = ProteinDW_fraction, col = limitation)) + theme(axis.text.x = element_text(size = 4, face = "bold"))
+dw_plot <- ggplot(dry_weight_DF, aes(x = factor(condition), y = ProteinDW_fraction, col = limitation)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Protein fraction of dry-material") + scale_x_discrete("Experimental condition")
 dw_plot + geom_boxplot()
 @
 \caption{Fraction of dry weight taken up by proteins}
 \label{prot_frac_DW}
 \end{figure}
 
+\begin{figure}[h!]
+<<dry_weight_dens, echo = FALSE, cache = TRUE, warning = FALSE>>=
+dry_weight_turnover_plot1 <- ggplot(dry_weight_turnover_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight(mg) per mL culture", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
+dry_weight_turnover_plot1 + geom_bar(stat = "identity", position = "stack")
+@
+\caption{Dry weight (mg) per mL of culture: Maximal density is seen at low growth rates except under carbon and leucine limitation}
+\label{dry_weight_dens}
+\end{figure}
 
+\begin{figure}[h!]
+<<dry_weight_turnover, echo = FALSE, cache = TRUE, warning = FALSE>>=
+dry_weight_turnover_plot2 <- ggplot(dry_weight_turnover_DFmelt2, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight production (mg/hr) per mL culture", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
+dry_weight_turnover_plot2 + geom_bar(stat = "identity", position = "stack")
+@
+\caption{Dry weight per mL * DR (h$^{-1}$ indicates that optimal growth, in terms of biomass production occurs at intermediate GRs}
+\label{dry_weight_turnover}
+\end{figure}
+
+\begin{figure}[h!]
+<<dry_weight_cellconc, echo = FALSE, cache = TRUE, warning = FALSE>>=
+dry_weight_turnover_plot3 <- ggplot(dry_weight_turnover_D_cellular_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight (mg) per uL of cellular volume", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
+dry_weight_turnover_plot3 + geom_bar(stat = "identity", position = "stack")
+@
+\caption{Concentration of proteins and dry-matter per cellular volume (mg/uL).  The protein relative concentrations are equivalent to the means of the figure \ref{prot_cellular_conc} box plot}
+\label{dry_weight_cellconc}
+\end{figure}
+
+\begin{figure}[h!]
+<<material_percell, echo = FALSE, cache = TRUE, warning = FALSE>>=
+dry_weight_perCell_plot <- ggplot(dry_weight_perCell_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold"), panel.grid.minor=element_blank(), panel.grid.major=element_blank()) + scale_y_continuous("pg protein/dry-material per cell", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
+dry_weight_perCell_plot + geom_bar(stat = "identity", position = "stack")
+@
+\caption{pico-grams protein per cell: The smaller size of nitrogen and carbon limited cells results in them having less material per-cell.  For most conditions, at slow growth-rates cells either become minute or huge and then tend back towards a similar intermediate size as growth-rates increase.  This makes carbon and C, N and L look more similar in terms of total material per cell, while uracil looks radically different}
+\label{material_percell}
+\end{figure}
 
 
 
@@ -385,11 +437,11 @@ for(i in 1:length(pnonmissingOverSingles[1,])){
 @
 
 <<missingOverlap1, dependson = "mvmat", label = "missingOverlap1", echo = FALSE, include = FALSE>>=
-heatmap.2(pnonmissingOverTotal, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2red(100), dendrogram = "none")
+heatmap.2(pnonmissingOverTotal, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
 @
 
 <<missingOverlap2, dependson = "mvmat", label = "missingOverlap2", echo = FALSE, include = FALSE>>=
-heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2red(100), dendrogram = "none")
+heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
 @
 
 \begin{figure}[h!]
@@ -407,7 +459,7 @@ heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", co
 
 \begin{figure}
 <<>>=
-plot(apply(is.na(lightIC), 2, sum) ~ c(apply(lightIC, 2, sum, na.rm = TRUE) + apply(heavyIC, 2, sum, na.rm = TRUE)), col = rep(c("RED", "ORANGE", "GREEN"), each = 5), pch = 16)
+plot(apply(is.na(lightIC), 2, sum) ~ c(apply(lightIC, 2, sum, na.rm = TRUE) + apply(heavyIC, 2, sum, na.rm = TRUE)), col = as.factor(conditions$limitation), pch = 16)
 @
 \caption{Number of missing peptide values for an experiment versus limitation and TIC}
 \end{figure}
@@ -601,18 +653,21 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 
 	}
 
+
 matched_prots <- apply(mixing_fract[,1:n_prot], 2, sum) > 0.5
 
 prot_abund_final <- prot_abund[,c(1:n_prot)[matched_prots]]
+prot_abund <- prot_abund[,-c(1:n_prot)[!matched_prots]]
 prot_prec <- prot_prec[,-c(1:n_prot)[!matched_prots]]
 mixing_fract <- mixing_fract[,-c(1:n_prot)[!matched_prots]]
-
-
 
 prot_abund_final[prot_abund_final == 0] <- NA
 
 n_prot <- length(prot_abund_final[1,])	
 @
+
+
+
 
 \normalsize
 After carrying out EM, \Sexpr{sum(!matched_prots)} proteins were discarded because they overlapped ascertained proteins and had no strong solitary evidence of being present.  This leaves\Sexpr{n_prot} proteins for further analysis.  
@@ -680,9 +735,8 @@ heatmap.2(t(prot_abund_final), trace = "none", Colv = NULL, dendrogram = "row", 
 <<MVimputeCompare, dependson = "EMrun", cache = TRUE>>=
 library(missMDA)
 #determine how many significant principal components should be included based on repeated random sub-sampling validation
-pcrange <- c(2,12)
+pcrange <- c(2,18)
 npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 50)
-
 npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.01 + min(npc.compare$criterion)][1]
 
 @
@@ -690,8 +744,11 @@ npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterio
 
 
 <<MVimputeData, dependson = "MVimputeCompare", cache = TRUE>>=
-#determine the most likely values of the missing data
-impute_abund <- imputePCA(prot_abund_final, npc, scale = FALSE)$completeObs
+library(impute)
+
+#determine the most likely values of the missing data using KNN imputation
+
+impute_abund  <- impute.knn(as.matrix(prot_abund_final), k = 10)$data
 impute_abund_thresh <- impute_abund
 impute_abund_thresh[impute_abund_thresh > 5] <- 5; impute_abund_thresh[impute_abund_thresh < -5] <- -5
 @
@@ -713,14 +770,22 @@ heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row
 
 \begin{figure}
 <<PC_heatmap.>>=
-impSVD_pcs <- svd(t(impute_abund_thresh), nu = npc, nv = npc)$v
+impSVD <- svd(t(impute_abund), nu = npc, nv = npc)
+impSVD_pcs <- impSVD$v
 colnames(impSVD_pcs) <- paste("PC", c(1:npc), "")
-rownames(impSVD_pcs) <- rownames(impute_abund_thresh)
+rownames(impSVD_pcs) <- rownames(impute_abund)
 
-heatmap.2(t(impSVD_pcs), Colv = FALSE, Rowv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10), denscol = "white")
+heatmap.2(t(impSVD_pcs), Colv = FALSE, Rowv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,21), denscol = "white")
 @
 \caption{Significant principal components governing variation across conditions in relative protein abundance}
 \label{protPCHM}
+\end{figure}
+
+\begin{figure}
+<<proteinScree>>=
+plot((impSVD$d)^2 / sum((impSVD$d)^2) ~ c(1:length(impSVD$d)), pch = 16, cex = 2, col = "RED", xlab = "PC Number", ylab = "fraction of variance explained")
+@
+\caption{Scree plot: fraction of variance explained by PCs}
 \end{figure}
 
 <<PC_traces>>=
@@ -729,8 +794,9 @@ library(reshape)
 pc_plot_df <- melt(impSVD_pcs)
 colnames(pc_plot_df) <- c("condition", "PC", "value")
 pc_plot_df$cond <- factor(sapply(as.character(pc_plot_df$condition), function(x){unlist(strsplit(x, ""))[1]})) 
+levels(pc_plot_df$PC) <- paste("PC", c(1:npc))
 
-factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol =1, scales = "free_y")
+factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol =2, scales = "free_y") + scale_x_discrete("Experimental condition") + theme(axis.text.x = element_text(size = 3, face = "bold"))
 factor_plot + geom_line()
 @
 
@@ -791,11 +857,27 @@ How many metabolic genes are represented in our ascertained proteins: Using the 
 Determine the abundance of transcripts corresponding to ascertained proteins
 
 <<ModifyTransc, dependson = "MVimputeData">>=
-library("missMDA")
+library(impute)
 
 transcript_brauer <- read.delim("../brauer-microarray/Brauer_2008.pcl")
 rownames(transcript_brauer) <- transcript_brauer$SYSTEMATIC_NAME
 transcript_brauer <- transcript_brauer[-1,-c(1:3)]
+
+#remove genes with many missing values
+#impute missing values with KNN imputation (as per original Brauer paper)
+
+transcript_brauer <- transcript_brauer[rowSums(!is.na(transcript_brauer)) > 0.5*length(transcript_brauer[1,]),]
+transcript_brauer <- impute.knn(as.matrix(transcript_brauer), k = 10)$data
+n_trans_pc <- 12
+trans_svd <- svd(transcript_brauer, nu = n_trans_pc, nv = n_trans_pc)
+
+#switch reference from C0.30 (paper says C0.25, but C0.30 is correct) to P0.05 by using fitting a n_trans_pc principal component projection of the data and then taking the difference between these two conditions for each gene.  
+
+offset_projection <- trans_svd$u %*% diag(trans_svd$d[1:n_trans_pc]) %*% t(trans_svd$v[sapply(c("ClimD.3", "PlimD.05.2") , function(cond){c(1:length(transcript_brauer[1,]))[colnames(transcript_brauer) == cond]}),])
+transc_renorm_offset <- offset_projection[,2] - offset_projection[,1]
+
+transcript_brauer <- transcript_brauer - transc_renorm_offset
+
 
 transcript.condition <- as.data.frame(matrix(NA, ncol = 36, nrow = 2))
 colnames(transcript.condition) <- colnames(transcript_brauer)
@@ -804,26 +886,15 @@ limitations <- c("C", "N", "P", "S", "L", "U")
 transcript.condition[1,] <- rep(limitations, each = 6)
 transcript.condition[2,] <- rep(c(0.05, 0.10, 0.15, 0.20, 0.25, 0.30), times = 6)
 
-#barplot(table(rowSums(is.na(transcript_brauer))))
-
-#filter genes with many missing values
-transcript_brauer <- transcript_brauer[rowSums(is.na(transcript_brauer)) < length(transcript.condition[1,])*0.2,]
-
-npc.trans <- 10
-
-#impute missing values (very few)
-
-transcript_brauer_impute <- imputePCA(transcript_brauer, npc, scale = FALSE)$completeObs
-
 #missing mappings
-missing_on_array <- colnames(impute_abund_thresh)[!(colnames(impute_abund_thresh) %in% rownames(transcript_brauer_impute))]
+missing_on_array <- colnames(impute_abund)[!(colnames(impute_abund) %in% rownames(transcript_brauer))]
 length(missing_on_array)
-genes_to_compare <- colnames(impute_abund)[colnames(impute_abund) %in% rownames(transcript_brauer_impute)]
+genes_to_compare <- colnames(impute_abund)[colnames(impute_abund) %in% rownames(transcript_brauer)]
 
 #determine the relative abundance of array data by looking at the corresponding condition and imputing unobserved growth rates by drawing a line between the abundance of flanking conditions
 
 tmp <- sapply(genes_to_compare, function(match){
-	transcript_brauer_impute[rownames(transcript_brauer_impute) == match,]
+	transcript_brauer[rownames(transcript_brauer) == match,]
 	})
 transcript_brauer_reduced <- matrix(unlist(tmp), ncol = length(tmp[1,]), nrow = length(tmp[,1]))
 colnames(transcript_brauer_reduced) <- colnames(tmp); rownames(transcript_brauer_reduced) <- rownames(tmp)
@@ -842,6 +913,9 @@ prot_cond <- as.data.frame(cbind(t(prot_cond), realDR = NA), stringsAsFactors = 
 prot_cond$realDR <- sapply(1:length(prot_cond[,1]), function(cond){
 	RNAabund$actual.dr[grep(paste(prot_cond$limitation[cond], prot_cond$GR[cond], sep = ""), RNAabund$condition, ignore.case = TRUE)[1]]
 	})
+#remove invalid conditions (not the core set)
+prot_cond_bu <- prot_cond
+prot_cond <- prot_cond[!is.na(prot_cond$realDR),]
 
 DR_change_mat <- matrix(0, nrow = length(transcript.condition[1,]), ncol = length(prot_cond[,1]))
 colnames(DR_change_mat) <- rownames(prot_cond); rownames(DR_change_mat) <- colnames(transcript.condition)
@@ -867,6 +941,8 @@ heatmap.2(remapped_transc, trace = "none", Colv = NULL, dendrogram = "row", na.r
 #measure the correlation of the transcript and protein matrix
 
 shared_prot <- impute_abund[,(colnames(impute_abund) %in% rownames(transcript_brauer))] 
+shared_prot <- shared_prot[!is.na(prot_cond_bu$realDR),]
+
 shared_trans <- t(remapped_transc)
 
 #center each sample #remove when normalization factor is known
@@ -877,48 +953,60 @@ pt_corrs <- sapply(c(1:length(shared_prot[1,])), function(row){
 	cor(shared_prot[,row], shared_trans[,row], method = "spearman")
 	}); pt_corrs <- data.frame(correlation = pt_corrs)
 
-save(shared_prot, shared_trans, file = "shared_prot_trans.Rdata")
-
 @
 
 \begin{figure}
-<<echo = FALSE>>=
-gplot.hexbin(hexbin(x = shared_prot, y = shared_trans, xbins = 50), colramp = blue2red, xlab = "Protein Abundance", ylab = "Transcript Abundance")
+<<globalPTcomp, dependson = "PTcor", echo = FALSE>>=
+pool_tresh <- 2
+shared_prot_pool <- shared_prot; shared_prot_pool[shared_prot_pool < -1*pool_tresh] <- -1*pool_tresh; shared_prot_pool[shared_prot_pool > pool_tresh] <- pool_tresh
+shared_trans_pool <- shared_trans; shared_trans_pool[shared_trans_pool < -1*pool_tresh] <- -1*pool_tresh; shared_trans_pool[shared_trans_pool > pool_tresh] <- pool_tresh
+
+gplot.hexbin(hexbin(x = shared_prot_pool, y = shared_trans_pool, xbins = 25), colramp = blue2red, xlab = "Protein Abundance", ylab = "Transcript Abundance")
 @
 \caption{No global correlation between relative protein abundance and relative transcript abundance}
 \end{figure}
 
 
+
 \begin{figure}
-<<echo = FALSE>>=
+<<PTspearcorr, dependson = "PTcor", echo = FALSE>>=
 cor_plot <- ggplot(pt_corrs, aes(x = correlation))
 cor_plot + xlab("spearman correlation") + geom_histogram(colour = "white", fill = "limegreen", binwidth = 0.04)
 @
 \caption{Distribution of spearman correlations across transcript-protein pairs}
 \end{figure}
 
-<<fileDump1, dependson = "c(mvmat_red, mv_impute)", echo = FALSE>>=
+<<fileDump1, dependson = "c(mvmat_red, mv_impute, PTcor)", echo = FALSE>>=
 #file dump
 #add gene descriptions
-rownames(cond_peps) <- orf2desc(rownames(cond_peps))
-impute_abund_thresh_store <- impute_abund_thresh
-colnames(impute_abund_thresh_store) <- orf2desc(colnames(impute_abund_thresh_store))
+prot_missingVal_desc <- cond_peps
+gene_desc <- sapply(rownames(cond_peps), function(gene){try(orf2desc(unlist(strsplit(gene, split = '[/]'))[1]), silent = TRUE)})
+gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- sapply(names(gene_desc)[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})], function(gene){try(orf2desc(unlist(strsplit(gene, split = '[-/]'))[1]), silent = TRUE)})
+gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- "No Annotation"
+rownames(prot_missingVal_desc) <- unname(gene_desc)
 
-#save(cond_peps, impute_abund_thresh, file = "protMatrices.Rdata")
+imput_abund_desc <- impute_abund
+gene_desc <- sapply(colnames(imput_abund_desc), function(gene){try(orf2desc(unlist(strsplit(gene, split = '[/]'))[1]), silent = TRUE)})
+gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- sapply(names(gene_desc)[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})], function(gene){try(orf2desc(unlist(strsplit(gene, split = '[-/]'))[1]), silent = TRUE)})
+gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- "No Annotation"
+colnames(imput_abund_desc) <- unname(gene_desc)
+
 if(unq_matches_only == TRUE){
-write.table(cond_peps, file = "run_Unq/mvMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
-write.table(uq_binPepMatrix[apply(uq_binPepMatrix != 0, 1, sum) != 0,], file = "run_Deg/mvMatrixpeps.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(prot_missingVal_desc, file = "run_Unq/mvMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(uq_binPepMatrix[apply(uq_binPepMatrix != 0, 1, sum) != 0,], file = "run_Unq/mvMatrixpeps.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 
-write.table(t(impute_abund_thresh_store), file = "run_Unq/relAbundMatrix_desc.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
-write.table(t(impute_abund_thresh), file = "run_Unq/relAbundMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(imput_abund_desc), file = "run_Unq/relAbundMatrix_desc.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(impute_abund), file = "run_Unq/relAbundMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 write.table(t(shared_prot - shared_trans), file = "run_Unq/TPdiffMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+save(n_prot, prot_abund, prot_prec, conditions, file = "run_Unq/protLMfile.Rdata")
 }
 if(unq_matches_only == FALSE){
-write.table(cond_peps, file = "run_Deg/mvMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(prot_missingVal_desc, file = "run_Deg/mvMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 write.table(uq_binPepMatrix[apply(uq_binPepMatrix != 0, 1, sum) != 0,], file = "run_Deg/mvMatrixpeps.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
-write.table(t(impute_abund_thresh_store), file = "run_Deg/relAbundMatrix_desc.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
-write.table(t(impute_abund_thresh), file = "run_Deg/relAbundMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(imput_abund_desc), file = "run_Deg/relAbundMatrix_desc.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+write.table(t(impute_abund), file = "run_Deg/relAbundMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 write.table(t(shared_prot - shared_trans), file = "run_Deg/TPdiffMatrix.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
+save(n_prot, prot_abund, prot_prec, conditions, file = "run_Deg/protLMfile.Rdata")
 }
 @
 
@@ -926,7 +1014,7 @@ Determine how many clusters should be used for K-means clustering of protein abu
 <<kmeansNclust, dependson = "transHM", cache = TRUE>>=
 
 kvals <- c(2:30)
-data_clust <- stepFlexclust(t(impute_abund_thresh), k = kvals, nrep=10, verbose=FALSE, FUN = kcca)
+data_clust <- stepFlexclust(t(impute_abund), k = kvals, nrep=10, verbose=FALSE, FUN = kcca)
 
 WICSS_prot <- sapply(1:length(kvals), function(k_num){
 	cSS <- apply(getModel(data_clust, which = k_num)@cldist, 2, sum)
@@ -961,7 +1049,7 @@ if(unq_matches_only == FALSE){
 	prot_kmeans_ass <- read.delim("run_Deg/relAbundMatrix_K_G20.kgg")
 	}
 
-clusteredDat <- t(impute_abund_thresh)
+clusteredDat <- t(impute_abund)
 #make sure that this data has the same gene names as the clustered data
 
 if(!(length(union(rownames(clusteredDat), prot_kmeans_ass[,1])) == length(prot_kmeans_ass[,1])) | !(length(union(rownames(clusteredDat), prot_kmeans_ass[,1])) == length(clusteredDat[,1]))){
@@ -1041,6 +1129,7 @@ clust_plotterer + geom_point()
 @
 \caption{Trace of proteins - transcript differences; clusters (teal) and the centroid itself (orange)}
 \end{figure}
+
 
 
 

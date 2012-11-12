@@ -29,14 +29,6 @@ max_non_zero <- function(vec){
 	max(vec[vec != 0])
 	}
 
-logL <- function(prot_abund, uniquePepMean, mixing_fract, uniquePepPrecision){
-	
-	#calculate the complete data log-likelihood
-	p_est <- prot_abund %*% t(mixing_fract)
-	pos_lik <- -0.5*sum(uniquePepPrecision*(uniquePepMean - p_est)^2)
-	prior_adj <- sum(mixing_fract*prior_mat_likadj)
-	pos_lik + prior_adj
-	}
 
 max_non_NA <- function(vec){
 	max(vec[!is.na(vec)])
@@ -88,6 +80,8 @@ STDvar_fit
 
 plot_protein_lattice <- function(prots, possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, num.cols = 5){
 
+
+
 mix_frac_set <- c()
 all_data_bind <- NULL
 for(prot in prots){
@@ -113,7 +107,7 @@ for(prot in prots){
 	
 	xpos <- (1:n_c) %*% t(rep(1, n_pp_plot)) + rep(1, n_c) %*% t(((1:n_pp_plot)-1)*n_c + ((1:n_pp_plot)-1)*2)
 	all_data <- data.frame(abund = c(t(prot_abundM)), abundMax = c(t(prot_max)), abundMin = c(t(prot_min)), xpos = c(xpos), color_fact = c(t(prot_cols)), stringsAsFactors = FALSE)
-	all_data_bind <- rbind(all_data_bind, cbind(proteinNumber = prot, all_data))
+	all_data_bind <- rbind(all_data_bind, cbind(proteinNumber = colnames(prot_abund)[prot], all_data))
 }
 all_data_bind$proteinNumber <- as.factor(all_data_bind$proteinNumber)
 
@@ -172,83 +166,42 @@ print(plotter + geom_linerange()
 }
 
 
-#from Cookbook for R
-# Multiple plot function
-#
-# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
-# - cols:   Number of columns in layout
-# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
-#
-# If the layout is something like matrix(c(1,2,3,3), nrow=2, by.row=TRUE),
-# then plot 1 will go in the upper left, 2 will go in the upper right, and
-# 3 will go all the way across the bottom.
-#
-multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
-  require(grid)
 
-  # Make a list from the ... arguments and plotlist
-  plots <- c(list(...), plotlist)
+psite_table <- function(pepSummary, phospho_sites_red){
 
-  numPlots = length(plots)
-
-  # If layout is NULL, then use 'cols' to determine layout
-  if (is.null(layout)) {
-    # Make the panel
-    # ncol: Number of columns of plots
-    # nrow: Number of rows needed, calculated from # of cols
-    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
-                    ncol = cols, nrow = ceiling(numPlots/cols))
-  }
-
- if (numPlots==1) {
-    print(plots[[1]])
-
-  } else {
-    # Set up the page
-    grid.newpage()
-    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
-
-    # Make each plot, in the correct location
-    for (i in 1:numPlots) {
-      # Get the i,j matrix positions of the regions that contain this subplot
-      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
-
-      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
-                                      layout.pos.col = matchidx$col))
-    }
-  }
-}
-
+	phospho_match <- sapply(c(1:length(pepSummary[,1])), function(pep){
+		#for(pep in c(1:length(pepSummary[,1]))){
+		
+		known_prot_mods <- phospho_sites_red[phospho_sites_red$A %in% unlist(strsplit(pepSummary$prot_matches[pep], "/")),]
+		if(length(known_prot_mods[,1]) != 0){
+			match_ev <- sapply(1:length(known_prot_mods[,1]), function(p_site){
+				#find the position of the relevent peptide in the matched protein: compare this interval ot the phosphosites
+				pep_pos <- str_locate(known_prot_mods[p_site,3], tolower(pepSummary$peptide[pep]))
+				if(is.na(pep_pos[1,1])){
+					NA
+					}else{
+						pep_interval <- str_locate(known_prot_mods[p_site,3], tolower(pepSummary$peptide[pep]))
+						if(sub('[A-Za-z]+', '', known_prot_mods[p_site,2]) >= pep_interval[1] & sub('[A-Za-z]+', '', known_prot_mods[p_site,2]) <= pep_interval[2]){
+							TRUE
+							}else{
+								FALSE
+								}
+						}
+			})
+			data.frame(nTRUE = sum(match_ev[!is.na(match_ev)]), nFALSE = sum(match_ev[!is.na(match_ev)] == FALSE), nNA = sum(is.na(match_ev)))
+			}else{
+				data.frame(nTRUE = 0, nFALSE = 0, nNA = 0)
+				}
+		})
+	
+	}
 
 
 knownPsites <- function(pepSummary, phospho_sites_red){
 
-#For a data.frame with the protein matches to a given peptide, go through peptides 1 by 1 and determine all of the phospho-sites for proteins matching that peptide.  If the peptide is known to be phosphorylated return TRUE and then count up the number of matches
-
-phospho_match <- sapply(c(1:length(pepSummary[,1])), function(pep){
-	#for(pep in c(1:length(pepSummary[,1]))){
+	#For a data.frame with the protein matches to a given peptide, go through peptides 1 by 1 and determine all of the phospho-sites for proteins matching that peptide.  If the peptide is known to be phosphorylated return TRUE and then count up the number of matches
 	
-	known_prot_mods <- phospho_sites_red[phospho_sites_red$A %in% unlist(strsplit(pepSummary$prot_matches[pep], "/")),]
-	if(length(known_prot_mods[,1]) != 0){
-		match_ev <- sapply(1:length(known_prot_mods[,1]), function(p_site){
-			#find the position of the relevent peptide in the matched protein: compare this interval ot the phosphosites
-			pep_pos <- str_locate(known_prot_mods[p_site,3], tolower(pepSummary$peptide[pep]))
-			if(is.na(pep_pos[1,1])){
-				NA
-				}else{
-					pep_interval <- str_locate(known_prot_mods[p_site,3], tolower(pepSummary$peptide[pep]))
-					if(sub('[A-Za-z]+', '', known_prot_mods[p_site,2]) >= pep_interval[1] & sub('[A-Za-z]+', '', known_prot_mods[p_site,2]) <= pep_interval[2]){
-						TRUE
-						}else{
-							FALSE
-							}
-					}
-		})
-		data.frame(nTRUE = sum(match_ev[!is.na(match_ev)]), nFALSE = sum(match_ev[!is.na(match_ev)] == FALSE), nNA = sum(is.na(match_ev)))
-		}else{
-			data.frame(nTRUE = 0, nFALSE = 0, nNA = 0)
-			}
-	})
+	phospho_match <- psite_table(pepSummary, phospho_sites_red)
 	
 	phospho_match <- matrix(unlist(t(phospho_match)), ncol = 3)	
 	table(phospho_match[,1] != 0)
