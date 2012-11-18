@@ -86,10 +86,13 @@ if(generate_plots == TRUE){
 STDvar_fit	
 }
 
-plot_protein_lattice <- function(prots, possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, num.cols = 5){
+
+plot_protein_lattice <- function(prots, possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = FALSE, phospho_lib = NULL, num.cols = 5){
 
 #Plot a lattice of protein relative abundances as well as the peptides that match it
-
+  
+require(stringr)  
+  
 mix_frac_set <- c()
 all_data_bind <- NULL
 abline_df <- NULL
@@ -107,6 +110,20 @@ for(prot in prots){
 	n_pp_plot <- length(prot_abundM[1,])
 	n_c <- length(prot_abundM[,1])
 	
+  if(label_phospho){
+    #search for phospho-sites and label
+  	psite_test_mat <- data.frame(peptide = colnames(uniquePepPrecision)[c(mixed_match,div_match)], prot_matches = colnames(prot_abund)[prot], nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
+    	for(pep in 1:length(psite_test_mat[,1])){
+    	  psite_test_mat$nS[pep] <- length(grep("S", unlist(strsplit(psite_test_mat$peptide[pep], ""))))
+    	  psite_test_mat$nR[pep] <- length(grep("R", unlist(strsplit(psite_test_mat$peptide[pep], ""))))
+    	  psite_test_mat$nY[pep] <- length(grep("Y", unlist(strsplit(psite_test_mat$peptide[pep], ""))))
+      }
+  	
+  	Pmods <- c("No P-site known", ifelse(knownPtest(psite_test_mat, phospho_lib), "Known phospho-site", "No P-site known"))  
+  	PmodMat <- matrix(rep(Pmods, times = n_c), ncol = n_pp_plot, byrow = TRUE)
+  }
+  
+  
 	ncolors <- 100
 	color_fac <- round(mixing_fract[mixed_match, prot], length(ncolors)+1)
 	mix_frac_set <- union(mix_frac_set, color_fac)
@@ -118,8 +135,11 @@ for(prot in prots){
 	
   xpos <- (1:n_c) %*% t(rep(1, n_pp_plot)) + rep(1, n_c) %*% t(((1:n_pp_plot)-1)*n_c) + sapply(rep(conditions$limitation, each = n_pp_plot), function(offset){cond_offset$offset[cond_offset$limitation == offset]})
   all_data <- data.frame(abund = c(t(prot_abundM)), abundMax = c(t(prot_max)), abundMin = c(t(prot_min)), xpos = c(xpos), color_fact = c(t(prot_cols)), stringsAsFactors = FALSE)
-	all_data_bind <- rbind(all_data_bind, cbind(proteinNumber = colnames(prot_abund)[prot], all_data))
-  abline_df <- rbind(abline_df, data.frame(xpos = xpos[cumsum(rle(rep(conditions$limitation, each = n_pp_plot))$lengths[-length(cond_offset[,1])])]+1, proteinNumber = colnames(prot_abund)[prot], stringsAsFactors = FALSE))
+	if(label_phospho){
+	  all_data <- cbind(all_data, phospho_sites = c(t(PmodMat)))
+    }
+  all_data_bind <- rbind(all_data_bind, cbind(proteinNumber = colnames(prot_abund)[prot], all_data))
+  abline_df <- rbind(abline_df, data.frame(xpos = xpos[cumsum(rle(rep(conditions$limitation, each = n_pp_plot))$lengths[-length(cond_offset[,1])])]+2, proteinNumber = colnames(prot_abund)[prot], stringsAsFactors = FALSE))
 	}
 all_data_bind$proteinNumber <- as.factor(all_data_bind$proteinNumber)
 abline_df$proteinNumber <- as.factor(abline_df$proteinNumber)
@@ -131,6 +151,7 @@ all_data_bind$color_fact <- as.factor(all_data_bind$color_fact)
 
 
 plotter <- ggplot(all_data_bind, aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact))
+if(label_phospho){plotter <- plotter + aes(linetype = factor(phospho_sites)) + scale_linetype_manual(values = c("No P-site known" = 'solid', "Known phospho-site" = 'dotted')) + labs(linetype = "Phosphorylation Status")}
 plotter <- plotter + xlab("Sample * Peptide") + ylab("Relative Abundance") + theme(axis.ticks = element_blank(), axis.text.x = element_blank(), panel.grid.minor=element_blank(), panel.grid.major=element_blank())
 plotter <- plotter + labs(colour = "Color label")
 plotter <- plotter + facet_wrap( ~ proteinNumber, ncol = num.cols, scales = "free")
@@ -221,6 +242,12 @@ knownPsites <- function(pepSummary, phospho_sites_red){
 	table(phospho_match[,1] != 0)
 	}
 
+knownPtest <- function(pepSummary, phospho_sites_red){
+  
+  #For a data.frame with peptides and the associated protein, determine which are known phospho-sites (return T)
+  pSiteTest <- psite_table(pepSummary, phospho_sites_red)
+  pSiteTest[1,] != 0
+  }
 
 bs_tstat <- function(specAbund, specPrec, n_bs = 100, FDR_desired = 0.05){
 

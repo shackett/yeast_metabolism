@@ -263,11 +263,15 @@ To correct for differences in protein concentrations between samples, the relati
 \begin{align}
 \text{Initial loading disparity}&\notag\\
 \delta^{o}_{j} &= log_{2}(\text{med}[\frac{P^{L}_{j}}{P^{H}_{j}}])\notag\\
-\text{Desired concentration offset}&\notag\\
-\delta_{j} &= log_{2}([protein^{L}_{j}] - [protein^{H}_{j}])\notag\\
-\Delta_{j} &= \delta_{j}  - \delta^{o}_{j}\notag\\
-X^{*}_{ij} &= X_{ij} + \Delta_{j}\label{normalizeC}
+%\text{Desired concentration offset}&\notag\\
+%\delta_{j} &= log_{2}([protein^{L}_{j}] - [protein^{H}_{j}])\notag\\
+%\Delta_{j} &= \delta_{j}  - \delta^{o}_{j}\notag\\
+%X^{*}_{ij} &= X_{ij} + \Delta_{j}\label{normalizeC}
+X^{*}_{ij} &= X_{ij} - \delta^{o}_{j}\label{normalizeC}
 \end{align}
+
+
+
 
 <<normalizeProtAbund, dependson = "EMprep", cache = TRUE>>=
 load('../BulkComposition/protSpecQuantOut.Rdata')
@@ -774,7 +778,7 @@ heatmap.2(t(impute_abund_thresh), trace = "none", Colv = NULL, dendrogram = "row
 <<PC_heatmap, cache = TRUE>>=
 impSVD <- svd(t(impute_abund), nu = npc, nv = npc)
 impSVD_pcs <- impSVD$v
-colnames(impSVD_pcs) <- paste("PC", c(1:npc), "")
+colnames(impSVD_pcs) <- paste("PC", c(1:npc))
 rownames(impSVD_pcs) <- rownames(impute_abund)
 
 heatmap.2(t(impSVD_pcs), Colv = FALSE, Rowv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,21), denscol = "white")
@@ -796,7 +800,7 @@ library(reshape)
 pc_plot_df <- melt(impSVD_pcs)
 colnames(pc_plot_df) <- c("condition", "PC", "value")
 pc_plot_df$cond <- factor(sapply(as.character(pc_plot_df$condition), function(x){unlist(strsplit(x, ""))[1]})) 
-levels(pc_plot_df$PC) <- paste("PC", c(1:npc))
+pc_plot_df$PC <- factor(pc_plot_df$PC, levels = paste("PC", c(1:npc)))
 
 factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol =2, scales = "free_y") + scale_x_discrete("Experimental condition") + theme(axis.text.x = element_text(size = 3, face = "bold"))
 factor_plot + geom_line()
@@ -812,23 +816,24 @@ possibleMap <- Matrix(prior_mat_logical)
 @
 
 
+
 \begin{figure}[h!]
 <<protPlot1, dependson = "EMprep", cache = TRUE>>=
-plot_protein_lattice(c(1:5), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, 1)
+plot_protein_lattice(c(1:5), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, 1)
 @
 \caption{relative protein abundance and peptide trends contributing to protein trend}
 \end{figure}
 
 \begin{figure}[h!]
 <<protPlot2, dependson = "EMprep", cache = TRUE>>=
-plot_protein_lattice(c(11:26), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, 4)
+plot_protein_lattice(c(11:26), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, 2)
 @
 \caption{relative protein abundance and peptide trends contributing to protein trend}
 \end{figure}
 
 \begin{figure}[h!]
 <<protPlot3, dependson = "EMprep">>=
-plot_protein_lattice(c(27,32,42,114,183,206,220,222,229,241,264,308), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, 4)
+plot_protein_lattice(c(27,32,42,114,183,206,220,222,229,241,264,308), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, 2)
 @
 \caption{Putative PTMs}
 \end{figure}
@@ -1114,16 +1119,26 @@ clust_plotterer + geom_point()
 \begin{figure}[h!]
 \includegraphics[scale = 0.5]{run_Deg/prot_var_FIRE.pdf}
 \caption{FIRE output, searching for DNA regulatory motif enrichment in protein-abundance clusters}
+\label{prot_FIRE}
 \end{figure}
+
+\begin{figure}[h!]
+\includegraphics[scale = 0.5]{run_Deg/trans_FIRE.pdf}
+\caption{FIRE output, searching for DNA regulatory motif enrichment in transcript-abundance clusters}
+\label{prot_FIRE}
+\end{figure}
+
 
 \begin{figure}[h!]
 \includegraphics[scale = 0.5]{run_Deg/prot_var_iPAGE_GO.pdf}
 \caption{iPAGE-GO output, performing gene-set enrichment analysis on protein-abundance clusters}
+\label{prot_GO}
 \end{figure}
 
 \begin{figure}[h!]
 \includegraphics[scale = 0.5]{run_Deg/prot_var_iPAGE_KEGG.pdf}
 \caption{iPAGE-KEGG output, searching for enrichment of metabolic processes in protein-abundance clusters}
+\label{prot_KEGG}
 \end{figure}
 
 
@@ -1176,24 +1191,28 @@ clust_plotterer + geom_point()
 \begin{figure}[h!]
 \includegraphics[scale = 0.5]{run_Deg/TPdiff_FIRE.pdf}
 \caption{FIRE output, searching for DNA regulatory motif enrichment in protein-transcript difference clusters}
+\label{TP_FIRE}
 \end{figure}
 
 \vspace{-40mm}
 \begin{figure}[h!]
 \includegraphics[scale = 0.4]{run_Deg/TPdiff_FIREpro.pdf}
 \caption{FIRE-prot output, searching for enrichment of amino acid motifs in the primary sequence of proteins within protein-transcript difference clusters}
+\label{TP_FIREpro}
 \end{figure}
 
 \vspace{-40mm}
 \begin{figure}[h!]
 \includegraphics[scale = 0.5]{run_Deg/TPdiff_iPAGE_GO.pdf}
 \caption{iPAGE-GO output, performing gene-set enrichment analysis on protein-transcript difference clusters}
+\label{TP_GO}
 \end{figure}
 
 \vspace{-40mm}
 \begin{figure}[h!]
 \includegraphics[scale = 0.5]{run_Deg/TPdiff_iPAGE_KEGG.pdf}
 \caption{iPAGE-KEGG output, searching for enrichment of metabolic processes in protein-abundance clusters}
+\label{TP_KEGG}
 \end{figure}
 
 
@@ -1255,7 +1274,9 @@ xtable(protRegressions$divpep_Fstat$FDR_stats, display = c("s", "f", "g", "d"), 
 
 \section*{Interesting notes and representative examples}
 
-
-
-
+\begin{itemize}
+\item[YGL009C: LEU1] - up in leucine limitation and one-peptide is down (consistent with an increase in phosphorylation)
+\item[YGR253C: PUP2] - 20S proteasome involved in ubiquitin-dependent catabolism - one peptide is very high in low Nitrogen-lim and high in Leucine-lim.
+\item[on FIRE] FIRE detects a substantial number of transcriptional regulatory motifs in the proteomics (figure \ref{prot_FIRE}) and transcriptional datasets.  This is contrasted with paucity of protein motifs (none).  This trend is reversed when looking at patterns in the ratio of Protein/Transcript, where there are few transcriptional motifs (figure \ref{TP_FIRE}) and many protein motifs (figure \ref{TP_FIREpro}). 	
+\end{itemize}
 \end{document}  
