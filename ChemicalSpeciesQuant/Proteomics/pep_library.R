@@ -20,7 +20,7 @@ write.output <- function(tab, output){
   #rownames go to 1st column, 1st column name is ``Gene''
   
   tab <- data.frame(Gene = rownames(tab), tab, stringsAsFactors = FALSE)
-  write.table(tab, file = output, sep = "\t", row.names = FALSE, col.names = TRUE)
+  write.table(tab, file = output, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 }
 
 

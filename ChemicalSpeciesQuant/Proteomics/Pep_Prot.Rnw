@@ -20,13 +20,17 @@
 \usepackage[scaled]{helvet}
 \usepackage{multicol}
 \usepackage{upquote}
+\usepackage{tikz}
+
+\newcommand*\circled[1]{\tikz[baseline=(char.base)]{
+            \node[shape=circle,draw,inner sep=2pt] (char) {#1};}}
 
 \Sexpr{opts_chunk$set(tidy=TRUE, message=FALSE)}
 <<echo=FALSE,results='hide'>>=
 options(width=80)
 library(knitr)
 opts_knit$set(progress = TRUE, verbose = TRUE)
-opts_chunk$set(echo = TRUE)
+opts_chunk$set(echo = FALSE)
 
 
 setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
@@ -829,6 +833,9 @@ plot_protein_lattice(c(27,32,42,114,183,206,220,222,229,241,264,308), possibleMa
 \caption{Putative PTMs}
 \end{figure}
 
+
+\section*{Metabolic proteins}
+
 <<metGenerep, dependson = "EMprep", results = "asis", cache = TRUE>>=
 
 rxnFile <- read.delim('~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/rxn_yeast.tsv', stringsAsFactors = FALSE)
@@ -849,18 +856,14 @@ print(xtable(met_gene_overlap, caption = "Investigating the overlap of metabolic
 
 How many metabolic genes are represented in our ascertained proteins: Using the Yeast consensus metabolic reconstruction (version 5), \Sexpr{length(met_genes)} genes involved in some reaction were assembled.  
 
+\clearpage
 
-
-
-
-
-
-
+\section*{Comparing protein and transcript trends}
 
 
 Determine the abundance of transcripts corresponding to ascertained proteins
 
-<<ModifyTransc, dependson = "MVimputeData", cache = TRUE>>=
+<<ModifyTransc, dependson = "MVimputeData", cache = TRUE, message = FALSE>>=
 library(impute)
 
 transcript_brauer <- read.delim("../brauer-microarray/Brauer_2008.pcl")
@@ -961,6 +964,8 @@ pt_corrs <- sapply(c(1:length(shared_prot[1,])), function(row){
 
 \begin{figure}
 <<globalPTcomp, dependson = "PTcor", echo = FALSE>>=
+library(reshape)
+
 pool_tresh <- 4
 shared_prot_pool <- shared_prot; shared_prot_pool[shared_prot_pool < -1*pool_tresh] <- -1*pool_tresh; shared_prot_pool[shared_prot_pool > pool_tresh] <- pool_tresh
 shared_trans_pool <- shared_trans; shared_trans_pool[shared_trans_pool < -1*pool_tresh] <- -1*pool_tresh; shared_trans_pool[shared_trans_pool > pool_tresh] <- pool_tresh
@@ -988,7 +993,7 @@ cor_plot + xlab("spearman correlation") + geom_histogram(colour = "white", fill 
 \caption{Distribution of spearman correlations across transcript-protein pairs}
 \end{figure}
 
-<<fileDump1, dependson = "c(mvmat_red, mv_impute, PTcor)", echo = FALSE, cache = TRUE>>=
+<<fileDump1, dependson = "c(mvmat_red, mv_impute, PTcor)", echo = TRUE, cache = TRUE, warning = FALSE>>=
 #file dump
 #add gene descriptions
 prot_missingVal_desc <- cond_peps
@@ -1002,6 +1007,9 @@ gene_desc <- sapply(colnames(imput_abund_desc), function(gene){try(orf2desc(unli
 gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- sapply(names(gene_desc)[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})], function(gene){try(orf2desc(unlist(strsplit(gene, split = '[-/]'))[1]), silent = TRUE)})
 gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- "No Annotation"
 colnames(imput_abund_desc) <- unname(gene_desc)
+
+impute_abund_names <- colnames(impute_abund)
+colnames(impute_abund) <- unname(sapply(colnames(impute_abund), function(x){strsplit(x, split = "/")[[1]][1]}))
 
 if(unq_matches_only == TRUE){
 write.output(prot_missingVal_desc, "run_Unq/mvMatrix.tsv")
@@ -1017,6 +1025,8 @@ write.output(uq_binPepMatrix[!(apply(uq_binPepMatrix != 0, 1, sum) %in% c(0,leng
 write.output(t(imput_abund_desc), "run_Deg/relAbundMatrix_desc.tsv")
 write.output(t(impute_abund), "run_Deg/relAbundMatrix.tsv")
 write.output(t(shared_prot - shared_trans), "run_Deg/TPdiffMatrix.tsv")
+write.output(t(shared_trans), "run_Deg/Trans_shared.tsv")
+write.output(transcript_brauer, "run_Deg/Trans_all.tsv")
 save(n_prot, prot_abund, prot_prec, conditions, file = "run_Deg/protLMfile.Rdata")
 }
 @
@@ -1093,13 +1103,29 @@ clust_plot_df1 <- data.frame(condition = c(clust_xval), abundance = c(clust_yval
 
 @
 
-\begin{figure}
+\begin{figure}[h!]
 <<protclustplot, dependson = "prot_clust", echo = FALSE>>=
 clust_plotterer <- ggplot(clust_plot_df1, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
 clust_plotterer + geom_point()
 @
 \caption{Trace of proteins in a cluster (teal) and the centroid itself (orange)}
 \end{figure}
+
+\begin{figure}[h!]
+\includegraphics[scale = 0.5]{run_Deg/prot_var_FIRE.pdf}
+\caption{FIRE output, searching for DNA regulatory motif enrichment in protein-abundance clusters}
+\end{figure}
+
+\begin{figure}[h!]
+\includegraphics[scale = 0.5]{run_Deg/prot_var_iPAGE_GO.pdf}
+\caption{iPAGE-GO output, performing gene-set enrichment analysis on protein-abundance clusters}
+\end{figure}
+
+\begin{figure}[h!]
+\includegraphics[scale = 0.5]{run_Deg/prot_var_iPAGE_KEGG.pdf}
+\caption{iPAGE-KEGG output, searching for enrichment of metabolic processes in protein-abundance clusters}
+\end{figure}
+
 
 <<tn_clust>>=
 
@@ -1117,6 +1143,7 @@ if(!(length(union(rownames(clusteredDat), pt_kmeans_ass[,1])) == length(pt_kmean
 	print("mismatched clusters")
 	}
 
+n_c <- length(clusteredDat[1,])
 nclust <- length(unique(pt_kmeans_ass$GROUP))
 Centroids <- matrix(NA, ncol = n_c, nrow = nclust)
 
@@ -1145,6 +1172,88 @@ clust_plotterer + geom_point()
 @
 \caption{Trace of proteins - transcript differences; clusters (teal) and the centroid itself (orange)}
 \end{figure}
+
+\begin{figure}[h!]
+\includegraphics[scale = 0.5]{run_Deg/TPdiff_FIRE.pdf}
+\caption{FIRE output, searching for DNA regulatory motif enrichment in protein-transcript difference clusters}
+\end{figure}
+
+\vspace{-40mm}
+\begin{figure}[h!]
+\includegraphics[scale = 0.4]{run_Deg/TPdiff_FIREpro.pdf}
+\caption{FIRE-prot output, searching for enrichment of amino acid motifs in the primary sequence of proteins within protein-transcript difference clusters}
+\end{figure}
+
+\vspace{-40mm}
+\begin{figure}[h!]
+\includegraphics[scale = 0.5]{run_Deg/TPdiff_iPAGE_GO.pdf}
+\caption{iPAGE-GO output, performing gene-set enrichment analysis on protein-transcript difference clusters}
+\end{figure}
+
+\vspace{-40mm}
+\begin{figure}[h!]
+\includegraphics[scale = 0.5]{run_Deg/TPdiff_iPAGE_KEGG.pdf}
+\caption{iPAGE-KEGG output, searching for enrichment of metabolic processes in protein-abundance clusters}
+\end{figure}
+
+
+\clearpage
+
+\section*{Looking for condition and growth-rate specific changes in protein abundance}
+
+<<regSumImport>>=
+#using the protLMfile files saved, cond_trend_regressions.R is run
+
+load("protRegressions.Rdata")
+n_bs_t <- 5000
+n_bs_f <- 1000
+FDR_desired <- 0.05
+@
+
+
+Two types of models were fitted to each protein's relative abundance across the 25 conditions.  
+
+\textcolor{blue}{\circled{1}} \textbf{Fitting a condition-specific slope and intercept and testing whether $\beta/\alpha$ != 0 using a pivotal t-statistic approach.}
+
+\begin{equation}
+y_{i} = \beta^c \cdot DR_{i} + \alpha^c + \epsilon_{i}
+\end{equation}
+
+<<protSum1, dependson = "regSumImport", results = "asis", echo = FALSE>>=
+xtable(protRegressions$prot_tstat$FDR_stats, display = c("s", "f", "g", "d"), digits = 3, caption = "Protein variation analyzed with t-statistics, discovery summary, showing the number of coefficients with a non-zero effect size")
+@
+
+\textcolor{blue}{\circled{2}} \textbf{An F-statistic based approach to compare nested models}
+
+Test condition-specific differences in offset (one condition has a different offset from all others)
+\begin{align}
+H_{1} &= \beta \cdot DR_{i} + \alpha^{c/-c} + \epsilon_{i}\\
+H_{0} &= \beta \cdot DR_{i} + \alpha + \epsilon_{i}
+\end{align}
+
+Test for condition-specific slope (one condition has a different slope from all others)
+\begin{align}
+H_{1} &= \beta^{c/-c} \cdot DR_{i} + \alpha^c + \epsilon_{i}\\
+H_{0} &= \beta \cdot DR_{i} + \alpha^c + \epsilon_{i}
+\end{align}
+
+<<protSum2, dependson = "regSumImport", results = "asis", echo = FALSE>>=
+xtable(protRegressions$prot_Fstat$FDR_stats, display = c("s", "f", "g", "d"), digits = 3, caption = "Protein variation analyzed with F-statistics, discovery summary, showing the number of coefficients with a non-zero effect size")
+@
+
+\clearpage
+The same procedure was used on the divergent peptides
+
+<<protSum3, dependson = "regSumImport", results = "asis", echo = FALSE>>=
+xtable(protRegressions$divpep_tstat$FDR_stats, display = c("s", "f", "g", "d"), digits = 3, caption = "Divergent peptide variation analyzed with t-statistics, discovery summary, showing the number of coefficients with a non-zero effect size")
+@
+
+<<protSum4, dependson = "regSumImport", results = "asis", echo = FALSE>>=
+xtable(protRegressions$divpep_Fstat$FDR_stats, display = c("s", "f", "g", "d"), digits = 3, caption = "Divergent peptide variation analyzed with F-statistics, discovery summary, showing the number of coefficients with a non-zero effect size")
+@
+
+
+\section*{Interesting notes and representative examples}
 
 
 
