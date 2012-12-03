@@ -1,5 +1,5 @@
 \documentclass[12pt]{article}
-\usepackage[left=0.95in,top=0.95in,right=0.95in,bottom=0.95in,nohead]{geometry}
+\usepackage[left=0.5in,top=0.5in,right=0.5in,bottom=0.5in,nohead]{geometry}
 \usepackage{geometry}                % See geometry.pdf to learn the layout options. There are lots.
 \geometry{a4paper}                   % ... or a4paper or a5paper or ... 
 \usepackage{wrapfig}	%in-line figures
@@ -26,9 +26,10 @@
             \node[shape=circle,draw,inner sep=2pt] (char) {#1};}}
 
 \Sexpr{opts_chunk$set(tidy=TRUE, message=FALSE)}
-<<echo=FALSE,results='hide'>>=
+<<setup, echo=FALSE,results='hide'>>=
 options(width=80)
 library(knitr)
+
 opts_knit$set(progress = TRUE, verbose = TRUE)
 opts_chunk$set(echo = FALSE)
 
@@ -42,7 +43,9 @@ matrix_fxn()
 blackOrange <- function(n){colorpanel(n, "black", "black", "orange")}
 greenBlackRed <- function(n){colorpanel(n, "green", "black", "red")}
 
+library(ggplot2)
 library(xtable)
+
 @
 
 
@@ -467,7 +470,7 @@ heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", co
 <<missingPepbyCond, cache = TRUE>>=
 plot(apply(is.na(lightIC), 2, sum) ~ c(apply(lightIC, 2, sum, na.rm = TRUE) + apply(heavyIC, 2, sum, na.rm = TRUE)), col = as.factor(conditions$limitation), pch = 16)
 @
-\caption{Number of missing peptide values for an experiment versus limitation and TIC}
+\caption{Number of missing peptide values for an experiment versus limitation and TIC.  The point in the top-right is measured on an Orbi-trap.  Its large number of missing peptides, equivalent to the TOF suggests that the large number of missing peptides under phosphate limitation is due to blocking effects or biology rather than the Q-TOF not behaving appropriately during the first run}
 \end{figure}
 
 
@@ -693,7 +696,7 @@ xtable(table(div_max), caption = "Number of peptides not-conforming to some gene
 
 \begin{figure}
 <<EMlikplot, echo = FALSE>>=
-plot(whole_data_logL[-1], col = ifelse(c(2:length(whole_data_logL)) <= initial_convergence, "ORANGE", "BLACK"), pch = 16)
+plot(whole_data_logL[-1], col = ifelse(c(2:length(whole_data_logL)) <= initial_convergence, "BLACK", "ORANGE"), pch = 16)
 @
 \caption{Log-likelihood of EM.  First stage (black) allows for a peptide to partially match proteins and partially diverge from the trend, the second stage (orange) thresholds such that a peptide is entirely accounted for by protein trends or entirely departs from plausible trends}
 \end{figure}
@@ -818,22 +821,27 @@ possibleMap <- Matrix(prior_mat_logical)
 
 
 \begin{figure}[h!]
-<<protPlot1, dependson = "EMprep", cache = TRUE>>=
-plot_protein_lattice(c(1:5), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, 1)
+<<protPlot1, dependson = c("setup", "EMprep"), warning = FALSE>>=
+source("pep_library.R")
+set.seed(1234)
+gene_samples <- sample(c(1:n_prot), 20)
+plotting_names <- orf2common(colnames(prot_abund_final))
+
+plot_protein_lattice(gene_samples[1:5], possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 1)
 @
 \caption{relative protein abundance and peptide trends contributing to protein trend}
 \end{figure}
 
 \begin{figure}[h!]
-<<protPlot2, dependson = "EMprep", cache = TRUE>>=
-plot_protein_lattice(c(11:26), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, 2)
+<<protPlot2, dependson = c("setup", "EMprep"), warning = FALSE>>=
+plot_protein_lattice(gene_samples[6:20], possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 3)
 @
 \caption{relative protein abundance and peptide trends contributing to protein trend}
 \end{figure}
 
 \begin{figure}[h!]
-<<protPlot3, dependson = "EMprep">>=
-plot_protein_lattice(c(27,32,42,114,183,206,220,222,229,241,264,308), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, 2)
+<<protPlot3, dependson = c("setup", "EMprep"), warning = FALSE>>=
+plot_protein_lattice(c(27,32,42,114,183,206,220,222,229,241,264,308), possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 3)
 @
 \caption{Putative PTMs}
 \end{figure}
@@ -967,6 +975,17 @@ pt_corrs <- sapply(c(1:length(shared_prot[1,])), function(row){
 
 @
 
+\begin{figure}[h!]
+<<pairedTPheatmap, dependson = "PTcor", echo = TRUE>>=
+n_c_shared <- length(shared_trans[,1])
+jointTPdf <- t(rbind(shared_trans, shared_prot))[,rep(1:n_c_shared, each = 2) + rep(c(0,n_c_shared), times = n_c_shared)]
+  
+heatmap.2(jointTPdf, trace = "none", Colv = NULL, dendrogram = "row", na.rm = TRUE, na.color = "white", col = greenBlackRed(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "white", breaks = seq(-1*max(range(impute_abund)), max(range(impute_abund)), by = max(range(impute_abund))/250), ColSideColors = rep(c("BLUE", "YELLOW"), times = n_c_shared), main = "paired transcript and protein relative abundance")
+@
+\caption{Relative abundance for genes with a an unambiguous protein measured and the corresponding transcriptional changes.  Adjacent columns are pairs, with column labels reflecting: \textcolor{blue}{transcriptional changes} and \textcolor{yellow}{protein changes}.}
+\end{figure}
+
+
 \begin{figure}
 <<globalPTcomp, dependson = "PTcor", echo = FALSE>>=
 library(reshape)
@@ -992,6 +1011,7 @@ PTscatter_plotter + geom_hex()
 
 \begin{figure}
 <<PTspearcorr, dependson = "PTcor", echo = FALSE>>=
+
 cor_plot <- ggplot(pt_corrs, aes(x = correlation))
 cor_plot + xlab("spearman correlation") + geom_histogram(colour = "white", fill = "limegreen", binwidth = 0.04)
 @
@@ -1125,7 +1145,7 @@ clust_plotterer + geom_point()
 \begin{figure}[h!]
 \includegraphics[scale = 0.5]{run_Deg/trans_FIRE.pdf}
 \caption{FIRE output, searching for DNA regulatory motif enrichment in transcript-abundance clusters}
-\label{prot_FIRE}
+\label{trans_FIRE}
 \end{figure}
 
 
@@ -1271,6 +1291,74 @@ xtable(protRegressions$divpep_tstat$FDR_stats, display = c("s", "f", "g", "d"), 
 xtable(protRegressions$divpep_Fstat$FDR_stats, display = c("s", "f", "g", "d"), digits = 3, caption = "Divergent peptide variation analyzed with F-statistics, discovery summary, showing the number of coefficients with a non-zero effect size")
 @
 
+\subsection*{Investigating specific examples of protein patterns departing from transcriptional patterns}
+
+\textbf{Starting by looking at the best versus the worst, in terms of protein(peptide) patterns}
+
+<<badCorrCompare1, dependson = "PTcor">>=
+dispartecors <- sort(pt_corrs$correlation)[c(1:10,length(pt_corrs[,1]):(length(pt_corrs[,1]) - 9))]
+gene_index <- order(pt_corrs$correlation)[c(1:10,length(pt_corrs[,1]):(length(pt_corrs[,1]) - 9))]
+
+prot_abundMatchedIndex <- sapply(colnames(shared_prot)[gene_index], function(match_it){c(1:length(prot_abund_final[1,]))[colnames(prot_abund_final) == match_it]})
+
+@
+
+\begin{figure}[h!]
+<<dispProtPlot, dependson = c("badCorrCompare1", "protPlot1"), warning = FALSE>>=
+source("pep_library.R")
+
+plot_protein_lattice(prot_abundMatchedIndex, possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 5)
+@
+\caption{relative protein abundance and peptide trends contributing to protein trend}
+\end{figure}
+
+
+\begin{figure}[h!]
+<<dispProtScatter, dependson = c("badCorrCompare1", "setup")>>=
+shared_prot_tmp <- shared_prot[,gene_index]; shared_trans_tmp <- shared_trans[,gene_index]
+colnames(shared_prot_tmp) <- colnames(shared_trans_tmp) <- unname(orf2common(colnames(shared_prot)[gene_index]))
+  
+divCompDf <- cbind(melt(shared_prot_tmp), melt(shared_trans_tmp)[,3])
+colnames(divCompDf) <- c("condition", "gene", "Protein_Abundance", "Transcript_Abundance")
+divCompDf$limitation <- sapply(as.character(divCompDf$condition), function(el){strsplit(el, split = "")[[1]][1]})
+divCompDf$gene <- factor(divCompDf$gene, levels = colnames(shared_prot_tmp))
+
+divScatterPlot <- ggplot(divCompDf, aes(x = Transcript_Abundance, y = Protein_Abundance, col = factor(limitation))) + facet_wrap(~ gene, ncol = 5, scales = "free")
+print(divScatterPlot + geom_point())
+@
+\caption{Comparison of the transcriptional versus protein relative abundance patterns for the most poorly-correlated and well-correlated examples}
+\end{figure}
+
+Poorly correlated tend to have very little change across conditions, so signal:noise is lower.\\
+well correlated tend to have many more peptides measured - plot number of peptides versus correlation or mean(precision) versus correlation
+
+
+\textbf{Do continuous GO on the spearman correlation}
+%<<>>=
+%entrez_pt_corrs <- pt_corrs; rownames(entrez_pt_corrs) <- orf2entrez(colnames(shared_prot))
+%write.table(entrez_pt_corrs, file = "run_Deg/spearmanCorr.tsv", sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
+%run Arjun python script
+%@
+
+<<gseaCorrMF>>=
+gseaCorrMF <- read.table('contGSEA/spearmanCorr-gobp_yeast.closed.zscore.mat', sep = "\t", header = TRUE)
+gseaCorrMotif <- read.table('contGSEA/spearmanCorr-interpro_yeast_entrez.zscore.mat', sep = "\t", header = TRUE)
+
+@
+
+
+%<<GSEA_corr_MF, include = FALSE>>=
+%nbreaks = 100
+%hist(gseaCorrMF[,4], breaks = nbreaks, main = "GSEA Z-scores versus null expectation", xlab = "Z scores (Wald statistics)")
+%lines(dnorm(seq(range(gseaCorrMF[,4])[1], range(gseaCorrMF[,4])[2], by=diff(range(gseaCorrMF[,4]))/1000), 0, 1)*length(gseaCorrMF[,1])*diff(range(gseaCorrMF[,4]))/nbreaks ~ seq(range(gseaCorrMF[,4])[1], range(gseaCorrMF[,4])[2], by=diff(range(gseaCorrMF[,4]))/1000), lwd =3, col = "BLUE")
+% @
+
+\begin{figure}[h!]
+\centering
+\includegraphics[scale = 0.8]{figure/GSEA_corr_MF.pdf}
+\caption{PAGE analysis of spearman correlations between patterns of protein and transcript relative variation for the the same genes - negative scores indicate enrichment of a gene-set within more-negative spearman correlations and positive suggests an association with greater positive-correlations.  The histogram indicates the actual distribution of GO-term Z-scores and the curve indicates the null expectati that these values will follow a N(0,1) distribution}
+\label{GSEA_PTcorrDat}
+\end{figure}
 
 \section*{Interesting notes and representative examples}
 

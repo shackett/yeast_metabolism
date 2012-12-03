@@ -1,5 +1,4 @@
 
-#library(norm)
 
 # Functions
 
@@ -41,6 +40,46 @@ max_non_zero <- function(vec){
 max_non_NA <- function(vec){
 	max(vec[!is.na(vec)])
 	}
+
+
+orf2common <- function(x){
+  
+  require(org.Sc.sgd.db)
+  
+  d = org.Sc.sgdGENENAME
+  mapped_genes = mappedkeys(d)
+  dd = as.list(d[mapped_genes])
+  
+  sapply(x, function(orfs){
+  orfIDs <- strsplit(orfs, split = '/')[[1]]
+  matchedIDs <- orfIDs %in% names(dd)
+  commonNames <- sapply(c(1:length(orfIDs)), function(NID){
+      if(matchedIDs[NID]){
+        unname(dd[orfIDs[NID]])[[1]]
+        }else{
+          orfIDs[NID]
+          }
+      })
+  paste(commonNames, collapse = '/')    
+  })
+}
+  
+orf2entrez <- function(x){
+  d <- org.Sc.sgdENTREZID
+  mapped_genes <- mappedkeys(d)
+  dd <- as.list(d[mapped_genes])
+  
+  matched_genes <- x %in% names(dd)
+  
+  entrez_names <- sapply(c(1:length(x)), function(el){
+  if(matched_genes[el]){
+    dd[[x[el]]]
+    }else{
+    NA 
+      }
+  })
+  entrez_names
+  }
 
 orf2desc <- function(x) {
 	
@@ -86,16 +125,23 @@ if(generate_plots == TRUE){
 STDvar_fit	
 }
 
+#prot_abund <- prot_abund_final; prots <- 1:6; num.cols <- 2; label_phospho = FALSE
+#phospho_lib = phospho_sites_red; label_phospho = TRUE
+#gene_samples[1:5], possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, 
+#num.cols = 1
 
-plot_protein_lattice <- function(prots, possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = FALSE, phospho_lib = NULL, num.cols = 5){
+
+plot_protein_lattice <- function(prots, possibleMap, prot_abund, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = FALSE, phospho_lib = NULL, plotting_names = NULL, num.cols = 5){
 
 #Plot a lattice of protein relative abundances as well as the peptides that match it
   
-require(stringr)  
+require(stringr)
+require(gplots)
   
 mix_frac_set <- c()
 all_data_bind <- NULL
 abline_df <- NULL
+nutlab_df <- NULL
 for(prot in prots){
 	row_match <- c(1:n_p)[possibleMap[,prot]]
 	div_match <- row_match[diag(mixing_fract[row_match, n_prot + row_match]) == 1]
@@ -138,26 +184,46 @@ for(prot in prots){
 	if(label_phospho){
 	  all_data <- cbind(all_data, phospho_sites = c(t(PmodMat)))
     }
-  all_data_bind <- rbind(all_data_bind, cbind(proteinNumber = colnames(prot_abund)[prot], all_data))
-  abline_df <- rbind(abline_df, data.frame(xpos = xpos[cumsum(rle(rep(conditions$limitation, each = n_pp_plot))$lengths[-length(cond_offset[,1])])]+2, proteinNumber = colnames(prot_abund)[prot], stringsAsFactors = FALSE))
-	}
+	
+  #switch protein name to be displayed to the name in plotting names if included
+  if(!is.null(plotting_names)){
+    prot_Display = unname(plotting_names[prot])
+    }else{
+      prot_Display = colnames(prot_abund)[prot]
+      }
+  
+  all_data_bind <- rbind(all_data_bind, cbind(proteinNumber = prot_Display, all_data))
+  abline_df <- rbind(abline_df, data.frame(xpos = xpos[cumsum(rle(rep(conditions$limitation, each = n_pp_plot))$lengths[-length(cond_offset[,1])])]+1.5, proteinNumber = prot_Display, stringsAsFactors = FALSE))
+	
+	#determine the position of condition labels
+	cond_bounds <- c(0, xpos[cumsum(rle(rep(conditions$limitation, each = n_pp_plot))$lengths[-length(cond_offset[,1])])]+1, max(xpos))
+	nutlab_df <- rbind(nutlab_df, data.frame(proteinNumber = prot_Display, xpos = sapply(1:length(cond_offset[,1]), function(cond){(cond_bounds[cond] + cond_bounds[cond + 1])/2}), ypos = range(c(all_data$abundMin, all_data$abundMax), na.rm = TRUE)[1] + diff(range(c(all_data$abundMin, all_data$abundMax), na.rm = TRUE))/40, label = toupper(cond_offset$limitation), stringsAsFactors = FALSE))
+}
+
 all_data_bind$proteinNumber <- as.factor(all_data_bind$proteinNumber)
 abline_df$proteinNumber <- as.factor(abline_df$proteinNumber)
+nutlab_df$proteinNumber <- as.factor(nutlab_df$proteinNumber)
 
-match_cols <- c(rainbow(ncolors + 1, start = 0.7, end = 0)[unique(sort(mix_frac_set))*ncolors + 1], "black", "darkgray")
+ 
+
+
+match_cols <- c(colorpanel(ncolors + 1, low = "gainsboro", mid = "chocolate1", high = "firebrick1")[unique(sort(mix_frac_set))*ncolors + 1], "seagreen1", "gold")
+#match_cols <- c(colorpanel(ncolors + 1, low = "gray70", high = "gray0")[unique(sort(mix_frac_set))*ncolors + 1], "red", "gold")
 match_fact <- c(paste(sort(mix_frac_set), "x", " match", sep = ""), "protein", "non-match")
 
 all_data_bind$color_fact <- as.factor(all_data_bind$color_fact)
 
-
-plotter <- ggplot(all_data_bind, aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact))
-if(label_phospho){plotter <- plotter + aes(linetype = factor(phospho_sites)) + scale_linetype_manual(values = c("No P-site known" = 'solid', "Known phospho-site" = 'dotted')) + labs(linetype = "Phosphorylation Status")}
+plotter <- ggplot(all_data_bind)
+if(label_phospho){plotter <- plotter + scale_linetype_manual(values = c("No P-site known" = 'solid', "Known phospho-site" = 'dotted')) + labs(linetype = "Phosphorylation Status")}
 plotter <- plotter + xlab("Sample * Peptide") + ylab("Relative Abundance") + theme(axis.ticks = element_blank(), axis.text.x = element_blank(), panel.grid.minor=element_blank(), panel.grid.major=element_blank())
-plotter <- plotter + labs(colour = "Color label")
+plotter <- plotter + labs(colour = "Color label") + opts(axis.text.y = theme_text(colour = "red"), panel.background=theme_rect(fill="seashell"), strip.background = theme_rect(fill="tan1")) + scale_colour_manual(values = match_cols, limits = match_fact)
 plotter <- plotter + facet_wrap( ~ proteinNumber, ncol = num.cols, scales = "free")
-print(plotter + geom_linerange() +  geom_vline(data = abline_df, aes(xintercept = xpos, proteinNumber = proteinNumber))
-+ scale_colour_manual(values = match_cols, limits = match_fact)
-+ opts(axis.text.y = theme_text(colour = "red")))
+if(label_phospho){
+  print(plotter + geom_linerange(aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact, linetype = factor(phospho_sites))) + geom_text(data = nutlab_df, aes(x = xpos, y = ypos, label = label, proteinNumber = proteinNumber), size = 3) + geom_vline(data = abline_df, aes(xintercept = xpos, proteinNumber = proteinNumber)))  
+  }else{
+    print(plotter + geom_linerange(aes(xpos, abund, ymin = abundMin, ymax = abundMax, colour = color_fact)) + geom_text(data = nutlab_df, aes(x = xpos, y = ypos, label = label, proteinNumber = proteinNumber), size = 3) + geom_vline(data = abline_df, aes(xintercept = xpos, proteinNumber = proteinNumber)))  
+    }
+
 
 }
 
