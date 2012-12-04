@@ -5,32 +5,26 @@ load("EMimport.Rdata")
 
 #print(sessionInfo())
 
-tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
-mixing_fract <- unique_mappingMat * (1/(t(t((1-prior_p_div)^-1*rowSums(unique_mappingMat)))) %*% rep(1, n_prot))
-mixing_fract <- cBind(mixing_fract, tmp)
-prior_mat_likadj <- unique_mappingMat/((1-prior_p_div)^-1)
-prior_mat_likadj <- cBind(prior_mat_likadj, tmp)
+#initialize theta (mixing_fraction) and pi (prob non-divergent peptide)
 
-tmp <- as.matrix(tmp)
-tmp[!(tmp %in% c(0,1))] <- 1 
-prior_mat_logical <- cbind(as.matrix(unique_mappingMat), tmp) 
-prior_mat_logical <- prior_mat_logical == 1
-prior_mat_sparse <- Matrix(prior_mat_logical)
-#prior_mat_likadj2 <- prior_mat_likadj*prior_mat_sparse
-prior_mat_likadj[prior_mat_sparse] <- log(prior_mat_likadj[prior_mat_sparse])
-colnames(prior_mat_sparse) <- colnames(mixing_fract) <- colnames(mixing_fract)
-rm(tmp, prior_mat_logical); gc(); gc()
+mixing_fract <- unique_mappingMat/rowSums(unique_mappingMat)
+sparse_mapping <- Matrix(unique_mappingMat)
 
+pi_fit <- rep(1, times = n_p)
+#record the log-likelihood of a match versus non-match
+pi_lik_comp <- data.frame(match = rep(NA, times = n_p), divergent = rep(NA, times = n_p))
 
 #preprocess sparse data and precision matrices
+
+sparsePrecision <- Matrix(uniquePepPrecision != 0)
 
 if(prerun_fixed_mat == TRUE){
 #lower processor usage, higher memory
 sampleEst_list <- list()
 samplePrec_list <- list()
 for(c in 1:n_c){
-	sampleEst_list[[c]] <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-	samplePrec_list[[c]] <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
+	sampleEst_list[[c]] <- uniquePepMean[c,] %*% t(rep(1, times = n_prot)) * sparse_mapping
+	samplePrec_list[[c]] <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_prot)) * sparse_mapping)
 	colnames(sampleEst_list[[c]]) <- colnames(mixing_fract)
 	colnames(samplePrec_list[[c]]) <- colnames(mixing_fract)
 	print(c)
@@ -48,7 +42,7 @@ t <- 1
 while(continue_it){
 	
 	#update protein abundances: using integrated likelihood
-	#update protein means
+	#update protein means (c x j)
 	prot_abund = ((uniquePepMean*uniquePepPrecision) %*% mixing_fract)/(uniquePepPrecision %*% mixing_fract)
 	prot_abund <- as.matrix(Matrix(prot_abund, sparse = FALSE))
 	prot_abund[is.nan(prot_abund)] <- 0
@@ -56,28 +50,28 @@ while(continue_it){
 	#update protein precision
 	prot_prec <- uniquePepPrecision %*% mixing_fract
 	
-	#update mixing fract
+	#update pi - prob peptide match
+  
+  prot_matchLik <- -(1/2)*uniquePepPrecision*(((prot_abund %*% t(mixing_fract)) - uniquePepMean)^2)
+	pi_lik_comp$match <- colSums(prot_matchLik); pi_lik_comp$divergent <- log(prior_p_div)
+  #table(apply(pi_lik_comp, 1, diff) < 0)
+	pi_fit <- ifelse(apply(pi_lik_comp, 1, diff) < 0, 1, 0)
+  
+  #update mixing fract
 	
 	#evaluate the log-likelihood of sample abundances about the inferred protein abundances with a precision-specific to the signal strength of the samples
 	if(prerun_fixed_mat == TRUE){
-	sampleLik <- -1*((sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[1]])
+	sampleLik <- -1*((sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*sparse_mapping))^2*samplePrec_list[[1]])
 	for(c in 2:n_c){
-		sampleLik <- sampleLik - ((sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[c]])
-			}
-		}else{
-			for(c in 1:n_c){
-				sampleEst <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-				samplePrec <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
-				if(c == 1){
-					sampleLik <- -1*((sampleEst - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec)
-					}else{
-						sampleLik <- sampleLik - ((sampleEst - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec)
-						}
-				}
-			}
+		sampleLik <- sampleLik - ((sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*sparse_mapping))^2*samplePrec_list[[c]])
+      }
+		}
 	
-	#correct for proteins that only have peptides that are also found in other proteins: penalzie the log-likelihood of the peptides associated with these proteins evenly
-	weight_store <- list()	
+  
+  
+  
+	#correct for subsumable proteins (only have peptides that are also found in other proteins): penalize the log-likelihood of the peptides associated with these proteins evenly
+	weight_store <- list()
 	for(ap in ambigprots){
 		tmp <- sampleLik[,ap][prior_mat_sparse[,ap]]
 		weights <- 1/length(tmp)

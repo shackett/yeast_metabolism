@@ -1,0 +1,131 @@
+\documentclass[12pt]{article}
+\usepackage[left=0.5in,top=0.5in,right=0.5in,bottom=0.5in,nohead]{geometry}
+\usepackage{geometry}                % See geometry.pdf to learn the layout options. There are lots.
+\geometry{a4paper}                   % ... or a4paper or a5paper or ... 
+\usepackage{wrapfig}	%in-line figures
+\usepackage[numbers, super]{natbib}		%bibliography
+%\usepackage{pslatex} 	%for times new roman
+\usepackage[parfill]{parskip}    % Activate to begin paragraphs with an empty line rather than an indent
+\usepackage{graphicx}
+\usepackage{amssymb}
+\usepackage{epstopdf}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{subfig}
+\usepackage{wrapfig}
+\usepackage{graphics}
+\usepackage{enumitem}
+\usepackage[T1]{fontenc}
+\usepackage{aurical}
+\usepackage[scaled]{helvet}
+\usepackage{multicol}
+\usepackage{upquote}
+\usepackage{tikz}
+
+\DeclareGraphicsRule{.tif}{png}{.png}{`convert #1 `dirname #1`/`basename #1 .tif`.png}
+
+\author{Sean R. Hackett}
+\title{Peptide $\rightarrow$ prot EM} 
+\date{}
+
+\begin{document}
+
+\setlength{\parskip}{1mm}
+\linespread{1}
+
+\thispagestyle{empty}
+\pagestyle{empty}
+
+\maketitle
+
+\section*{Going from peptides to proteins via expectation-maximization}
+
+When using relative variation in peptides to predict variation in protein abundance we need to deal with two factors
+\begin{itemize}
+\item If a peptide maps to multiple proteins, it should be attributed to a protein (thereby adding signal) to the extent that its pattern matches the pattern from other peptides.
+\item Some peptides won't conform to the trends of their protein because they may be the non-covalently modified complement of a set of unascertained modified peptides.  These peptides shouldn't inform the general protein trend, and may be interesting to analyze in isolation.
+\end{itemize}
+
+\subsection*{Algorithm structure}
+
+\textbf{I} = Peptides, \textbf{C} = Conditions, \textbf{K} = Proteins
+
+\begin{itemize}
+\item[\textbf{X}$_{IC}$:] Data matrix: Input MS data of the relative abundance of each peptide across \textbf{C} conditions
+\item[$\sigma^{2}_{IC}$/$\tau^{2}_{IC}$:] [I] Fitted variance/precision relative to peptide IC for each spectra.
+\item[\textbf{M}$_{IK}$:] Possible mappings between peptides (\textbf{I}) and proteins (\textbf{K})
+\item[$\mathbf{\Theta}_{IK}$:] Responsibility matrix: fraction of peptide \textbf{i} contributed by protein \textbf{k}.
+\item[$\mathbf{\Omega}_{KC}$:] Point estimate for each protein$\cdot$condition.
+\item[$\pi_{I}$:] Peptide \textbf{i} matches a protein ($\pi_{i}$ = 1) or is a divergent peptide ($\pi_{i}$ = 0).
+\item[$\alpha_{K}$:] Protein \textbf{k} is supported by the data ($\alpha_k$ = 1) or is subsumable and sufficiently described by trends of other proteins ($\alpha_{k}$ = 0)
+
+\end{itemize}
+
+\begin{align}
+Lik(\mathbf{\Omega}, \mathbf{\Theta}, \pi, \alpha | \sigma^{2}, \textbf{X}) &= \prod_{i}^{I}\prod_{c}^{C}\left[ \pi_{i}\mbox{\Large \textbf{N}}(\sum_{k}^{K}\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} ; \textbf{X}_{ic}, \sigma^{2}_{ic}) + (1-\pi_{i})\mbox{\Large \textbf{N}}( \textbf{X}_{ic}; \textbf{X}_{ic}, \sigma^{2}_{ic}) \right] \notag\\
+&\cdot \prod_{i}^{I}[\pi_{i}p(\pi_{i} = 1) + (1-\pi_{i})p(\pi_{i} = 0)]\notag\\
+Lik(\mathbf{\Omega}, \mathbf{\Theta}, \pi, \alpha | \sigma^{2}, \textbf{X}) &= \prod_{i}^{I}\prod_{c}^{C}\left[\pi_{i}\frac{1}{\sigma_{ic}\sqrt{2\pi}}e^{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2} + (1-\pi_{i})\frac{1}{\sigma_{ic}\sqrt{2\pi}}e^{0}\right]\notag\\
+&\cdot \prod_{i}^{I}[\pi_{i}p(\pi_{i} = 1) + (1-\pi_{i})p(\pi_{i} = 0)]\notag\\
+Lik(\mathbf{\Omega}, \mathbf{\Theta}, \pi, \alpha | \sigma^{2}, \textbf{X}) &= \prod_{i}^{I}\prod_{c}^{C}\left[\frac{1}{\sigma_{ic}\sqrt{2\pi}} \right] \prod_{i}^{I}\prod_{c}^{C}\left[\pi_{i}e^{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2} + (1-\pi_{i})\right]\notag\\
+&\cdot \prod_{i}^{I}[\pi_{i}p(\pi_{i} = 1) + (1-\pi_{i})p(\pi_{i} = 0)]\notag\\
+\textit{l}(\mathbf{\Omega}, \mathbf{\Theta}, \pi, \alpha | \sigma^{2}, \textbf{X}) &= \text{constant} + \sum_{i}^{I}\sum_{c}^{C}ln\left[\pi_{i}e^{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2} + (1-\pi_{i})\right]\notag\\
+&+ \sum_{i}^{I}ln[\pi_{i}p(\pi_{i} = 1) + (1-\pi_{i})p(\pi_{i} = 0)]\notag\\
+\end{align}
+
+\subsection*{Updating $\pi_{i}$}
+
+Since $\pi_{i}$ can only take binary values, maximizing the log-likelihood over $\pi_{i}$ amounts to comparing the log-likelihood under these two scenarios
+
+\begin{align}
+\pi_{i} &= 1: \textit{logL} = \text{constant} + \sum_{c}^{C}\left[{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2}\right] + ln[p(\pi_{i} = 1)]\notag\\
+\pi_{i} &= 0: \textit{logL} = \text{constant} + \sum_{c}^{C}ln\left[1\right] + ln[p(\pi_{i} = 0)]\notag\\
+\pi_{i} &= 1 \hspace{2mm}\text{if}:\notag\\ & \sum_{c}^{C}\left[{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2}\right] + ln[p(\pi_{i} = 1)] > ln[p(\pi_{i} = 0)]
+\end{align}
+
+\subsection*{Updating $\mathbf{\Theta}_{ik}$}
+
+\begin{align}
+\textit{l}(\mathbf{\Theta}_{iK} | \mathbf{\Omega}, \pi, \alpha, \sigma^{2}, \textbf{X}) &= \text{constant} + \sum_{c}^{C}ln\left[\pi_{i}e^{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2} + (1-\pi_{i})\right]\notag\\
+\end{align}
+
+Assume $\pi_{i}$ = 1, if $\pi_{i}$ = 0 then the following calculations will maximize the log-likelihood under the model that $\pi_{i}$ = 1 and then scale these by $\pi_{i}$ to zero
+
+\begin{align}
+\textit{l}(\mathbf{\Theta}_{iK} | \mathbf{\Omega}, \pi, \alpha, \sigma^{2}, \textbf{X}) &= \text{constant} + \sum_{c}^{C}\left[{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2}\right]\notag\\
+ &= \text{constant} -\frac{1}{2}\sum_{c}^{C}\left[{\tau_{ic}^{2}(\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic})^2}\right]\notag\\
+\end{align}
+
+Maximizing this log-likelihood is equivalent to minimizing the weighted residuals of the above equation with the constraints that $\sum_{k}^{K}\mathbf{\Theta}_{ik} = 1$ and $\mathbf{\Theta}_{ik} \ge 0$
+\subsection*{Updating $\mathbf{\Omega}_{kc}$}
+
+The mean and precision of protein pattern inference can be determined by seeing that this is equivalent to a product of normal distributions, for which a closed-form solution exists through \textit{integrated likelihood}.
+
+$\tau_{y} = \prod_{z \neq y}^{Y}\sigma^{2}_{z}$
+
+\begin{align}
+\mathbf{\Omega}_{kc} \sim \mbox{\Large \textbf{N}}\left(\mu = \frac{\sum_{i = 1}^{I}\mathbf{\Theta}_{ik}\alpha_{k}\textbf{X}_{ic}\tau_{i}}{\sum_{i = 1}^{I}\mathbf{\Theta}_{ik}\alpha_{k}\tau_{i}}, \sigma^{2} =  \left(\sum_{i = 1}^{I}\frac{\mathbf{\Theta}_{ik}\alpha_{k}}{\sigma^{2}_{i}}\right)^{-1} \right)
+\end{align}
+
+\subsection*{Updating $\mathbf{\alpha}_{k}$}
+
+When protein \textbf{k} is subsumable, i.e. the peptides that match it can all be matched to other proteins as well, we want to consider whether sufficient evidence of a unique trend in \textbf{k} exists before we use it.  To maximize the log-likelihood over the binary possible values of $\alpha_{k}$, we can consider a reduced log-likelihood:
+
+\begin{align}
+\textit{l}(\alpha_{k} | \mathbf{\Omega}, \mathbf{\Theta}, \pi, \sigma^{2}, \textbf{X}) &= \text{constant} + \sum_{i}^{I}\sum_{c}^{C}ln\left[\alpha_{k}e^{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{k  = 1}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2} + (1-\alpha_{k})e^{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{k  = 0}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2}\right]\notag\\
+&+ ln[\alpha_{k}p(\alpha_{k} = 1) + (1-\alpha_{k})p(\alpha_{k} = 0)]\notag
+\end{align}
+
+\begin{align}
+\alpha_{k} &= 1: \textit{logL} = \text{constant} + \sum_{i}^{I}\sum_{c}^{C}\left[{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{k  = 1}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2}\right] + ln[p(\alpha_{k} = 1)]\notag\\
+\alpha_{k} &= 0: \textit{logL} = \text{constant} + \sum_{i}^{I}\sum_{c}^{C}\left[{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{k  = 0}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2}\right] + ln[p(\alpha_{k} = 0)]\notag\\
+\pi_{i} &= 0 \hspace{2mm}\text{if}:\notag\\ \sum_{i}^{I}\sum_{c}^{C}&\left[{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{k  = 0}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2}\right] + ln[p(\alpha_{k} = 0)] \ge \sum_{i}^{I}\sum_{c}^{C}\left[{-\frac{1}{2}(\frac{\mathbf{\Theta}_{iK}\alpha_{k  = 1}\mathbf{\Omega}_{Kc} - \textbf{X}_{ic}}{\sigma_{ic}})^2}\right] + ln[p(\alpha_{k} = 1)]
+\end{align}
+
+\subsubsection*{Notes}
+
+\begin{itemize}
+\item For every protein that only has peptides that are shared by other proteins, there is little evidence that this protein exists unless the shared peptides exhibit a trend that diverges from the behavior of the shared proteins (as determined by its unique peptides).  
+\end{itemize}
+
+
+\end{document}
