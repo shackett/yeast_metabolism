@@ -2,10 +2,9 @@ setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
 source("pep_library.R")
 matrix_fxn()
 load("EMimport.Rdata")
+library(limSolve)
 
-#print(sessionInfo())
-
-#initialize theta (mixing_fraction) and pi (prob non-divergent peptide)
+#initialize theta (mixing_fraction) and pi (prob non-divergent peptide) and alpha (support for a protein existing)
 
 mixing_fract <- unique_mappingMat/rowSums(unique_mappingMat)
 sparse_mapping <- Matrix(unique_mappingMat)
@@ -14,24 +13,52 @@ pi_fit <- rep(1, times = n_p)
 #record the log-likelihood of a match versus non-match
 pi_lik_comp <- data.frame(match = rep(NA, times = n_p), divergent = rep(NA, times = n_p))
 
-#preprocess sparse data and precision matrices
+#### for alpha, determine which proteins are a subset or subsumable (no non-shared peptides)
 
-sparsePrecision <- Matrix(uniquePepPrecision != 0)
+sharedPeps <- rowSums(sparse_mapping) != 1
+subSumable <- ifelse(colSums(sparse_mapping[!sharedPeps,]) == 0, 1, 0)
+alpha_pres <- rep(1, times = n_prot)
 
-if(prerun_fixed_mat == TRUE){
-#lower processor usage, higher memory
-sampleEst_list <- list()
-samplePrec_list <- list()
-for(c in 1:n_c){
-	sampleEst_list[[c]] <- uniquePepMean[c,] %*% t(rep(1, times = n_prot)) * sparse_mapping
-	samplePrec_list[[c]] <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_prot)) * sparse_mapping)
-	colnames(sampleEst_list[[c]]) <- colnames(mixing_fract)
-	colnames(samplePrec_list[[c]]) <- colnames(mixing_fract)
-	print(c)
-	}
-	};gc()
-		
+#decompose overlapping peptides into sub-bipartite graphs
+subGraphs <- list()
+relFract <- list()
+#identify overlapping proteins and seperate by ORF name
+overlapMat <- t(sparse_mapping) %*% sparse_mapping
+overlapMat <- overlapMat[rowSums(overlapMat != 0) != 1,rowSums(overlapMat != 0) != 1]
 
+entry_split <- c()
+entries_remaining <- c(1:length(overlapMat[,1]))
+while(length(entries_remaining) != 0){
+  members <- entries_remaining[1]
+  nmembersChange <- 1
+  
+  while(nmembersChange != 0){
+    new_members <- c(1:length(overlapMat[,1]))[rowSums(matrix(overlapMat[members,], nrow = length(overlapMat[,1]), byrow = TRUE)) != 0]
+    nmembersChange <- length(new_members) - length(members)
+    members <- new_members
+    }
+  
+  entries_remaining <- entries_remaining[!(entries_remaining %in% members)]
+  entry_split <- c(entry_split, paste(members, collapse = "_"))
+}
+
+for(entry in 1:length(entry_split)){
+  subGraphs[[entry]] <- rownames(overlapMat)[as.numeric(strsplit(entry_split[entry], split = "_")[[1]])]
+  relFract[[entry]] <- rep((1/length(subGraphs[[entry]])), times =  length(subGraphs[[entry]]))  
+}
+
+
+#plot the shared peptides across groups of proteins
+plot_proteinConnections(overlapMat)
+
+
+
+
+  
+  
+  
+  
+  
 ### Iteration ###
 
 whole_data_logL <- NULL
@@ -50,113 +77,195 @@ while(continue_it){
 	#update protein precision
 	prot_prec <- uniquePepPrecision %*% mixing_fract
 	
-	#update pi - prob peptide match
+	#update pi - relative prob peptide match based on bayes factors
   
-  prot_matchLik <- -(1/2)*uniquePepPrecision*(((prot_abund %*% t(mixing_fract)) - uniquePepMean)^2)
+  prot_matchLik <- -(1/2)*uniquePepPrecision*(((prot_abund %*% diag(alpha_pres) %*% t(mixing_fract)) - uniquePepMean)^2)
 	pi_lik_comp$match <- colSums(prot_matchLik); pi_lik_comp$divergent <- log(prior_p_div)
   #table(apply(pi_lik_comp, 1, diff) < 0)
 	pi_fit <- ifelse(apply(pi_lik_comp, 1, diff) < 0, 1, 0)
   
-  #update mixing fract
+  #update mixing fract based on weighted quadratic programming
 	
-	#evaluate the log-likelihood of sample abundances about the inferred protein abundances with a precision-specific to the signal strength of the samples
-	if(prerun_fixed_mat == TRUE){
-	sampleLik <- -1*((sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*sparse_mapping))^2*samplePrec_list[[1]])
-	for(c in 2:n_c){
-		sampleLik <- sampleLik - ((sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*sparse_mapping))^2*samplePrec_list[[c]])
+  for(peptide in ambig_peps){
+    n_matches <- sum(sparse_mapping[peptide,]*alpha_pres)
+    solution <- lsei(A = prot_abund[,sparse_mapping[peptide,]*alpha_pres == 1]*uniquePepPrecision[,peptide], B = uniquePepMean[,peptide] * uniquePepPrecision[,peptide], E = t(rep(1, times = n_matches)), F = 1, G = diag(n_matches), H = rep(0, times = n_matches))$X
+    mixing_fract[peptide,sparse_mapping[peptide,]*alpha_pres == 1] <- solution
+    }
+  
+  #update mixing fractions based on weighted quadratic programming over each isolated bipartite graph
+  for(graph_part in 1:length(subGraphs)){
+    
+    relProt <- colnames(sparse_mapping) %in% subGraphs[[graph_part]]
+    #remove invalid proteins from consideration (those with alpha = 0)
+    relProt[relProt] <- alpha_pres[relProt] == 1
+      
+    relPep <- rowSums(sparse_mapping[,relProt] != 0) != 0
+    
+    
+    subProtAbund <- prot_abund[,relProt]
+    subPepAbund <- uniquePepMean[,relPep]
+    subPepPrec <- uniquePepPrecision[,relPep]
+    subMap <- sparse_mapping[relPep, relProt]
+    
+    #look at the subset of proteins matching greater than 1 peptide - because these ones will have a mixing fraction of 1 for the unique peptide and w
+    npepMatches <- colSums(sparse_mapping[,colnames(sparse_mapping) %in% subGraphs[[graph_part]]])
+    if(1 %in% npepMatches){
+      maskPeps <- rowSums(matrix(subMap[,npepMatches == 1], ncol = sum(npepMatches[npepMatches == 1])))
+    }else{
+      maskPeps <- rep(0, times = length(subMap[,1]))
+    }
+    
+    
+    mix_converge <- FALSE
+    prev_mix <- relFract[[graph_part]]
+    
+    while(mix_converge == FALSE){
+      
+      protStack <- NULL
+      pepVec <- NULL
+      
+      for(pepEntries in c(1:length(subMap[,1]))[maskPeps != 1]){
+        #protein trends weighted by peptide precisions and poriton of total mixing fraction for matched proteins in this peptide
+        pi_adj_weight <- (prev_mix / sum(prev_mix[subMap[pepEntries,] == 1]))^-1 * subMap[pepEntries,] 
+        protStack <- rbind(protStack, prot_abund[,relProt] * t(t(rep(1, n_c))) %*% t(subMap[pepEntries,]) * t(t(subPepPrec[,pepEntries])) %*% rep(1, length(npepMatches)) * t(t(rep(1, n_c))) %*% pi_adj_weight)
+        
+        #peptide trends weighted by peptide precisions
+        pepVec <- c(pepVec, subPepAbund[,pepEntries] * subPepPrec[,pepEntries])
+        }
+      protStack[is.nan(protStack)] <- 0
+      
+      solution <- lsei(A = protStack, B = pepVec, E = t(rep(1, times = length(npepMatches))), F = 1, G = diag(length(npepMatches)), H = rep(0, times = length(npepMatches)))$X
+      print(solution)
+      new_mix <- solution
+      
+      #floor mixing fractions to 10^-10
+      new_mix[new_mix < 0.01 & npepMatches != 1] <- 0.01
+      if(sum((new_mix - prev_mix)^2) < 10^-6){mix_converge <- TRUE}
+      prev_mix <- new_mix
+      
       }
-		}
-	
+    relFract[[graph_part]] <- prev_mix  
+    
+    subMapMix <- subMap * t(t(rep(1, length(subMap[,1])))) %*% prev_mix
+    subMapMix[maskPeps == 1,] <- subMap[maskPeps == 1,] * t(t(rep(1, sum(maskPeps)))) %*% (npepMatches == 1)*1
+    
+    mixing_fract[relPep, relProt] <- subMapMix/rowSums(subMapMix)
+              
+    }
   
   
   
-	#correct for subsumable proteins (only have peptides that are also found in other proteins): penalize the log-likelihood of the peptides associated with these proteins evenly
-	weight_store <- list()
-	for(ap in ambigprots){
-		tmp <- sampleLik[,ap][prior_mat_sparse[,ap]]
-		weights <- 1/length(tmp)
-		weight_store[[ap]] <- weights
-		sampleLik[,ap][prior_mat_sparse[,ap]] <- tmp + log(prior_p_div)*weights
-		}
-	
-	#adjust for prior
-	colnames(sampleLik) <- colnames(prior_mat_likadj)
-	sampleLik <- sampleLik + prior_mat_likadj
-	
-	#if an ambiguous protein has the highest likelihood (besides divergent peptides), than set the divergent peptide to log(prior_p_div) + penalty applied to sampleLIk
-	
-	if(!unq_matches_only){
-	# record the likelihood of all peptide-protein matches, set all non-matches to NA
-	tmp <- sampleLik[,1:n_prot]; tmp[!prior_mat_sparse[,1:n_prot]] <- NA
-	
-	# does the ambiguous protein have the highest likelihood match to some peptides
-	ambig_good_fit <- is.finite(apply(tmp[,ambigprots], 1, function(x){if(length(x[!is.na(x)]) == 0){-Inf}else{max(x, na.rm = TRUE)}})) & (apply(tmp[,ambigprots], 1, function(x){if(length(x[!is.na(x)]) == 0){-Inf}else{max(x, na.rm = TRUE)}}) == apply(tmp, 1, max, na.rm = TRUE))
-	good_fit_peps <- c(1:n_p)[ambig_good_fit]
-	good_fit_match <- ambigprots[apply(tmp[ambig_good_fit,ambigprots], 1, which.max)]
-	
-	#penalize the divergent pep priors
-	diag(sampleLik[good_fit_peps, n_prot + good_fit_peps]) <- diag(sampleLik[good_fit_peps, n_prot + good_fit_peps]) + log(prior_p_div)*sapply(good_fit_match, function(x){weight_store[[x]]})
-	
-		}
-	
-	# a peptide is attributed to a protein proportionally to its likelihood of that match - ideally it would fit the residuals in an iterative fashion (gibbs sampling), but it shouldn't be crucial.
-	
-	sampleLik_NA <- sampleLik
-	sampleLik_NA[!prior_mat_sparse] <- NA
-	relLik <- sampleLik - apply(sampleLik_NA, 1, max_non_NA) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-	relLik[prior_mat_sparse] <- exp(relLik[prior_mat_sparse])
-	
-	liksums <- apply(relLik, 1, sum)
-	
-	mixing_fract <- 1/liksums %*% t(rep(1, times = n_pp)) * prior_mat_sparse * relLik
+  
+  
+  
+  
+  #update alpha - whether a protein is present, based on bayes factors
+  
+  for(protein in c(1:n_prot)[subSumable == 1]){
+    #find all peptides that match the possibly absent protein
+    
+    alpha_neg <- alpha_pres; alpha_neg[protein] <- 0
+    alpha_pos <- alpha_pres; alpha_pos[protein] <- 1
+    
+    lpos <- 0
+    lneg <- 0
+    
+    for(peptide in c(1:n_p)[sparse_mapping[,protein] == 1]){
+      
+      n_matches_pos <- sum(sparse_mapping[peptide,]*alpha_pos)
+      lpos <- lpos + sum((apply(prot_abund[,sparse_mapping[peptide,]*alpha_pos == 1]*matrix(mixing_fract[peptide,sparse_mapping[peptide,]*alpha_pos == 1], ncol = n_matches_pos, nrow = n_c, byrow = TRUE), 1, sum)
+      - uniquePepMean[,peptide])^2*uniquePepPrecision[,peptide]*(-1/2))
+                          
+      n_matches_neg <- sum(sparse_mapping[peptide,]*alpha_neg)
+      #rescale the negative mixing fractions to account for the fraction lost due to one proteins invalidation
+      neg_mixing <- mixing_fract[peptide,sparse_mapping[peptide,]*alpha_neg == 1]
+      if(sum(neg_mixing) == 0){
+        neg_mixing <- rep(1/length(neg_mixing), times = length(neg_mixing))
+        }
+      neg_mixing <- neg_mixing/sum(neg_mixing)
+      
+      lneg <- lneg + sum((apply(prot_abund[,sparse_mapping[peptide,]*alpha_neg == 1]*matrix(neg_mixing, ncol = n_matches_neg, nrow = n_c, byrow = TRUE), 1, sum)
+                          - uniquePepMean[,peptide])^2*uniquePepPrecision[,peptide]*(-1/2))
+        }
+      if(lneg >= lpos + log(prior_p_div)){
+        alpha_pres[protein] <- 0 
+      }
+    }
 	
 	#update complete data log-likelihood
-	
-	new_log_lik <- sum(apply(log(mixing_fract) + sampleLik_NA, 1, max, na.rm = TRUE))
-	
-	
+	new_log_lik <- sum(apply(-(1/2)*uniquePepPrecision*(((prot_abund %*% diag(alpha_pres) %*% t(mixing_fract)) - uniquePepMean)^2), 2, sum)*pi_fit + (1-pi_fit)*log(prior_p_div)) + sum(alpha_pres[subSumable == 1])*log(prior_p_div)
+  
 	#check for convergence
 	
-	if(new_log_lik - previous_it < 0.01 | (t > 30)){
-		continue_it <- FALSE
-		whole_data_logL <- c(whole_data_logL, new_log_lik)
-		t <- t + 1
-		print("done")
-		}else{
-			whole_data_logL <- c(whole_data_logL, new_log_lik)
-			print(paste("iteration", t, "log likelihood", round(new_log_lik, 3)))
-			t <- t + 1
-			previous_it <- new_log_lik
-			}
+	if(new_log_lik - previous_it < 0.01 | (t > 100)){
+	  continue_it <- FALSE
+	  whole_data_logL <- c(whole_data_logL, new_log_lik)
+	  t <- t + 1
+	  print("done")
+	}else{
+	  whole_data_logL <- c(whole_data_logL, new_log_lik)
+	  print(paste("iteration", t, "log likelihood", round(new_log_lik, 3)))
+	  t <- t + 1
+	  previous_it <- new_log_lik
 	}
-
-initial_convergence <- t - 1
-#rewrite prior sparse matrix of allowable states to either fully attribute a peptide to canonical protein trends or to the divergent trends
+}
 
 max_state <- apply(mixing_fract, 1, which.max)
-div_max <- apply(mixing_fract[,1:n_prot], 1, sum) <= 0.5
+div_max <- pi_fit == 0
 
 #number of peptides not-conforming to some general protein trend
 table(div_max)
 
-
 # for each model compare the best peptide-protein match with the non-match likelihood*prior
 
-likdiff <- apply(sampleLik_NA[,1:n_prot], 1, max, na.rm = TRUE) - diag(sampleLik_NA[1:n_p,(n_prot+1):n_pp])
+likdiff <- pi_lik_comp$match - pi_lik_comp$divergent
+names(likdiff) <- rownames(mixing_fract)
+
 
 likdiff_df <- data.frame(likelihood = likdiff, matched = ifelse(likdiff >= 0, "Protein-match", "Divergent-trend"))
 likdiff_df$likelihood[likdiff_df$likelihood <= -400] <- -400
 
+
+library(ggplot2)
 likdiff_plot <- ggplot(likdiff_df, aes(x = likelihood, fill = matched))
 likdiff_plot + geom_histogram()
 
 
-#for each peptide compare a model where peptide patterns are equivalent to protein patterns with one where a peptide doesn't match - the divergent model will fit perfectly vs. the alternative where the protein fits
+#### are mixing fraction for proteins with more than 1 overlapping peptide comparable #####
+#generate a square matrix of overlap
+prot_overlap <- t(sparse_mapping) %*% sparse_mapping
+mixed_pairs <- triu(prot_overlap); diag(mixed_pairs) <- 0
+mixed_pairs2 <- NULL
+for(prot in c(1:n_prot)[rowSums(mixed_pairs > 3) != 0]){
+  matches <- c(1:n_prot)[mixed_pairs[prot,] > 3]
+  matchN <- mixed_pairs[prot,][mixed_pairs[prot,] > 3]
+  mixed_pairs2 <- rbind(mixed_pairs2, data.frame(protA = prot, protB = matches, nMatches = matchN))  
+  }
+mixed_pairs2 <- mixed_pairs2[order(mixed_pairs2$nMatches, decreasing = TRUE),]
 
+mixSD <- rep(NA, times = length(mixed_pairs2[,1]))
+mixHL <- data.frame(mixDom = rep(NA, times = length(mixed_pairs2[,1])), N = NA)
+boxplot_list <- list()
+boxplot_df <- NULL
+for(pairs in 1:length(mixed_pairs2[,1])){
+  shared_peps <- c(1:n_p)[rowSums(sparse_mapping[,c(mixed_pairs2$protA[pairs], mixed_pairs2$protB[pairs])]) == 2]
+  paired_mixes <- mixing_fract[shared_peps,c(mixed_pairs2$protA[pairs], mixed_pairs2$protB[pairs])]
+  #mixHL[pairs,] <- c(sum(paired_mixes[,2] > paired_mixes[,1])/length(paired_mixes[,1]), length(paired_mixes[,1]))
+  #boxplot_list[[pairs]] <- paired_mixes[,2] #- mean(paired_mixes[,2])
+  boxplot_df <- rbind(boxplot_df, data.frame(Pair = pairs, FractionB = paired_mixes[,2], SharedPeptides = length(paired_mixes[,1])))
+  }
+
+mixingFracPlot <- ggplot(boxplot_df, aes(x = factor(Pair), y = FractionB, fill = SharedPeptides, colour = "#3366FF"))
+mixingFracPlot + geom_violin(position = "dodge") + scale_color_discrete(guide = "none") + scale_x_discrete('Protein pairs with more than 3 overlapping peptides') + scale_y_continuous('Mixing proprotion of second protein of pair')
+
+
+
+
+#for each peptide compare a model where peptide patterns are equivalent to protein patterns with one where a peptide doesn't match - the divergent model will fit perfectly vs. the alternative where the protein fits
 
 divergentPep_summary <- data.frame(peptide = names(likdiff)[div_max], prot_matches = NA, likelihood = unname(likdiff[div_max]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
 
-poor_match_redMat <- prior_mat_sparse[div_max, 1:n_prot]
+poor_match_redMat <- sparse_mapping[div_max,]
 
 for(pep in 1:length(poor_match_redMat[,1])){
 	divergentPep_summary$prot_matches[pep] <- paste(colnames(poor_match_redMat)[poor_match_redMat[pep,]], collapse = "/")
@@ -169,7 +278,7 @@ divergentPep_summary$possible_phosphoSite <- divergentPep_summary$nS != 0 | dive
 
 background_SRYfreq <- data.frame(peptide = names(likdiff)[!div_max], prot_matches = NA, likelihood = unname(likdiff[!div_max]), nS = NA, nR = NA, nY = NA, stringsAsFactors = FALSE)
 
-good_match_redMat <- prior_mat_sparse[!div_max, 1:n_prot]
+good_match_redMat <- sparse_mapping[!div_max,]
 
 for(pep in 1:length(good_match_redMat[,1])){
 	background_SRYfreq$prot_matches[pep] <- paste(colnames(good_match_redMat)[good_match_redMat[pep,]], collapse = "/")
@@ -184,113 +293,14 @@ background_SRYfreq$possible_phosphoSite <- background_SRYfreq$nS != 0 | backgrou
 
 
 #how many peptides are informing a protein trend, with only the largest effect considered
-barplot(table(table(max_state[max_state <= n_prot])))
+barplot(table(table(max_state)), xlab = "Number of peptides for which a protein dominates pattern", ylab = "Frequency")
 
-for(p in 1:n_p){
-	if(div_max[p] == TRUE){
-		prior_mat_sparse[p, -(p + n_prot)] <- FALSE
-		prior_mat_likadj[p, -(p + n_prot)] <- 0
-		}else{
-			prior_mat_sparse[p, p + n_prot] <- FALSE
-			prior_mat_likadj[p, p + n_prot] <- 0
-			}
-	}
-
-
-
-##### Run the EM again with the new sparse prior
-print("EM 2 running")
-
-if(prerun_fixed_mat == TRUE){
-#lower processor usage, higher memory
-sampleEst_list <- list()
-samplePrec_list <- list()
-for(c in 1:n_c){
-	sampleEst_list[[c]] <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-	samplePrec_list[[c]] <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
-	print(c)
-	}
-	}
-
-previous_it <- -Inf
-continue_it <- TRUE
-
-while(continue_it){
-	
-	#update protein abundances: using integrated likelihood
-	#update protein means
-	prot_abund = ((uniquePepMean*uniquePepPrecision) %*% mixing_fract)/(uniquePepPrecision %*% mixing_fract)
-	prot_abund <- as.matrix(Matrix(prot_abund, sparse = FALSE))
-	prot_abund[is.nan(prot_abund)] <- 0
-	
-	#update protein precision
-	prot_prec <- uniquePepPrecision %*% mixing_fract
-	prot_prec[prot_prec < 1] <- 0
-	
-	#update mixing fract
-	
-	#evaluate the log-likelihood of sample abundances about the inferred protein abundances with a precision-specific to the signal strength of the samples
-	if(prerun_fixed_mat == TRUE){
-	sampleLik <- - ((sampleEst_list[[1]] - (t(prot_abund[1,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[1]])
-	for(c in 2:n_c){
-		sampleLik <- sampleLik - ((sampleEst_list[[c]] - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec_list[[c]])
-			}
-		}else{
-			for(c in 1:n_c){
-				sampleEst <- uniquePepMean[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-				samplePrec <- 0.5*(uniquePepPrecision[c,] %*% t(rep(1, times = n_pp)) * prior_mat_sparse)
-				if(c == 1){
-					sampleLik <- -1*((sampleEst - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec)
-					}else{
-						sampleLik <- sampleLik - ((sampleEst - (t(prot_abund[c,] %*% t(rep(1, times = n_p)))*prior_mat_sparse))^2*samplePrec)
-						}
-				}
-			}
-	
-	#correct for proteins that only have peptides that are also found in other proteins: penalzie the log-likelihood of the peptides associated with these proteins evenly
-	weight_store <- list()	
-	for(ap in ambigprots){
-		tmp <- sampleLik[,ap][prior_mat_sparse[,ap]]
-		weights <- 1/length(tmp)
-		weight_store[[ap]] <- weights
-		sampleLik[,ap][prior_mat_sparse[,ap]] <- tmp + log(prior_p_div)*weights
-		}
-	
-	#adjust for prior	
-	sampleLik <- prior_mat_likadj + sampleLik
-	
-	sampleLik_NA <- sampleLik
-	sampleLik_NA[!prior_mat_sparse] <- NA
-	relLik <- sampleLik - apply(sampleLik_NA, 1, max_non_NA) %*% t(rep(1, times = n_pp)) * prior_mat_sparse
-	relLik[prior_mat_sparse] <- exp(relLik[prior_mat_sparse])
-	
-	liksums <- apply(relLik, 1, sum)
-	
-	mixing_fract <- 1/liksums %*% t(rep(1, times = n_pp)) * prior_mat_sparse * relLik
-	
-	#update complete data log-likelihood
-	
-	new_log_lik <- sum(apply(log(mixing_fract) + sampleLik_NA, 1, max, na.rm = TRUE))
-	
-	#check for convergence
-	
-	if(new_log_lik - previous_it < 0.01){
-		continue_it <- FALSE
-		whole_data_logL <- c(whole_data_logL, new_log_lik)
-		print("done")
-		}else{
-			whole_data_logL <- c(whole_data_logL, new_log_lik)
-			print(paste("iteration", t, "log likelihood", round(new_log_lik, 3)))
-			t <- t + 1
-			previous_it <- new_log_lik
-			}
-	}
 
 
 if(unq_matches_only == TRUE){
-	save(prot_abund, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, file = "EMoutputUnq.Rdata")
+	save(prot_abund, prot_prec, mixing_fract, whole_data_logL, max_state, div_max, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, pi_fit, alpha_pres, file = "EMoutputUnq.Rdata")
 	}else{
-		save(prot_abund, prot_prec, mixing_fract, whole_data_logL, initial_convergence, max_state, div_max, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, file = "EMoutputDeg.Rdata")
+		save(prot_abund, prot_prec, mixing_fract, whole_data_logL, max_state, div_max, div_max, divergentPep_summary, background_SRYfreq, likdiff_df, pi_fit, alpha_pres, file = "EMoutputDeg.Rdata")
 	}
 
 

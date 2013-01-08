@@ -553,5 +553,39 @@ output_list
 
 
 
+plot_proteinConnections <- function(overlapMat){
+  
+  require("igraph")
+  
+  overlapMatWeights <- overlapMat/diag(overlapMat) 
+  prot_overlap_layout2 <- graph.adjacency(overlapMatWeights, weighted=T)
+  
+  # Degree
+  V(prot_overlap_layout2)$degree <- degree(magallg)
+  # Betweenness centrality
+  V(prot_overlap_layout2)$btwcnt <- betweenness(magallg)
+  
+  # Set vertex attributes
+  V(prot_overlap_layout2)$label <- V(prot_overlap_layout2)$name
+  V(prot_overlap_layout2)$label.color <- rgb(0,0,.2,.6)
+  V(prot_overlap_layout2)$size <- 3
+  V(prot_overlap_layout2)$label.cex <- .3
+  V(prot_overlap_layout2)$frame.color <- NA
+  V(prot_overlap_layout2)$color <- rgb(0,0,1,.5)
+  
+  # Set edge attributes
+  E(prot_overlap_layout2)$arrow.size <- 0
+  
+  # Set edge gamma according to edge weight
+  egam <- (E(prot_overlap_layout2)$weight+.1)/max(E(prot_overlap_layout2)$weight+.1)
+  E(prot_overlap_layout2)$color <- rgb(.5,.5,0,egam)
+  
+  prot_overlap_layout2 <- simplify(prot_overlap_layout2, remove.multiple=FALSE, remove.loops=TRUE)
+  
+  pdf("protOverlap.pdf")
+  plot(prot_overlap_layout2, main = "layout.kamada.kawai", layout=layout.kamada.kawai)
+  plot(prot_overlap_layout2, main = "layout.fruchterman.reingold", layout=layout.fruchterman.reingold)
+  dev.off()
+}
 
 

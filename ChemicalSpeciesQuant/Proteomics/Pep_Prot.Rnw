@@ -664,7 +664,7 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 
 
 matched_prots <- apply(mixing_fract[,1:n_prot], 2, sum) > 0.5
-
+apply(mixing_fract[,1:n_prot], 2, sum)[alpha_pres == 0]
 prot_abund_final <- prot_abund[,c(1:n_prot)[matched_prots]]
 prot_abund <- prot_abund[,-c(1:n_prot)[!matched_prots]]
 prot_prec <- prot_prec[,-c(1:n_prot)[!matched_prots]]
