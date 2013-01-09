@@ -64,6 +64,7 @@ plot_proteinConnections(overlapMat)
 whole_data_logL <- NULL
 previous_it <- -Inf
 continue_it <- TRUE
+set_alpha <- FALSE # determines which proteins can be dropped at the time of convergence
 
 t <- 1
 while(continue_it){
@@ -101,7 +102,6 @@ while(continue_it){
       
     relPep <- rowSums(sparse_mapping[,relProt] != 0) != 0
     
-    
     subProtAbund <- prot_abund[,relProt]
     subPepAbund <- uniquePepMean[,relPep]
     subPepPrec <- uniquePepPrecision[,relPep]
@@ -110,9 +110,7 @@ while(continue_it){
     #attempt 2
     #find mixing proporitons for observed combination of peptide-protein matches
     
-    pepCombos <- apply(subMap, 1, function(x){
-      paste(x, collapse = "")
-      })
+    pepCombos <- apply(subMap, 1, function(x){paste(x, collapse = "")})
     
     uniqueCombos <- unique(pepCombos[apply(subMap, 1, sum) != 1])
     
@@ -128,7 +126,7 @@ while(continue_it){
       
       for(pepEntries in c(1:length(subMap[,1]))[comboMatches]){
         #protein trends weighted by peptide precisions and poriton of total mixing fraction for matched proteins in this peptide
-        protStack <- rbind(protStack, prot_abund[,relProt] * t(t(rep(1, n_c))) %*% t(subMap[pepEntries,]) * t(t(subPepPrec[,pepEntries])) %*% rep(1, length(npepMatches)))
+        protStack <- rbind(protStack, prot_abund[,relProt] * t(t(rep(1, n_c))) %*% t(subMap[pepEntries,]) * t(t(subPepPrec[,pepEntries])) %*% rep(1, length(matchedCombo)))
         #peptide trends weighted by peptide precisions
         pepVec <- c(pepVec, subPepAbund[,pepEntries] * subPepPrec[,pepEntries])
         
@@ -144,96 +142,48 @@ while(continue_it){
       }
     
     #find consistent mixtures across combinations, weighting by the precision of estimation
-    
-    for(a_combo in 1:length(uniqueCombos)){
-      comboMatches <- pepCombos %in% uniqueCombos[a_combo]
-      matchedCombo <- as.numeric(strsplit(uniqueCombos[a_combo], split = "")[[1]])
-      subMixes <- combo_mixes[,matchedCombo == 1]/rowSums(combo_mixes[,matchedCombo == 1], na.rm = TRUE)
-      wsubMix <- subMixes * combo_precision
+      if(length(uniqueCombos) == 1){
+        comboMatches <- pepCombos %in% uniqueCombos
+        matchedCombo <- as.numeric(strsplit(uniqueCombos, split = "")[[1]])
+        mixing_fract[relPep, relProt][comboMatches,matchedCombo == 1] <- t(t(rep(1, sum(comboMatches)))) %*% combo_mixes
       
-      mix_converge <- FALSE
-      
-      pseudoRowTotal <- rowSums(wsubMix, na.rm = TRUE)
-      pseudoFracts <- wsubMix
-      pi_tot_row <- rep(1, times = length(uniqueCombos))
-      pi_prop <- rep(1/length(wsubMix[1,]), length(wsubMix[1,]))
-      #lsei(A = 1 * !is.na(relFracts), B = pseudoRowTotal, E = t(rep(1, length(wsubMix[1,]))), F = 1, G = diag(rep(1, length(wsubMix[1,]))), H = rep(0, length(wsubMix[1,])))
-      
-      while(mix_converge == FALSE){
-        for(i in 1:length(wsubMix[,1])){
-          for(j in 1:length(wsubMix[1,])){
-            if(is.na(wsubMix[i,j])){
-              pseudoFracts[i,j] <- pseudoRowTotal[i] * pi_prop[j]
+        }else{
+        for(a_combo in 1:length(uniqueCombos)){
+          comboMatches <- pepCombos %in% uniqueCombos[a_combo]
+          matchedCombo <- as.numeric(strsplit(uniqueCombos[a_combo], split = "")[[1]])
+          subMixes <- combo_mixes[,matchedCombo == 1]/rowSums(combo_mixes[,matchedCombo == 1], na.rm = TRUE)
+          wsubMix <- subMixes * combo_precision
+          
+          mix_converge <- FALSE
+          
+          pseudoRowTotal <- rowSums(wsubMix, na.rm = TRUE)
+          pseudoFracts <- wsubMix
+          pi_tot_row <- rep(1, times = length(uniqueCombos))
+          pi_prop <- rep(1/length(wsubMix[1,]), length(wsubMix[1,]))
+          
+          while(mix_converge == FALSE){
+            for(i in 1:length(wsubMix[,1])){
+              for(j in 1:length(wsubMix[1,])){
+                if(is.na(wsubMix[i,j])){
+                  pseudoFracts[i,j] <- pseudoRowTotal[i] * pi_prop[j]
+                }
+              }
             }
+            pseudoRowTotal <- rowSums(pseudoFracts)
+            
+            new_pi <- colSums(pseudoFracts, na.rm = TRUE)/sum(colSums(pseudoFracts, na.rm = TRUE))
+            if(sum((pi_prop - new_pi)^2) < 10^-8){mix_converge <- TRUE}
+            pi_prop <- new_pi
           }
+          mixing_fract[relPep, relProt][comboMatches,matchedCombo == 1] <- t(t(rep(1, sum(comboMatches)))) %*% pi_prop
         }
-        pseudoRowTotal <- rowSums(pseudoFracts)
-        
-        new_pi <- colSums(pseudoFracts, na.rm = TRUE)/sum(colSums(pseudoFracts, na.rm = TRUE))
-        if(sum((pi_prop - new_pi)^2) < 10^-8){mix_converge <- TRUE}
-        pi_prop <- new_pi
       }
-      mixing_fract[relPep, relProt][comboMatches,matchedCombo == 1] <- t(t(rep(1, sum(comboMatches)))) %*% pi_prop
-    }
+  }  
     
     
-    
-    
-    
-    #attempt 1
-    #look at the subset of proteins matching greater than 1 peptide - because these ones will have a mixing fraction of 1 for the unique peptide and w
-    npepMatches <- colSums(sparse_mapping[,colnames(sparse_mapping) %in% subGraphs[[graph_part]]])
-    if(1 %in% npepMatches){
-      maskPeps <- rowSums(matrix(subMap[,npepMatches == 1], ncol = sum(npepMatches[npepMatches == 1])))
-    }else{
-      maskPeps <- rep(0, times = length(subMap[,1]))
-    }
-    
-    
-    mix_converge <- FALSE
-    prev_mix <- relFract[[graph_part]]
-    
-    while(mix_converge == FALSE){
-      
-      protStack <- NULL
-      pepVec <- NULL
-      
-      for(pepEntries in c(1:length(subMap[,1]))[maskPeps != 1]){
-        #protein trends weighted by peptide precisions and poriton of total mixing fraction for matched proteins in this peptide
-        pi_adj_weight <- (prev_mix / sum(prev_mix[subMap[pepEntries,] == 1]))^-1 * subMap[pepEntries,] 
-        protStack <- rbind(protStack, prot_abund[,relProt] * t(t(rep(1, n_c))) %*% t(subMap[pepEntries,]) * t(t(subPepPrec[,pepEntries])) %*% rep(1, length(npepMatches)) * t(t(rep(1, n_c))) %*% pi_adj_weight)
-        
-        #peptide trends weighted by peptide precisions
-        pepVec <- c(pepVec, subPepAbund[,pepEntries] * subPepPrec[,pepEntries])
-        }
-      protStack[is.nan(protStack)] <- 0
-      
-      solution <- lsei(A = protStack, B = pepVec, E = t(rep(1, times = length(npepMatches))), F = 1, G = diag(length(npepMatches)), H = rep(0, times = length(npepMatches)))$X
-      print(solution)
-      new_mix <- solution
-      
-      #floor mixing fractions to 10^-10
-      new_mix[new_mix < 0.01 & npepMatches != 1] <- 0.01
-      if(sum((new_mix - prev_mix)^2) < 10^-6){mix_converge <- TRUE}
-      prev_mix <- new_mix
-      
-      }
-    relFract[[graph_part]] <- prev_mix  
-    
-    subMapMix <- subMap * t(t(rep(1, length(subMap[,1])))) %*% prev_mix
-    subMapMix[maskPeps == 1,] <- subMap[maskPeps == 1,] * t(t(rep(1, sum(maskPeps)))) %*% (npepMatches == 1)*1
-    
-    mixing_fract[relPep, relProt] <- subMapMix/rowSums(subMapMix)
-              
-    }
+   
   
-  
-  
-  
-  
-  
-  
-  #update alpha - whether a protein is present, based on bayes factors
+  #update alpha - whether a protein is present, based on bayes factors - do this once upon initial convergence and then continue running
   
   for(protein in c(1:n_prot)[subSumable == 1]){
     #find all peptides that match the possibly absent protein
