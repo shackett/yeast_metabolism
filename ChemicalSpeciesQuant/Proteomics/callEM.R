@@ -55,6 +55,16 @@ plot_proteinConnections(overlapMat)
 mixing_fract_inconsistent <- mixing_fract
 ambig_peps <- c(1:n_p)[rowSums(sparse_mapping) != 1]  
   
+
+#override determination - switch the protein abundance with the most consistent single peptide
+
+prot_abund_over <- matrix(NA, ncol = n_prot, nrow = n_c)
+for(a_prot in c(1:n_prot)){
+  condMed <- apply(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c), 1, median)
+  bestPepMatch <- matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))]
+  bestPepMatch[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
+  prot_abund_over[,a_prot] <- bestPepMatch
+}
   
 ### Iteration ###
 
@@ -72,6 +82,10 @@ while(continue_it){
 	prot_abund <- as.matrix(Matrix(prot_abund, sparse = FALSE))
 	prot_abund[is.nan(prot_abund)] <- 0
 	
+  #if all peptides attributed to a protein are called "divergent" then initialize its trend as the median of matched peptides for each condition
+	divOverride <- colSums(mixing_fract * pi_fit) == 0; divOverride[alpha_pres == 0] <- FALSE
+	prot_abund[,divOverride] <- prot_abund_over[,divOverride]
+  
 	#update protein precision
 	prot_prec <- uniquePepPrecision %*% mixing_fract
 	
@@ -103,9 +117,6 @@ while(continue_it){
       }
     
     relPep <- rowSums(sparse_mapping[,relProt] != 0) != 0
-    
-    
-    
     
     subProtAbund <- prot_abund[,relProt]
     subPepAbund <- uniquePepMean[,relPep]
@@ -218,6 +229,7 @@ while(continue_it){
           }
         if(lneg >= lpos + log(prior_p_div)){
           alpha_pres[protein] <- 0 
+          mixing_fract[,protein] <- 0
         }
       }
     set_alpha <- "SET"
@@ -248,6 +260,7 @@ while(continue_it){
   	  t <- t + 1
   	  previous_it <- new_log_lik
   	}
+  #plot(c(prot_abund) ~ c(prot_abund_over), cex = 0.5, pch = 16)
 }
 
 max_state <- apply(mixing_fract, 1, which.max)
@@ -332,7 +345,7 @@ divergentPep_summary <- data.frame(peptide = names(likdiff)[div_max], prot_match
 poor_match_redMat <- sparse_mapping[div_max,]
 
 for(pep in 1:length(poor_match_redMat[,1])){
-	divergentPep_summary$prot_matches[pep] <- paste(colnames(poor_match_redMat)[poor_match_redMat[pep,]], collapse = "/")
+	divergentPep_summary$prot_matches[pep] <- paste(colnames(poor_match_redMat)[poor_match_redMat[pep,] == 1], collapse = "/")
 	divergentPep_summary$nS[pep] <- length(grep("S", unlist(strsplit(divergentPep_summary$peptide[pep], ""))))
 	divergentPep_summary$nR[pep] <- length(grep("R", unlist(strsplit(divergentPep_summary$peptide[pep], ""))))
 	divergentPep_summary$nY[pep] <- length(grep("Y", unlist(strsplit(divergentPep_summary$peptide[pep], ""))))
@@ -345,7 +358,7 @@ background_SRYfreq <- data.frame(peptide = names(likdiff)[!div_max], prot_matche
 good_match_redMat <- sparse_mapping[!div_max,]
 
 for(pep in 1:length(good_match_redMat[,1])){
-	background_SRYfreq$prot_matches[pep] <- paste(colnames(good_match_redMat)[good_match_redMat[pep,]], collapse = "/")
+	background_SRYfreq$prot_matches[pep] <- paste(colnames(good_match_redMat)[good_match_redMat[pep,] == 1], collapse = "/")
 	background_SRYfreq$nS[pep] <- length(grep("S", unlist(strsplit(background_SRYfreq$peptide[pep], ""))))
 	background_SRYfreq$nR[pep] <- length(grep("R", unlist(strsplit(background_SRYfreq$peptide[pep], ""))))
 	background_SRYfreq$nY[pep] <- length(grep("Y", unlist(strsplit(background_SRYfreq$peptide[pep], ""))))

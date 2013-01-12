@@ -664,9 +664,8 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 
 
 matched_prots <- apply(mixing_fract[,1:n_prot], 2, sum) > 0.5
-apply(mixing_fract[,1:n_prot], 2, sum)[alpha_pres == 0]
 prot_abund_final <- prot_abund[,c(1:n_prot)[matched_prots]]
-prot_abund <- prot_abund[,-c(1:n_prot)[!matched_prots]]
+#prot_abund <- prot_abund[,-c(1:n_prot)[!matched_prots]]
 prot_prec <- prot_prec[,-c(1:n_prot)[!matched_prots]]
 mixing_fract <- mixing_fract[,-c(1:n_prot)[!matched_prots]]
 
@@ -696,7 +695,7 @@ xtable(table(div_max), caption = "Number of peptides not-conforming to some gene
 
 \begin{figure}
 <<EMlikplot, echo = FALSE>>=
-plot(whole_data_logL[-1], col = ifelse(c(2:length(whole_data_logL)) <= initial_convergence, "BLACK", "ORANGE"), pch = 16)
+plot(log(abs(diff(whole_data_logL))), xlab = "Iteration", ylab = "log change in log-likelihood")
 @
 \caption{Log-likelihood of EM.  First stage (black) allows for a peptide to partially match proteins and partially diverge from the trend, the second stage (orange) thresholds such that a peptide is entirely accounted for by protein trends or entirely departs from plausible trends}
 \end{figure}
@@ -731,7 +730,18 @@ xtable(Psites, caption = "Number of peptides within the protein-matched and non-
 
 In order to see if divergent peptides were enriched for phosphorylation sites, they were compared with known phosphorylation sites from phosphoGRID, to determine how many of the peptide intervals of matched and non-matched peptides contained known phospho-sites.  This produced the contingency table (table \ref{phosphoSites}), which has a significant enrichment of phospho-sites (\Sexpr{round(Psites[2,1]/sum(Psites[,1]), 3)} vs. \Sexpr{round(Psites[2,2]/sum(Psites[,2]), 3)}) according to a chi-square test (p-value: \Sexpr{signif(chisq.test(Psites)$p.value)}).
 
+Divergent peptides also appear to be associated with convoluted proteins
+<<divLengths, results = "asis">>=
+valMatchCounts <- table(rowSums(sparse_mapping[pi_fit == 1,]))
+divMatchCounts <- table(rowSums(sparse_mapping[pi_fit == 0,]))
+matchCountsTab <- data.frame(proteinMatches = as.numeric(sort(union(names(valMatchCounts), names(divMatchCounts)))), matchCounts = 0, divergentCounts = 0)
+for(val in 1:length(valMatchCounts)){matchCountsTab$matchCounts[matchCountsTab$proteinMatches == names(valMatchCounts)[val]] <- valMatchCounts[val]}
+for(val in 1:length(divMatchCounts)){matchCountsTab$divergentCounts[matchCountsTab$proteinMatches == names(divMatchCounts)[val]] <- divMatchCounts[val]}
 
+print(xtable(rbind(matchCountsTab, c("average match", signif(sum(matchCountsTab$matchCounts * matchCountsTab$proteinMatches)/sum(matchCountsTab$matchCounts), 3), signif(sum(matchCountsTab$divergentCounts * matchCountsTab$proteinMatches)/sum(matchCountsTab$divergentCounts), 3))), caption = "Divergent peptides tend to have a higher number of protein matches than peptide-protein matched peptides but this effect is small relative to the enrichment of phospho-sites"), include.rownames = FALSE)
+@
+  
+  
 \begin{figure}
 <<rawHM, echo = FALSE, cache = TRUE>>=
 heatmap.2(t(prot_abund_final), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = greenred(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "white", breaks = seq(-1*max(range(prot_abund_final, na.rm = TRUE)), max(range(prot_abund_final, na.rm = TRUE)), by = max(range(prot_abund_final, na.rm = TRUE))/250))
@@ -818,7 +828,7 @@ prior_mat_logical <- prior_mat_logical == 1
 possibleMap <- Matrix(prior_mat_logical)
 @
 
-
+See NPT1 for a pathological example.  If all peptides are called divergent then the protein trend should be initialized as the median for each condition
 
 \begin{figure}[h!]
 <<protPlot1, dependson = c("setup", "EMprep"), warning = FALSE>>=
@@ -827,14 +837,16 @@ set.seed(1234)
 gene_samples <- sample(c(1:n_prot), 20)
 plotting_names <- orf2common(colnames(prot_abund_final))
 
-plot_protein_lattice(gene_samples[1:5], possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 1)
+#plot_protein_lattice(gene_samples[1:5], possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 1)
+plot_protein_lattice(gene_samples[1:5], possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 1, pi_fit)
+
 @
 \caption{relative protein abundance and peptide trends contributing to protein trend}
 \end{figure}
 
 \begin{figure}[h!]
 <<protPlot2, dependson = c("setup", "EMprep"), warning = FALSE>>=
-plot_protein_lattice(gene_samples[6:20], possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 3)
+plot_protein_lattice(gene_samples[6:20], possibleMap, prot_abund_final, prot_prec, uniquePepMean, uniquePepPrecision, mixing_fract, conditions, label_phospho = TRUE, phospho_lib = phospho_sites_red, plotting_names = plotting_names, num.cols = 3, pi_fit)
 @
 \caption{relative protein abundance and peptide trends contributing to protein trend}
 \end{figure}
@@ -990,9 +1002,11 @@ heatmap.2(jointTPdf, trace = "none", Colv = NULL, dendrogram = "row", na.rm = TR
 <<globalPTcomp, dependson = "PTcor", echo = FALSE>>=
 library(reshape)
 
-pool_tresh <- 4
-shared_prot_pool <- shared_prot; shared_prot_pool[shared_prot_pool < -1*pool_tresh] <- -1*pool_tresh; shared_prot_pool[shared_prot_pool > pool_tresh] <- pool_tresh
-shared_trans_pool <- shared_trans; shared_trans_pool[shared_trans_pool < -1*pool_tresh] <- -1*pool_tresh; shared_trans_pool[shared_trans_pool > pool_tresh] <- pool_tresh
+pool_thresh <- 4
+shared_prot_pool <- shared_prot; shared_prot_pool[shared_prot_pool < -1*pool_thresh] <- -1*pool_thresh; shared_prot_pool[shared_prot_pool > pool_thresh] <- pool_thresh
+shared_trans_pool <- shared_trans; shared_trans_pool[shared_trans_pool < -1*pool_thresh] <- -1*pool_thresh; shared_trans_pool[shared_trans_pool > pool_thresh] <- pool_thresh
+
+PTcor <- signif(c(cor(c(shared_prot), c(shared_trans), method = "pearson"), cor(c(shared_prot), c(shared_trans), method = "spearman")), 3)
 
 PTscatterDF <- cbind(melt(shared_trans_pool), melt(shared_prot_pool)$value)
 colnames(PTscatterDF) <- c("Condition", "Gene", "Transcript", "Protein")
@@ -1005,8 +1019,41 @@ PTscatter_plotter <- ggplot(cbind(PTscatterDF, z = 1), aes(x = Protein, y = Tran
 PTscatter_plotter + geom_hex()  
 
 @
-\caption{Global correlation between relative protein abundance and relative transcript abundance}
+\caption{Global correlation between relative protein abundance and relative transcript abundance. The pearson and spearman correlations between non-thresholded relative-abundances are \Sexpr{PTcor[1]} and \Sexpr{PTcor[2]} respectively.}
 \end{figure}
+
+\begin{figure}
+<<globalPTregressed, dependson = "PTcor", echo = FALSE>>=
+library(reshape)
+
+protSlopes <- lm(shared_prot ~ factor(prot_cond$limitation) + factor(prot_cond$limitation) * prot_cond$realDR)$coef
+protSlopes <- protSlopes[6:10,]; rownames(protSlopes) <- levels(factor(prot_cond$limitation))
+
+transSlopes <- lm(shared_trans ~ factor(prot_cond$limitation) + factor(prot_cond$limitation) * prot_cond$realDR)$coef
+transSlopes <- transSlopes[6:10,]; rownames(transSlopes) <- levels(factor(prot_cond$limitation))
+
+PTcor <- signif(c(cor(c(protSlopes), c(transSlopes), method = "pearson"), cor(c(protSlopes), c(transSlopes), method = "spearman")), 3)
+
+pool_thresh <- 10
+protSlopes[protSlopes < -1 * pool_thresh] <- -1 * pool_thresh; protSlopes[protSlopes > pool_thresh] <- pool_thresh
+transSlopes[transSlopes < -1 * pool_thresh] <- -1 * pool_thresh; transSlopes[transSlopes > pool_thresh] <- pool_thresh
+
+
+PTscatterDF <- cbind(melt(protSlopes), melt(transSlopes)$value)
+colnames(PTscatterDF) <- c("Condition", "Gene", "Transcript", "Protein")
+
+hex_bin_max <- 500
+n_hex_breaks <- 8
+hex_breaks <- round(exp(seq(0, log(500), by = log(500)/8)))
+
+PTscatter_plotter <- ggplot(cbind(PTscatterDF, z = 1), aes(x = Protein, y = Transcript, z = z)) + scale_x_continuous("Relative protein abundance") + scale_y_continuous("Relative transcript abundance") + scale_fill_gradient(low = "black", high = "firebrick1", name = "count", trans = "log", breaks = hex_breaks, labels = hex_breaks) 
+PTscatter_plotter + geom_hex()  
+
+@
+\caption{Correlation between by-condition slopes protein and transcript relative abundance. The pearson and spearman correlations between non-thresholded relative-abundances are \Sexpr{PTcor[1]} and \Sexpr{PTcor[2]} respectively.}
+\end{figure}
+
+
 
 
 \begin{figure}
@@ -1042,7 +1089,7 @@ write.output(uq_binPepMatrix[!(apply(uq_binPepMatrix != 0, 1, sum) %in% c(0,leng
 write.output(t(imput_abund_desc), "run_Unq/relAbundMatrix_desc.tsv")
 write.output(t(impute_abund), "run_Unq/relAbundMatrix.tsv")
 write.output(t(shared_prot - shared_trans), "run_Unq/TPdiffMatrix.tsv")
-save(n_prot, prot_abund, prot_prec, conditions, file = "run_Unq/protLMfile.Rdata")
+save(n_prot, prot_abund_final, prot_prec, conditions, file = "run_Unq/protLMfile.Rdata")
 }
 if(unq_matches_only == FALSE){
 write.output(prot_missingVal_desc, "run_Deg/mvMatrix.tsv")
@@ -1052,7 +1099,8 @@ write.output(t(impute_abund), "run_Deg/relAbundMatrix.tsv")
 write.output(t(shared_prot - shared_trans), "run_Deg/TPdiffMatrix.tsv")
 write.output(t(shared_trans), "run_Deg/Trans_shared.tsv")
 write.output(transcript_brauer, "run_Deg/Trans_all.tsv")
-save(n_prot, prot_abund, prot_prec, conditions, file = "run_Deg/protLMfile.Rdata")
+#save(n_prot, prot_abund, prot_prec, conditions, file = "run_Deg/protLMfile.Rdata") #switched to prot_abund_final ?
+save(n_prot, prot_abund_final, prot_prec, conditions, file = "run_Unq/protLMfile.Rdata")
 }
 @
 
