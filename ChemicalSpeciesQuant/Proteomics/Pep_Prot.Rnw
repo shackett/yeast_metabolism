@@ -663,11 +663,12 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 	}
 
 
-matched_prots <- apply(mixing_fract[,1:n_prot], 2, sum) > 0.5
-prot_abund_final <- prot_abund[,c(1:n_prot)[matched_prots]]
-#prot_abund <- prot_abund[,-c(1:n_prot)[!matched_prots]]
-prot_prec <- prot_prec[,-c(1:n_prot)[!matched_prots]]
-mixing_fract <- mixing_fract[,-c(1:n_prot)[!matched_prots]]
+#matched_prots <- apply(mixing_fract[,1:n_prot], 2, sum) > 0.5
+#prot_abund_final <- prot_abund[,c(1:n_prot)[matched_prots]]
+prot_abund_final <- prot_abund
+#prot_prec <- prot_prec[,-c(1:n_prot)[!matched_prots]]
+#mixing_fract <- mixing_fract[,-c(1:n_prot)[!matched_prots]]
+mixing_fract[likdiff_df$matched == "Divergent-trend",] <- 0
 
 prot_abund_final[prot_abund_final == 0] <- NA
 
@@ -695,7 +696,7 @@ xtable(table(div_max), caption = "Number of peptides not-conforming to some gene
 
 \begin{figure}
 <<EMlikplot, echo = FALSE>>=
-plot(log(abs(diff(whole_data_logL))), xlab = "Iteration", ylab = "log change in log-likelihood")
+plot(log(abs(diff(whole_data_logL))), xlab = "Iteration", ylab = "log change in log-likelihood", pch = 16)
 @
 \caption{Log-likelihood of EM.  First stage (black) allows for a peptide to partially match proteins and partially diverge from the trend, the second stage (orange) thresholds such that a peptide is entirely accounted for by protein trends or entirely departs from plausible trends}
 \end{figure}
@@ -730,7 +731,7 @@ xtable(Psites, caption = "Number of peptides within the protein-matched and non-
 
 In order to see if divergent peptides were enriched for phosphorylation sites, they were compared with known phosphorylation sites from phosphoGRID, to determine how many of the peptide intervals of matched and non-matched peptides contained known phospho-sites.  This produced the contingency table (table \ref{phosphoSites}), which has a significant enrichment of phospho-sites (\Sexpr{round(Psites[2,1]/sum(Psites[,1]), 3)} vs. \Sexpr{round(Psites[2,2]/sum(Psites[,2]), 3)}) according to a chi-square test (p-value: \Sexpr{signif(chisq.test(Psites)$p.value)}).
 
-Divergent peptides also appear to be associated with convoluted proteins
+Divergent peptides also appear to be associated with convoluted proteins:
 <<divLengths, results = "asis">>=
 valMatchCounts <- table(rowSums(sparse_mapping[pi_fit == 1,]))
 divMatchCounts <- table(rowSums(sparse_mapping[pi_fit == 0,]))
@@ -755,7 +756,7 @@ heatmap.2(t(prot_abund_final), trace = "none", Colv = NULL, dendrogram = "row", 
 library(missMDA)
 #determine how many significant principal components should be included based on repeated random sub-sampling validation
 pcrange <- c(2,18)
-npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 50)
+npc.compare <- estim_ncpPCA(prot_abund_final, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 10)
 npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.01 + min(npc.compare$criterion)][1]
 
 @
@@ -815,15 +816,17 @@ colnames(pc_plot_df) <- c("condition", "PC", "value")
 pc_plot_df$cond <- factor(sapply(as.character(pc_plot_df$condition), function(x){unlist(strsplit(x, ""))[1]})) 
 pc_plot_df$PC <- factor(pc_plot_df$PC, levels = paste("PC", c(1:npc)))
 
-factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol =2, scales = "free_y") + scale_x_discrete("Experimental condition") + theme(axis.text.x = element_text(size = 3, face = "bold"))
+factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol =2, scales = "free_y") + scale_x_discrete("Experimental condition") + theme(panel.grid.minor = element_blank(), panel.background = element_rect(fill = "aliceblue"), strip.background = element_rect(fill = "cadetblue1"), text = element_text(size = 15), axis.text.x = element_text(angle = 90), title = element_text(size = 25, face = "bold"))
 factor_plot + geom_line()
-@
+ @
+
 
 <<plot_proteinTrends, dependson = "MVimputeData", cache = TRUE, warning = FALSE, cache = TRUE>>=
 tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
 tmp <- as.matrix(tmp)
 tmp[!(tmp %in% c(0,1))] <- 1 
-prior_mat_logical <- cbind(as.matrix(unique_mappingMat[,matched_prots]), tmp) 
+#prior_mat_logical <- cbind(as.matrix(unique_mappingMat[,matched_prots]), tmp) 
+prior_mat_logical <- cbind(as.matrix(unique_mappingMat, tmp) 
 prior_mat_logical <- prior_mat_logical == 1
 possibleMap <- Matrix(prior_mat_logical)
 @
@@ -880,6 +883,36 @@ print(xtable(met_gene_overlap, caption = "Investigating the overlap of metabolic
 
 
 How many metabolic genes are represented in our ascertained proteins: Using the Yeast consensus metabolic reconstruction (version 5), \Sexpr{length(met_genes)} genes involved in some reaction were assembled.  
+
+\section*{Organellar composition driving protein abundances}
+
+<<>>=
+library(yeastExpData)
+data(gfp)
+col_orfNames <- colnames(impute_abund)
+GFPlocalizationCols <- 11:32
+                           
+geneLocal <- sapply(col_orfNames, function(orfNames){
+  matches <- gfp$yORF %in% strsplit(orfNames, split = '/')[[1]]
+  if(sum(matches) == 0){
+      rep(NA, times = length(GFPlocalizationCols))
+    }else{
+    colSums(gfp[matches,GFPlocalizationCols]) != 0
+    }
+})
+#remove low frequency categories and identify unlocalized with NA
+geneLocal <- geneLocal[rowSums(geneLocal, na.rm = T) > 15,]
+#geneLocal[,colSums(geneLocal) == 0] <- NA
+                           
+localizationDF <- cbind(t(geneLocal), t(impute_abund))
+localizationDFwrite <- data.frame(Gene = rownames(localizationDF), localizationDF, stringsAsFactors = FALSE)
+localDF_Eweight = c("EWEIGHT", rep(0, times = length(geneLocal[,1])), rep(1, times = length(impute_abund[,1])))
+localDF_Eweight <-  rbind(localDF_Eweight, localizationDFwrite)                         
+                           
+@
+
+
+
 
 \clearpage
 
@@ -1068,12 +1101,15 @@ cor_plot + xlab("spearman correlation") + geom_histogram(colour = "white", fill 
 <<fileDump1, dependson = "c(mvmat_red, mv_impute, PTcor)", echo = TRUE, cache = TRUE, warning = FALSE>>=
 #file dump
 #add gene descriptions
+
+#Missing value matrix                           
 prot_missingVal_desc <- cond_peps
 gene_desc <- sapply(rownames(cond_peps), function(gene){try(orf2desc(unlist(strsplit(gene, split = '[/]'))[1]), silent = TRUE)})
 gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- sapply(names(gene_desc)[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})], function(gene){try(orf2desc(unlist(strsplit(gene, split = '[-/]'))[1]), silent = TRUE)})
 gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- "No Annotation"
 rownames(prot_missingVal_desc) <- unname(gene_desc)
 
+#Imputed relative abundance matrix
 imput_abund_desc <- impute_abund
 gene_desc <- sapply(colnames(imput_abund_desc), function(gene){try(orf2desc(unlist(strsplit(gene, split = '[/]'))[1]), silent = TRUE)})
 gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- sapply(names(gene_desc)[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})], function(gene){try(orf2desc(unlist(strsplit(gene, split = '[-/]'))[1]), silent = TRUE)})
@@ -1082,13 +1118,15 @@ colnames(imput_abund_desc) <- unname(gene_desc)
 
 impute_abund_names <- colnames(impute_abund)
 colnames(impute_abund) <- unname(sapply(colnames(impute_abund), function(x){strsplit(x, split = "/")[[1]][1]}))
-
+                           
 if(unq_matches_only == TRUE){
 write.output(prot_missingVal_desc, "run_Unq/mvMatrix.tsv")
 write.output(uq_binPepMatrix[!(apply(uq_binPepMatrix != 0, 1, sum) %in% c(0,length(uq_binPepMatrix[1,]))),], "run_Unq/mvMatrixpeps.tsv")
 write.output(t(imput_abund_desc), "run_Unq/relAbundMatrix_desc.tsv")
 write.output(t(impute_abund), "run_Unq/relAbundMatrix.tsv")
 write.output(t(shared_prot - shared_trans), "run_Unq/TPdiffMatrix.tsv")
+#write.table(localDF_Eweight, file = "localDF_Eweight.tsv", sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
 save(n_prot, prot_abund_final, prot_prec, conditions, file = "run_Unq/protLMfile.Rdata")
 }
 if(unq_matches_only == FALSE){
@@ -1344,9 +1382,15 @@ xtable(protRegressions$divpep_Fstat$FDR_stats, display = c("s", "f", "g", "d"), 
 \textbf{Starting by looking at the best versus the worst, in terms of protein(peptide) patterns}
 
 <<badCorrCompare1, dependson = "PTcor">>=
-dispartecors <- sort(pt_corrs$correlation)[c(1:10,length(pt_corrs[,1]):(length(pt_corrs[,1]) - 9))]
-gene_index <- order(pt_corrs$correlation)[c(1:10,length(pt_corrs[,1]):(length(pt_corrs[,1]) - 9))]
+spearCounts <- 5
 
+gene_index <- c(order(pt_corrs$correlation)[1:spearCounts],
+order(abs(pt_corrs$correlation))[1:spearCounts],
+order(pt_corrs$correlation)[(length(pt_corrs[,1]) - (spearCounts - 1)):length(pt_corrs[,1])])
+                             
+dispartecors <- pt_corrs$correlation[gene_index]
+corrClass <- rep(c("anticorrelated", "uncorrelated", "correlated"), each = spearCounts)        
+                           
 prot_abundMatchedIndex <- sapply(colnames(shared_prot)[gene_index], function(match_it){c(1:length(prot_abund_final[1,]))[colnames(prot_abund_final) == match_it]})
 
 @
@@ -1364,16 +1408,22 @@ plot_protein_lattice(prot_abundMatchedIndex, possibleMap, prot_abund_final, prot
 \begin{figure}[h!]
 <<dispProtScatter, dependson = c("badCorrCompare1", "setup")>>=
 shared_prot_tmp <- shared_prot[,gene_index]; shared_trans_tmp <- shared_trans[,gene_index]
-colnames(shared_prot_tmp) <- colnames(shared_trans_tmp) <- unname(orf2common(colnames(shared_prot)[gene_index]))
-  
+colnames(shared_prot_tmp) <- colnames(shared_trans_tmp) <- unname(orf2common(colnames(shared_prot)[gene_index])) 
+                           
 divCompDf <- cbind(melt(shared_prot_tmp), melt(shared_trans_tmp)[,3])
 colnames(divCompDf) <- c("condition", "gene", "Protein_Abundance", "Transcript_Abundance")
 divCompDf$limitation <- sapply(as.character(divCompDf$condition), function(el){strsplit(el, split = "")[[1]][1]})
 divCompDf$gene <- factor(divCompDf$gene, levels = colnames(shared_prot_tmp))
+divCompDf$class <- rep(corrClass, each = length(shared_prot_tmp[,1]))
 
-divScatterPlot <- ggplot(divCompDf, aes(x = Transcript_Abundance, y = Protein_Abundance, col = factor(limitation))) + facet_wrap(~ gene, ncol = 5, scales = "free")
-print(divScatterPlot + geom_point())
+scatter_facet_theme <- theme(text = element_text(size = 16, face = "bold"), title = element_text(size = 20, face = "bold"), panel.background = element_blank(), legend.position = "top", 
+  panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 0.5)) 
+                                                      
+divScatterPlot <- ggplot(divCompDf, aes(x = Transcript_Abundance, y = Protein_Abundance, col = factor(limitation), fill = factor(limitation))) + scatter_facet_theme  + facet_wrap(~ gene, ncol = 5, scales = "free")# +  facet_grid(class ~ ., margins = "gene") 
+print(divScatterPlot + geom_point(aes(size = 2)) + scale_x_continuous(name = "Transcript relative abundance") + scale_y_continuous(name = "Protein relative abundance") + scale_colour_discrete(guide = "none") + scale_fill_discrete(name = "Limitation") + scale_size_continuous(guide = "none") + geom_smooth(method = lm, aes(fill = factor(limitation), alpha = as.numeric(0))) + scale_alpha_continuous(guide = "none", range = c(0.2,0.2)))
+
 @
+
 \caption{Comparison of the transcriptional versus protein relative abundance patterns for the most poorly-correlated and well-correlated examples}
 \end{figure}
 
