@@ -1118,7 +1118,7 @@ hist_theme <- theme(text = element_text(size = 23, face = "bold"), title = eleme
 plotted_count_max <- max(table(cut(pt_corrs$correlation,seq(min(pt_corrs$correlation),max(pt_corrs$correlation),0.04)))) 
                            
 cor_plot <- ggplot(pt_corrs, aes(x = correlation)) + hist_theme
-cor_plot <- cor_plot + scale_x_continuous(name = "Spearman Correlation", expand = c(0,0), breaks = seq(floor(min(pt_corrs$correlation)*10)/10, ceiling(max(pt_corrs$correlation)*10)/10, 0.2)) + scale_y_discrete(name = "Counts", expand = c(0,0), breaks = (0:ceiling(plotted_count_max/5))*5) + geom_histogram(colour = "aliceblue", fill = "limegreen", binwidth = 0.04)
+cor_plot <- cor_plot + scale_x_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(-1,1), breaks = seq(floor(min(pt_corrs$correlation)*10)/10, ceiling(max(pt_corrs$correlation)*10)/10, 0.2)) + scale_y_discrete(name = "Counts", expand = c(0,0), breaks = (0:ceiling(plotted_count_max/5))*5) + geom_histogram(colour = "aliceblue", fill = "limegreen", binwidth = 0.04)
 cor_plot
 ggsave(plot = cor_plot, "PTspearmans.pdf", height = 12, width = 16)
 
