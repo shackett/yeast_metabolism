@@ -22,8 +22,8 @@
 
 **Yeast_genome_scale**
 
-* FBA_run_full_reco.R: Integrate experimental data and
-    Experimental Data:
+* FBA_run_full_reco.R: Integrate experimental data and in silico reconstruction
+    * Experimental Data:
       1. Maximum nutrient uptake rates: Boer_nutrients
       2. Currently using an invariant composition: comp_yeat.tsv
 * FBA_lib.R: functions which provide more information about a reaction or metabolite and other misc.
