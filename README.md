@@ -23,11 +23,15 @@
 **Yeast_genome_scale**
 
 * FBA_run_full_reco.R: Integrate experimental data and in silico reconstruction
-    * Experimental Data:
-      1. Maximum nutrient uptake rates: Boer_nutrients
-      2. Currently using an invariant composition: comp_yeat.tsv
+  * Experimental Data:
+    1. Maximum nutrient uptake rates: Boer_nutrients
+    2. Currently using an invariant composition: comp_yeat.tsv
 * FBA_lib.R: functions which provide more information about a reaction or metabolite and other misc.
-
+* cytoGrapher.R: This program has two somewhat disparte tasks:
+  1. Given previously positioned metabolite and reaction nodes, add on additional nodes to generate two positioning files: a node for each metabolite (some of these are split according to met_split.txt) and two nodes for each reaction, one linking substrates and one linking products.  In addition, some metabolite species can be classified as cofactors using the cofactorexception.txt file, so these nodes will be displayed primarily when they are being anabolized rather than when they are interconverted.
+  2. Using positioning files and flux information: draw a metabolic network in cytoscape and color reactions according to the flux carried.
+* metSty: Stores the positional information of metabolites nodes.
+* rxnSty: Stores the positional information of reaction nodes.
 
 ---
 
