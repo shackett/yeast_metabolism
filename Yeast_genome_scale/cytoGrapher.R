@@ -1,88 +1,61 @@
-#visualizing flux results using Rcytoscape bridge to cytoscape
+#Visualizing flux results using Rcytoscape bridge to cytoscape
 #creating a graphical model 
 
 library("RCytoscape")
 library(gplots)
 library(combinat)
 
-organism = "mel"
 max.add.new <- 2000
 
-if(organism == "mel"){
+#Read in reaction which are going to be layed out - those which carried flux under some condition generated in FBA_run_full_reco.R.  Also load fluxes across each condition.
 
-	setwd("~/Desktop/Cornell/Drosophila_metabolism/")
-	load("drosophila_stoi.R")
-	metab.coord <- read.delim("drosNetLayout.txt", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-	split.metab <- read.delim("met_split.txt", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-rxn.list <- list()
-for(i in 1:length(split.metab[,1])){
-	rxn.list[[i]] <- strsplit(split.metab$reaction[i], split = ", ")[[1]]
-	}
-cofactor.rxns <- read.delim("cofactor_exceptions.txt", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
+
+load("totalStoiAux.Rdata")
+stoisub <- Stotal
+
+#reorder metSty and rxnSty to reflect the row and column names of S
+metSty = read.delim("metSty.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+metSty$y <- metSty$y*-1
+
+rxnSty = read.delim("rxnSty.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+rxnSty <- rxnSty[sapply(c(1:length(rxnSty[,1])), function(x){c(1:length(rxnSty[,1]))[rxnSty$ReactionID == colnames(stoisub)[x]]}),]
+rownames(rxnSty) <- NULL
+
+metab.coord <- metSty[!is.na(metSty$x),]
+
+nodeOver <- rxnSty[!is.na(rxnSty$xsub),]
+
+
+#determine node degree
+#hist(apply(stoisub != 0, 1, sum)[apply(stoisub != 0, 1, sum) < 50], breaks = 20)
+#high_degree <- c(apply(stoisub != 0, 1, sum) > 7 | !(metSty$Compartment %in% c("c_02"))); high_degree <- names(high_degree[high_degree == TRUE])
+#high_degree <- c(!(metSty$Compartment %in% c("c_02", "c_05", "c_10"))); high_degree <- metSty[,1][high_degree]
+#high_degree <- NULL
+
+cofactor.rxns <- read.delim("Layout/cofactor_exceptions.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
 cofactor.list <- list()
 for(i in 1:length(cofactor.rxns[,1])){
-	cofactor.list[[i]] <- strsplit(cofactor.rxns$reaction[i], split = ", ")[[1]]
-	}
-nodeOver <- read.delim("nodeOverride.txt", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-	
-stoisub <- joint.stoi	
-	
-	}
+  cofactor.list[[i]] <- strsplit(cofactor.rxns$reaction[i], split = ", ")[[1]]
+  temp_inv <- strsplit(cofactor.rxns$inverse_rxn[i], split = ", ")[[1]]
+  if(length(temp_inv) != 0){
+    cofactor.list[[i]] <- union(cofactor.list[[i]], names(stoisub[rownames(stoisub) == cofactor.rxns$cofactor[i],][stoisub[rownames(stoisub) == cofactor.rxns$cofactor[i],] != 0])[!(names(stoisub[rownames(stoisub) == cofactor.rxns$cofactor[i],][stoisub[rownames(stoisub) == cofactor.rxns$cofactor[i],] != 0]) %in% temp_inv)])
+  }
+}
 
-if(organism == "yeast"){
-	setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
-	
-	load("totalStoiAux.Rdata")
-	stoisub <- Stotal
-	
-	#reorder metSty and rxnSty to reflect the row and column names of S
-	metSty = read.delim("metSty.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-	metSty$y <- metSty$y*-1
-	
-	rxnSty = read.delim("rxnSty.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-	rxnSty <- rxnSty[sapply(c(1:length(rxnSty[,1])), function(x){c(1:length(rxnSty[,1]))[rxnSty$ReactionID == colnames(stoisub)[x]]}),]
-	rownames(rxnSty) <- NULL
-	
-	metab.coord <- metSty[!is.na(metSty$x),]
-	
-	nodeOver <- rxnSty[!is.na(rxnSty$xsub),]
-	
-	
-	#determine node degree
-	#hist(apply(stoisub != 0, 1, sum)[apply(stoisub != 0, 1, sum) < 50], breaks = 20)
-	#high_degree <- c(apply(stoisub != 0, 1, sum) > 7 | !(metSty$Compartment %in% c("c_02"))); high_degree <- names(high_degree[high_degree == TRUE])
-	#high_degree <- c(!(metSty$Compartment %in% c("c_02", "c_05", "c_10"))); high_degree <- metSty[,1][high_degree]
-	#high_degree <- NULL
-	
-	cofactor.rxns <- read.delim("Layout/cofactor_exceptions.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
-	
-	#tmp <- data.frame(high_degree[!(high_degree %in% cofactor.rxns$cofactor)], "", "", "", "", "", ""); colnames(tmp) <- colnames(cofactor.rxns)
-	#cofactor.rxns <- rbind(cofactor.rxns, tmp)
-	
-	cofactor.list <- list()
-	for(i in 1:length(cofactor.rxns[,1])){
-		cofactor.list[[i]] <- strsplit(cofactor.rxns$reaction[i], split = ", ")[[1]]
-		temp_inv <- strsplit(cofactor.rxns$inverse_rxn[i], split = ", ")[[1]]
-		if(length(temp_inv) != 0){
-			cofactor.list[[i]] <- union(cofactor.list[[i]], names(stoisub[rownames(stoisub) == cofactor.rxns$cofactor[i],][stoisub[rownames(stoisub) == cofactor.rxns$cofactor[i],] != 0])[!(names(stoisub[rownames(stoisub) == cofactor.rxns$cofactor[i],][stoisub[rownames(stoisub) == cofactor.rxns$cofactor[i],] != 0]) %in% temp_inv)])
-			}
-		}
-		
-	
-	rownames(stoisub)[stoisub[,696] != 0]
-	
-	#fix split.metab
-	split.metab <- read.delim("Layout/met_split.txt", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-	rxn.list <- list()
-	for(i in 1:length(split.metab[,1])){
-		rxn.list[[i]] <- strsplit(split.metab$reaction[i], split = ", ")[[1]]
-		}
-	
-	#read in flux values
-	flux_vals <- read.delim("carriedFlux.tsv", sep = "\t")
-	
-	
-	}
+
+#fix split.metab
+split.metab <- read.delim("Layout/met_split.txt", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+rxn.list <- list()
+for(i in 1:length(split.metab[,1])){
+  rxn.list[[i]] <- strsplit(split.metab$reaction[i], split = ", ")[[1]]
+}
+
+#read in flux values
+flux_vals <- read.delim("carriedFlux.tsv", sep = "\t")
+
+##################################################
 
 ######
 #check_rxns <- c("s_1409", "s_1410")
