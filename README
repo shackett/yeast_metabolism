@@ -2,19 +2,13 @@ Yeast_reconstruction >
 
 Sequences: 
 
-  - CHEBI_compound - a list of all of the metabolites referenced in the sbml reconstruction, associated with a standard name & structural information ?
-
-	- orf_genomic_1000.fasta - the mRNA sequence of all transcripts, including introns & 1000 bp upstream & downstream (couldn't get just the UTR)
-
-	- orf_genomic - from ATG to AUG/UAG/UAA including introns for all high-confidence transcripts
-
-	- rna_genomic - non-mRNA RNAs - tRNA, rRNA ?
-
-	-METAdict.tsv - correspondence between CHEBI IDs and consensus names
-
-	-PROTcomposition.tsv - Protein Name + ID with counts of amino acids
-
-	-RNAcomposition.tsv - Gene Name with counts of nucleotides
+* CHEBI_compound - a list of all of the metabolites referenced in the sbml reconstruction, associated with a standard name & structural information ?
+* orf_genomic_1000.fasta - the mRNA sequence of all transcripts, including introns & 1000 bp upstream & downstream (couldn't get just the UTR)
+* orf_genomic - from ATG to AUG/UAG/UAA including introns for all high-confidence transcripts
+* rna_genomic - non-mRNA RNAs - tRNA, rRNA ?
+* METAdict.tsv - correspondence between CHEBI IDs and consensus names
+* PROTcomposition.tsv - Protein Name + ID with counts of amino acids
+* RNAcomposition.tsv - Gene Name with counts of nucleotides
 
 
 
