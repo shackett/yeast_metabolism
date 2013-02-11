@@ -1,4 +1,4 @@
-**Yeast_reconstruction**
+## Yeast_reconstruction ##
 
 **Sequences:** 
 
@@ -20,12 +20,15 @@
 	
 ---
 
-**Yeast_genome_scale**
+## Yeast_genome_scale ##
 
 * FBA_run_full_reco.R: Integrate experimental data and in silico reconstruction
-  * Experimental Data:
-    1. Maximum nutrient uptake rates: Boer_nutrients
-    2. Currently using an invariant composition: comp_yeat.tsv
+    * Experimental Data:
+      1. Maximum nutrient uptake rates: Boer_nutrients
+      2. Currently using an invariant composition: comp_yeat.tsv
+    * Reconstruction:
+      1. What direction do reactions proceed based on thermodynamics.
+      2. which reactions can carry flux based on auxotrophy information
 * FBA_lib.R: functions which provide more information about a reaction or metabolite and other misc.
 * cytoGrapher.R: This program has two somewhat disparte tasks:
   1. Given previously positioned metabolite and reaction nodes, add on additional nodes to generate two positioning files: a node for each metabolite (some of these are split according to met_split.txt) and two nodes for each reaction, one linking substrates and one linking products.  In addition, some metabolite species can be classified as cofactors using the cofactorexception.txt file, so these nodes will be displayed primarily when they are being anabolized rather than when they are interconverted.
@@ -35,7 +38,7 @@
 
 ---
 
-**EcoliYeastMatch**
+## EcoliYeastMatch ##
 
 In order to incorporate thermodynamic information into the yeast flux-balance model, the gibbs free energy's available for ecoli rxns and species must be associated with the corresponding yeast ids.
 This involves converting yeast ChEBI IDs to KEGG ids and then associating these yeast KEGG ids with ecoli KEGG ids
@@ -48,7 +51,7 @@ This involves converting yeast ChEBI IDs to KEGG ids and then associating these 
 
 ---
 
-**ChemicalSpeciesQuant**
+## ChemicalSpeciesQuant ##
 
 Relative or absolute quantification of various crucial species:
 
@@ -61,7 +64,7 @@ Relative or absolute quantification of various crucial species:
 
 ---
 
-**Thermo**
+## Thermo ##
 
 Prepare the absolute concentrations of metabolites, so that these can be used to modify the reaction free energy
 
