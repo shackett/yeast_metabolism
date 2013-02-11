@@ -2,7 +2,7 @@ Yeast_reconstruction >
 
 Sequences: 
 
-	- CHEBI_compound - a list of all of the metabolites referenced in the sbml reconstruction, associated with a standard name & structural information ?
+  - CHEBI_compound - a list of all of the metabolites referenced in the sbml reconstruction, associated with a standard name & structural information ?
 
 	- orf_genomic_1000.fasta - the mRNA sequence of all transcripts, including introns & 1000 bp upstream & downstream (couldn't get just the UTR)
 
