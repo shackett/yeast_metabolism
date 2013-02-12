@@ -2,12 +2,10 @@ library(lpSolve)
 library(limSolve)
 library(gplots)
 
-setwd("/Users/seanhackett/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
+setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 source("FBA_lib.R")
 
 options(stringsAsFactors = FALSE)
-
-#inputFilebase = "yeast_GS"
 inputFilebase = "yeast"
 
 
@@ -21,6 +19,9 @@ compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = 
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
+
+###### SGD -> 
+#grep('KEGG', rxnparFile[,3])
 
 load("checkRev.R")
 reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 0
@@ -59,14 +60,14 @@ for(i in 1:length(nutrientFile[1,])){
 	}}
 
 #rxnIDtoEnz(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))
-rxchoose <- "r_0653"
-x <- stoiMat[stoiMat[,colnames(stoiMat) == rxchoose] != 0,colnames(stoiMat) == rxchoose]
-names(x) <- metIDtoSpec(names(x))
-x
+#rxchoose <- "r_0653"
+#x <- stoiMat[stoiMat[,colnames(stoiMat) == rxchoose] != 0,colnames(stoiMat) == rxchoose]
+#names(x) <- metIDtoSpec(names(x))
+#x
 
-metchoose <- "s_1160"
-x <- rxn_search(Stotal, metchoose, is_rxn = FALSE)
-rownames(x) <- metIDtoSpec(rownames(x)); #colnames(x) <- rxnIDtoEnz(colnames(x))
+#metchoose <- "s_1160"
+#x <- rxn_search(Stotal, metchoose, is_rxn = FALSE)
+#rownames(x) <- metIDtoSpec(rownames(x)); #colnames(x) <- rxnIDtoEnz(colnames(x))
 
 #metIDtoSpec(c("s_1063", "s_1059"))
 #rxnIDtoEnz(c("r_0885", "r_0707"))
@@ -100,9 +101,6 @@ boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$
 #extrate the IDs of excreted metabolites
 
 excreted <- c("acetate", "ethanol", "succinate(2-)", "(R)-lactate", "L-alanine", "L-glutamate")
-#excreted <- c("acetate", "ethanol")
-
-
 
 resource_matches <- lapply(excreted, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -203,9 +201,6 @@ good_rxns <- colnames(stoiMat)[!is.na(mass_balanced[,2])]
 	
 add_rxns <- mass_balanced[colnames(stoiMat) %in% good_rxns,][mass_balanced[colnames(stoiMat) %in% good_rxns,]$missingIDs == TRUE,]	
 	
-	
-	
-	
 #reactions carrying flux with elemental composition information	
 non_na_MB <- mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),][!is.na(mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),]$P),]
 
@@ -215,6 +210,7 @@ non_na_MB_stoi <- stoiMat[apply(stoiMat[,colnames(stoiMat) %in% rownames(non_na_
 
 #for met
 rxnparFile[rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID == "s_0504"],]
+
 
 
 mb.ids <- sapply(rownames(non_na_MB_stoi)[is.na(ele_comp_mat[rownames(ele_comp_mat) %in% rownames(non_na_MB_stoi),][,1])], function(x){corrFile$SpeciesType[corrFile$SpeciesID == x]})
@@ -474,6 +470,66 @@ flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X
 growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
 }
+
+###### output fluxes so that they can be visualzied using S. cerevisae cellular overview #####
+
+choice_conditions <- names(flux_vectors)[grep(0.05, names(flux_vectors))]
+cond_rownames <- unique(unlist(sapply(choice_conditions, function(treatment){
+names(flux_vectors[[c(1:length(flux_vectors))[names(flux_vectors) == treatment]]]) 
+})))
+cond_flux <- matrix(NA, ncol = length(choice_conditions), nrow = length(cond_rownames)); rownames(cond_flux) <- cond_rownames; colnames(cond_flux) <- choice_conditions
+
+
+for(cond in choice_conditions){
+  one_flux <- flux_vectors[[c(1:length(flux_vectors))[names(flux_vectors) == cond]]]
+  cond_flux[sapply(names(one_flux), function(name_match){c(1:length(cond_rownames))[cond_rownames == name_match]}), choice_conditions == cond] <- unname(one_flux)
+  }
+cond_flux <- cond_flux[rowSums(cond_flux != 0) != 0,]
+
+#which proteins are associated with each rxn
+rxnEnzymes <- as.data.frame(rxnIDtoSGD(rownames(cond_flux)))
+colnames(rxnEnzymes) <- c("compartment", "genes")
+
+#visualize each compartment seperately
+for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartment) %in% c("exchange", NA))]){
+  comp_name <- compFile$compName[compFile$compID == a_compartment]
+  comp_fluxes <- cond_flux[!is.na(rxnEnzymes$compartment) & rxnEnzymes$compartment == a_compartment,]
+  comp_enzymes <- rxnEnzymes$genes[!is.na(rxnEnzymes$compartment) & rxnEnzymes$compartment == a_compartment]
+  
+  #write each rxns flux, attributing flux to each associated enzyme
+  comp_outputDF <- NULL
+  for(rxnN in c(1:length(comp_enzymes))){
+    rxGenes = strsplit(comp_enzymes[rxnN], ':')[[1]]
+    if(length(rxGenes) == 0){next}else{
+      tmpMat <- matrix(comp_fluxes[rxnN,], ncol = length(choice_conditions), nrow = length(rxGenes), byrow = T)
+      colnames(tmpMat) <- choice_conditions
+      comp_outputDF <- rbind(comp_outputDF, data.frame(Enzyme = rxGenes, tmpMat))
+      }
+    }
+  write.table(comp_outputDF, file = paste(c("SGDprojectionFiles/", comp_name, "fluxes.tsv"), collapse = ""), sep = "\t", row.names = F, col.names = T,  quote = F)
+  
+  }
+
+
+
+
+
+table(rxnEnzymes[,1])
+
+
+
+rxnIDtoSGD <- function(rxnIDs){
+  #output the compartment where a reaction occurs followed by all of the genes involved in the rxn
+  
+  output <- t(sapply(rxnIDs, function(rxnID){
+    tmp <- rxnFile[rxnFile$ReactionID == rxnID,]
+    c(tmp$Compartment[1], paste(unique(strsplit(paste(tmp$MetName[is.na(tmp$StoiCoef)], collapse = ':'), ':')[[1]]), collapse = ':'))
+  }))
+  
+  }
+
+
+
 
 
 

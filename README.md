@@ -1,3 +1,8 @@
+## Current objectives ##
+
+[ ] Display relative abundances of metabolic reactions using Cellular Overviews
+[ ] Map protein to EC to KEGG in order to use group contribution free energy of reactions
+
 ## Yeast_reconstruction ##
 
 **Sequences:** 
@@ -30,7 +35,7 @@
       1. What direction do reactions proceed based on thermodynamics.
       2. which reactions can carry flux based on auxotrophy information
 * FBA_lib.R: functions which provide more information about a reaction or metabolite and other misc.
-* cytoGrapher.R: This program has two somewhat disparte tasks:
+* cytoGrapher.R: This program has two somewhat disparate tasks:
   1. Given previously positioned metabolite and reaction nodes, add on additional nodes to generate two positioning files: a node for each metabolite (some of these are split according to met_split.txt) and two nodes for each reaction, one linking substrates and one linking products.  In addition, some metabolite species can be classified as cofactors using the cofactorexception.txt file, so these nodes will be displayed primarily when they are being anabolized rather than when they are interconverted.
   2. Using positioning files and flux information: draw a metabolic network in cytoscape and color reactions according to the flux carried.
 * metSty: Stores the positional information of metabolites nodes.
