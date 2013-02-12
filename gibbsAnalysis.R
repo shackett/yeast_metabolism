@@ -3,6 +3,41 @@ options(stringsAsFactors = FALSE)
 setwd("~/Desktop/Rabinowitz/FBA_SRH/")
 source("Yeast_genome_scale/FBA_lib.R")
 
+#########
+  
+match_correction <- function(YE_match, yeastReg, coliReg, report = FALSE){
+    
+  #remove matches in other rxns
+  for(id_match in e_coli_mets[grep(coliReg, e_coli_mets$Name),]$ID){
+    id_match <- sub("\\[", "\\\\[", id_match)
+    id_match <- sub("\\]", "\\\\]", id_match)
+    YE_match$ecoliID <- sub(paste("^", id_match, ",", sep = ""), "", YE_match$ecoliID)
+    YE_match$ecoliID <- sub(paste(",", id_match, sep = ""), "", YE_match$ecoliID)
+    YE_match$ecoliID <- sub(paste("^", id_match, "$", sep = ""), "", YE_match$ecoliID)
+  }
+  
+  
+  #add appropriate mathches
+  for(match in grep(yeastReg, metIDtoSpec(YE_match$yeastID))){
+    YE_match$ecoliID[match] <- paste(e_coli_mets[grep(coliReg, e_coli_mets$Name),]$ID, collapse = ",")
+  }
+  
+  print(paste("Replaced ", yeastReg, " ", length(grep(yeastReg, metIDtoSpec(YE_match$yeastID))), " times", sep = ""))
+  
+  if(report == TRUE){
+    YE_match[c(grep(paste("^", id_match, ",", sep = ""), YE_match$ecoliID), grep(paste(",", id_match, sep = ""), YE_match$ecoliID), grep(paste("^", id_match, "$", sep = ""), YE_match$ecoliID)),]
+  }
+  YE_match
+}
+
+
+sample_over_sds <- function(n, rxn_stoi, sds){
+  quantile(matrix(rnorm(n*length(sds), 0, rep(sds, each = n)), nrow = n) %*% (-1*rxn_stoi), c(0.025, 0.975))
+}
+
+
+################
+
 
 inputFilebase = "yeast"
 run_full = FALSE
@@ -18,8 +53,6 @@ rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 if(file.exists("Yeast_genome_scale/yeast_stoi.R")){
 	load("Yeast_genome_scale/yeast_stoi.R")
 	} else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
-
-
 
 
 metabolites <- rownames(stoiMat)
@@ -71,15 +104,6 @@ if(run_full == TRUE){
 	
 
 
-
-
-
-
-#corrFile[,2][corrFile[,1] %in% c("s_1098", "s_1094")]
-#YE_match[YE_match[,1] %in% c(corrFile[grep("water", corrFile[,2]),]$SpeciesID),]
-#corrFile[grep("water", corrFile[,2]),]$SpeciesID
-
-
 #match based on shared stoichiometry
 
 YE_match <- read.delim("EcoliYeastMatch/correspondence.dict.csv", sep = "\t", header = TRUE)
@@ -96,18 +120,6 @@ YE_match <- match_correction(YE_match, "^NAD\\(", "Nicotinamide-adenine-dinucleo
 YE_match <- match_correction(YE_match, "NADH", "Nicotinamide-adenine-dinucleotide--reduced")
 YE_match <- match_correction(YE_match, "^NADP\\(", "Nicotinamide-adenine-dinucleotide-phosphate$")
 YE_match <- match_correction(YE_match, "NADPH", "Nicotinamide-adenine-dinucleotide-phosphate--reduced")
-#glucose
-#f16bp
-#D-ribose
-#UTP
-
-#metIDtoSpec(YE_match$yeastID)[grep("^NADP\\(", metIDtoSpec(YE_match$yeastID))]
-#YE_match[grep("^NADP\\(", metIDtoSpec(YE_match$yeastID)),]
-#e_coli_mets[grep("NADH", e_coli_mets$Name),]
-
-
-#yeastReg <- "^ATP"
-#coliReg <- "^ATP"
 
 YE_match_list <- list()
 for(spec in c(1:length(YE_match[,1]))){
@@ -185,9 +197,7 @@ for(yRx in 1:length(stoiMat[1,])){
 		names(rxn_stoi) <- rownames(stoiMat)[stoiMat[,yRx] != 0]
 		}
 			
-
-	
-	spec_col_id <- NULL
+  spec_col_id <- NULL
 	matching_mat <- NULL
 	involved_spec <- NULL
 	for(spec in 1:length(rxn_stoi)){
@@ -215,7 +225,7 @@ for(yRx in 1:length(stoiMat[1,])){
 			if(length(Gf[,1]) == 1){
 				Gpart[spec,] <- Gf[4:5]
 				}else{
-					if(sd(Gf$Gform) < 5){
+					if(!is.na(sd(Gf$Gform)) & (sd(Gf$Gform) < 5)){
 						Gpart[spec,] <- c(mean(Gf$Gform), max(Gf$G_sd))
 						}else{
 							print(paste(paste(Gf$ID, collapse = ", "), " not similar"))
@@ -351,7 +361,7 @@ for(match in perfect){
 	}
 	
 	
-	table(!is.na(SM_gibbs$delta_G_Kj_mol))
+table(!is.na(SM_gibbs$delta_G_Kj_mol))
 
 
 #look at coverage of reactions that actually carry flux
@@ -541,39 +551,8 @@ reversible <- unlist(sapply(c(1:length(gibbsFused[,1])), function(x){
 
 write.table(data.frame(rx = gibbsFused[,1], reversible = reversible), file = "revRxns.tsv", sep = "\t", col.names = TRUE, row.names = FALSE)
 
-
-
-
-match_correction <- function(YE_match, yeastReg, coliReg, report = FALSE){
-	
-	#remove matches in other rxns
-	for(id_match in e_coli_mets[grep(coliReg, e_coli_mets$Name),]$ID){
-		id_match <- sub("\\[", "\\\\[", id_match)
-		id_match <- sub("\\]", "\\\\]", id_match)
-		YE_match$ecoliID <- sub(paste("^", id_match, ",", sep = ""), "", YE_match$ecoliID)
-		YE_match$ecoliID <- sub(paste(",", id_match, sep = ""), "", YE_match$ecoliID)
-		YE_match$ecoliID <- sub(paste("^", id_match, "$", sep = ""), "", YE_match$ecoliID)
-		}
-		
-		
-	#add appropriate mathches
-	for(match in grep(yeastReg, metIDtoSpec(YE_match$yeastID))){
-		YE_match$ecoliID[match] <- paste(e_coli_mets[grep(coliReg, e_coli_mets$Name),]$ID, collapse = ",")
-		}
-	
-	print(paste("Replaced ", yeastReg, " ", length(grep(yeastReg, metIDtoSpec(YE_match$yeastID))), " times", sep = ""))
-	
-	if(report == TRUE){
-		YE_match[c(grep(paste("^", id_match, ",", sep = ""), YE_match$ecoliID), grep(paste(",", id_match, sep = ""), YE_match$ecoliID), grep(paste("^", id_match, "$", sep = ""), YE_match$ecoliID)),]
-		}
-	YE_match
-	}
-
-
-sample_over_sds <- function(n, rxn_stoi, sds){
-			quantile(matrix(rnorm(n*length(sds), 0, rep(sds, each = n)), nrow = n) %*% (-1*rxn_stoi), c(0.025, 0.975))
-			}
-	
+#output stoichiometric match free energy and directionality call
+#output EC match attributed free energy and directionality call
 
 
 

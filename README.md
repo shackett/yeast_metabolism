@@ -25,6 +25,15 @@
 	
 ---
 
+** gibbsAnalysis **
+
+Applies two measures of thermodynamic reaction reversibility to predict the reversibility of yeast reactions
+
+* Match yeast genes -> E.C. and compare to e. coli genes -> E. C. to pass e. coli annotated free energy of reaction to yeast reactions.  This flips free energy to match substrates and products between corresponding yeast and e. coli reactions.
+* Predict free energy of reaction from free energy of formation.  
+  
+---
+
 ## Yeast_genome_scale ##
 
 * FBA_run_full_reco.R: Integrate experimental data and in silico reconstruction

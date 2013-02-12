@@ -495,9 +495,13 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
   comp_name <- compFile$compName[compFile$compID == a_compartment]
   comp_fluxes <- cond_flux[!is.na(rxnEnzymes$compartment) & rxnEnzymes$compartment == a_compartment,]
   comp_enzymes <- rxnEnzymes$genes[!is.na(rxnEnzymes$compartment) & rxnEnzymes$compartment == a_compartment]
+  if(length(comp_enzymes) <= 1){next}
   
   #write each rxns flux, attributing flux to each associated enzyme
+  
+  #visualizing fluxes
   comp_outputDF <- NULL
+  
   for(rxnN in c(1:length(comp_enzymes))){
     rxGenes = strsplit(comp_enzymes[rxnN], ':')[[1]]
     if(length(rxGenes) == 0){next}else{
@@ -506,16 +510,55 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
       comp_outputDF <- rbind(comp_outputDF, data.frame(Enzyme = rxGenes, tmpMat))
       }
     }
+  comp_outputDF[,-1] <- comp_outputDF[,-1]/max(abs(range(comp_outputDF[,-1])))
+  
+  #visualizing which reactions carry flux in a given condition
+  ternary_outputDF <- comp_outputDF; ternary_outputDF[,-1][ternary_outputDF[,-1] < 0] <- -1; ternary_outputDF[,-1][ternary_outputDF[,-1] > 0] <- 1
+  
   write.table(comp_outputDF, file = paste(c("SGDprojectionFiles/", comp_name, "fluxes.tsv"), collapse = ""), sep = "\t", row.names = F, col.names = T,  quote = F)
+  write.table(ternary_outputDF, file = paste(c("SGDprojectionFiles/", comp_name, "TernaryFlux.tsv"), collapse = ""), sep = "\t", row.names = F, col.names = T,  quote = F)  
+}
+
+##### write a function to list:
+# reactants -> products
+# Reaction name and designation
+# Thermodynamics
+# KEGG and EC reactions name
+
+reaction_info <- function(rxnName){
+  rxnName <- "r_0001"
+  rxnStoi <- stoiMat[,colnames(stoiMat) == rxnName][stoiMat[,colnames(stoiMat) == rxnName] != 0]
+  speciesNames <- metIDtoSpec(names(rxnStoi))
+  rxnDir <- reversibleRx$reversible[reversibleRx$rx == rxnName]
+  if(rxnDir == 1){rxnDir <- " -> "}
+  if(rxnDir == 0){rxnDir <- " <=> "}
+  if(rxnDir == -1){rxnDir <- " <- "}
+  
+  substrate_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi < 0])), function(x){
+    tmp <- (rxnStoi[rxnStoi < 0] * -1)[x]
+    if(tmp == 1){tmp <- ''}
+    paste(tmp, speciesNames[rxnStoi < 0][x])
+    }), collapse = ' + ')
+  
+  product_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi > 0])), function(x){
+    tmp <- (rxnStoi[rxnStoi > 0])[x]
+    if(tmp == 1){tmp <- ''}
+    paste(tmp, speciesNames[rxnStoi > 0][x])
+  }), collapse = ' + ')
+  
+  rxList <- list()
+  rxList$stoichiometry = paste(substrate_prep, rxnDir, product_prep)
+  
+  
+  
+  
+  
   
   }
 
 
 
-
-
-table(rxnEnzymes[,1])
-
+# read in supplementary thermodynamics annotation file and combine it with the existing thermodynamics file
 
 
 rxnIDtoSGD <- function(rxnIDs){
@@ -682,7 +725,8 @@ for(i in 1:length(Stotal[1,])){
 	
 	}
 
-save(Stotal, metSty, rxnSty, reversibleRx, file = "totalStoiAux.Rdata")						
+save(Stotal, metSty, rxnSty, reversibleRx, file = "totalStoiAux.Rdata")
+
 write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
 write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
 
