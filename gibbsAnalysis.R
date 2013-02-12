@@ -317,7 +317,7 @@ c(table(is_perfect), nNA = table(is.na(is_perfect))[names(table(is.na(is_perfect
 #determine whether perfect matches are unique		
 
 
-SM_gibbs <- data.frame(rxn = colnames(stoiMat), rxName = rxnIDtoEnz(colnames(stoiMat)), ecoliRxName = NA, delta_G_Kj_mol = NA, G_form_sd = NA)
+SM_gibbs <- data.frame(rxn = colnames(stoiMat), rxName = rxnIDtoEnz(colnames(stoiMat)), ecoliRxName = NA, delta_G_Kj_mol = NA, G_form_sd = NA, direction = NA)
 
 perfect <- c(1:length(is_perfect))[!is.na(is_perfect)][is_perfect[!is.na(is_perfect)]]
 n_matches <- rep(NA, times = length(perfect))
@@ -332,37 +332,60 @@ for(match in perfect){
 		R_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,][,c(2,4:5)]
 		R_gibbs[,2] <- R_gibbs[,2]*-1
 		freeE <- rbind(F_gibbs, R_gibbs)
-		}else{
+		
+    #reversibility is reversed relative to the notation I use (in the ecoli files it is binary: 0 means not reversible, 1 means reversible)
+    #the convention I use is -1: irreversible backwards; 0: reversible; 1: irreversible forwards
+    
+    if(length(table(c(e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,]$Reversible, e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,]$Reversible))) == 1){
+      rxDir <- ifelse(c(e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,]$Reversible, e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,]$Reversible)[1] == 0, 1, 0)
+      }else{
+      rxDir <- NA
+      }
+    
+    }else{
 			if(!is.na(perfect_matches[[colnames(stoiMat)[match]]]$F)[1]){
 				#only forward matches
 				freeE <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,][,c(2,4:5)]
-				
-				}else{
+				rxDir <- min(e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,]$Reversible)
+				if(length(table(e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,]$Reversible)) == 1){
+				  rxDir <- ifelse(e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$F,]$Reversible[1] == 0, 1, 0)
+				  }else{
+				    rxDir <- NA
+				    }
+        
+        }else{
 					#only reverse matches
 					R_gibbs <- e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,][,c(2,4:5)]
 					R_gibbs[,2] <- R_gibbs[,2]*-1
 					freeE <- R_gibbs
+					
+          if(length(table(e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,])) == 1){
+					  rxDir <- ifelse(e_coli_rxns[perfect_matches[[colnames(stoiMat)[match]]]$R,]$Reversible[1] == 0, -1, 0)
+					}else{
+					  rxDir <- NA
 					}
-			}
+        }
+        
+      }
 	
 	if(length(freeE[,1]) == 1){
-		SM_gibbs[match,3:5] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE))], freeE$delta_G_Kj_mol, freeE$G_form_sd)
+		SM_gibbs[match,3:6] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE))], freeE$delta_G_Kj_mol, freeE$G_form_sd, rxDir)
 		next
 		}
 	
 	if(sd(freeE$delta_G_Kj_mol) == 0){
-		SM_gibbs[match,3:5] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE)[1])], mean(freeE$delta_G_Kj_mol), max(freeE$G_form_sd))
+		SM_gibbs[match,3:6] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE)[1])], mean(freeE$delta_G_Kj_mol), max(freeE$G_form_sd), rxDir)
 		next
 		}
 		
 	if(abs(sd(freeE$delta_G_Kj_mol)/mean(freeE$delta_G_Kj_mol)) < 0.2){
-		SM_gibbs[match,3:5] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE)[1])], mean(freeE$delta_G_Kj_mol), max(freeE$G_form_sd))
+		SM_gibbs[match,3:6] <- c(e_coli_rxns$"Name"[as.numeric(rownames(freeE)[1])], mean(freeE$delta_G_Kj_mol), max(freeE$G_form_sd), rxDir)
 		}
 	}
 	
 	
 table(!is.na(SM_gibbs$delta_G_Kj_mol))
-
+table(SM_gibbs[!is.na(SM_gibbs$direction),]$direction)
 
 #look at coverage of reactions that actually carry flux
 
@@ -482,7 +505,7 @@ for(ID in colnames(stoiMat)){
 
 #make a table of the high confidence gibbs free energies drawn by E.C. comparison
 
-EC_gibbs <- data.frame(rxn = names(yeast_EC_pass), rxName = rxnIDtoEnz(names(yeast_EC_pass)), ecoliRxName = NA, delta_G_Kj_mol = NA, G_form_sd = NA)
+EC_gibbs <- data.frame(rxn = names(yeast_EC_pass), rxName = rxnIDtoEnz(names(yeast_EC_pass)), ecoliRxName = NA, delta_G_Kj_mol = NA, G_form_sd = NA, direction = NA)
 
 for(rx in 1:length(EC_gibbs[,1])){
 	if(is.vector(yeast_EC_pass[[EC_gibbs$rxn[rx]]])){
@@ -490,15 +513,15 @@ for(rx in 1:length(EC_gibbs[,1])){
 		}
 	matchez <- yeast_EC_pass[[EC_gibbs$rxn[rx]]]
 	if(length(matchez$delta_G_Kj_mol) == 1){
-		EC_gibbs[rx,3:5] <- matchez[,3:5]
+		EC_gibbs[rx,3:6] <- cbind(matchez[,c(3:5)], ifelse(matchez[,2] == 0, 1, 0))
 		next
 		}
 	if(sd(matchez$delta_G_Kj_mol) == 0){
-		EC_gibbs[rx,3:5] <- c(matchez$Name[1], mean(matchez$delta_G_Kj_mol), max(matchez$G_form_sd))
+		EC_gibbs[rx,3:6] <- c(matchez$Name[1], mean(matchez$delta_G_Kj_mol), max(matchez$G_form_sd), ifelse(length(table(matchez$Reversible)) == 1, ifelse(matchez$Reversible[1] == 0, 1, 0), NA))
 		next
 		}
 	if(abs(sd(matchez$delta_G_Kj_mol)/mean(matchez$delta_G_Kj_mol)) < 0.2){
-		EC_gibbs[rx,3:5] <- c(matchez$Name[1], mean(matchez$delta_G_Kj_mol), max(matchez$G_form_sd))
+		EC_gibbs[rx,3:6] <- c(matchez$Name[1], mean(matchez$delta_G_Kj_mol), max(matchez$G_form_sd), ifelse(length(table(matchez$Reversible)) == 1, ifelse(matchez$Reversible[1] == 0, 1, 0), NA))
 		}
 	}
 
@@ -549,7 +572,11 @@ reversible <- unlist(sapply(c(1:length(gibbsFused[,1])), function(x){
 			0
 			}}))
 
-write.table(data.frame(rx = gibbsFused[,1], reversible = reversible), file = "revRxns.tsv", sep = "\t", col.names = TRUE, row.names = FALSE)
+
+revRxns <- data.frame(rx = gibbsFused[,1], reversible = reversible, ECfreeE = EC_gibbs$delta_G_Kj_mol, ECfreeEsd = EC_gibbs$G_form_sd, ECdir = EC_gibbs$direction, 
+                      SMfreeE = SM_gibbs$delta_G_Kj_mol, SMfreeEsd = SM_gibbs$G_form_sd, SMdir = SM_gibbs$direction)
+
+write.table(revRxns, file = "EcoliYeastMatch/revRxns.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = F)
 
 #output stoichiometric match free energy and directionality call
 #output EC match attributed free energy and directionality call

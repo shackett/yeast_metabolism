@@ -25,12 +25,13 @@
 	
 ---
 
-** gibbsAnalysis **
+**gibbsAnalysis.R**
 
 Applies two measures of thermodynamic reaction reversibility to predict the reversibility of yeast reactions
 
 * Match yeast genes -> E.C. and compare to e. coli genes -> E. C. to pass e. coli annotated free energy of reaction to yeast reactions.  This flips free energy to match substrates and products between corresponding yeast and e. coli reactions.
-* Predict free energy of reaction from free energy of formation.  
+* Predict free energy of reaction from free energy of formation.
+* Write revRxns.tsv, showing the free energy quantiles from these methods as well as the directionality from the Shlomi e. coli model 
   
 ---
 
