@@ -1,7 +1,7 @@
 ## Current objectives ##
 
-[ ] Display relative abundances of metabolic reactions using Cellular Overviews
-[ ] Map protein to EC to KEGG in order to use group contribution free energy of reactions
+- [ ] Display relative abundances of metabolic reactions using Cellular Overviews
+- [ ] Map protein to EC to KEGG in order to use group contribution free energy of reactions
 
 ## Yeast_reconstruction ##
 
