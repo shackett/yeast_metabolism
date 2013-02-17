@@ -8,7 +8,7 @@ source("FBA_lib.R")
 options(stringsAsFactors = FALSE)
 inputFilebase = "yeast"
 
-
+#load SBML files describing metabolites, rxn stoichiometry.
 rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE, stringsAsFactors = FALSE)
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
@@ -20,20 +20,79 @@ nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 
-###### SGD -> 
-#grep('KEGG', rxnparFile[,3])
-
-load("checkRev.R")
-reversibleRx[,2][reversibleRx[,1] %in% misclass] <- 0
-reversibleRx[,2][reversibleRx[,1] %in% c("r_0241", "r_0862", "r_0938", "r_0246", "r_0247", "r_0248", "r_0478", "r_0277")] <- 1
-
-#ATPsynthase: c("r_0246", "r_0247", "r_0248")
-#r_0478
-#r_0277 - may be reversible
+#load weizman free energy files and mapping designations
+rxDesignations <- read.delim("../KEGGrxns/yeastNameDict.tsv", sep = "\t", header = T)
+rxFreeEnergy <- read.delim("../KEGGrxns/kegg_reactions_PGC_ph5.0.csv", sep = ",", header = T); colnames(rxFreeEnergy) <- c("KEGGID", "freeEnergykJ_mol", "pH", "ionicStrength", "Note")
+rxFreeEnergy$KEGGIDreformat <- sapply(rxFreeEnergy$KEGGID, function(KID){
+    paste(c("K", rep(0, 5 - length(strsplit(as.character(KID), "")[[1]])), KID), collapse = "")
+    })
+reversibleRx$WEIZfreeE = NA; reversibleRx$WEIZdir = NA; reversibleRx$rxFlip = NA; reversibleRx$manual = NA; annotComment = NA
 
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
+enzymes <- rxnIDtoGene(reactions)
+
+#for reactions where proteins match multiple KEGG reactions, manually choose which is the proper match
+if(!file.exists("manualKEGGrxns.Rdata")){
+manualRxKEGGmatch <- NULL
+for(rx in reactions){
+  if(enzymes[names(enzymes) == rx] == ""){next}
+  rxEnzymes <- strsplit(enzymes[names(enzymes) == rx], split = '/')[[1]]
+  rxMatches <- rxFreeEnergy[rxFreeEnergy$KEGGIDreformat %in% unique(rxDesignations[rxDesignations$SYST %in% rxEnzymes,]$KEGG),]
+  
+  if(length(rxMatches$KEGGIDreformat) > 1){
+    print(c("Multiple KEGG IDs match the following reaction"))
+    print(reaction_info(rx))
+    print(c("Which is the correct match?"))
+    for(i in 1:length(rxMatches[,1])){
+      print(paste(c(i, rxMatches$KEGGIDreformat[i], rxDesignations$NAME[rxDesignations$KEGG == rxMatches$KEGGIDreformat[i]][1], rxMatches$freeEnergykJ_mol[i]), collapse = " : "))
+      }
+    response <- as.numeric(readline(promp = "Well..."))
+    
+    manualRxKEGGmatch <- rbind(manualRxKEGGmatch, data.frame(reaction = rx, KEGG = rxMatches$KEGGIDreformat[response]))
+    print("----------------------------------------")
+    
+    }
+  #save(manualRxKEGGmatch, file = "manualKEGGrxns.Rdata")
+}
+}else{
+  load("manualKEGGrxns.Rdata")
+}
+
+#match unambiguous reactions to KEGG-associated free energy - multiple enzymes involved in a reaction or enzymes associated with multiple reactions degenerate this relationship - encorporate manual matching which was done on line 37
+for(rx in reactions){
+  if(enzymes[names(enzymes) == rx] == ""){next}
+  rxEnzymes <- strsplit(enzymes[names(enzymes) == rx], split = '/')[[1]]
+  rxMatches <- rxFreeEnergy[rxFreeEnergy$KEGGIDreformat %in% unique(rxDesignations[rxDesignations$SYST %in% rxEnzymes,]$KEGG),]
+  if(length(rxMatches[,1]) == 1){
+    reversibleRx$WEIZfreeE[reversibleRx$rx == rx] <- rxMatches$freeEnergykJ_mol
+    
+    }else{
+    if(rx %in% manualRxKEGGmatch$reaction[!is.na(manualRxKEGGmatch$KEGG)]){
+      reversibleRx$WEIZfreeE[reversibleRx$rx == rx] <-  rxMatches$freeEnergykJ_mol[rxMatches$KEGGIDreformat == manualRxKEGGmatch$KEGG[manualRxKEGGmatch$reaction == rx]]
+    }}
+}
+
+#read in manually flipped and directed reactions (for flipped reations, the SM direction will be flipped and EC and Weiz direction will remain the same.  This is because SM (species matching) already flipped the free
+#sign of the free energy of a reaction if substrates and products were reversed.  
+
+rxn_search(named_stoi, "glucose", is_rxn = FALSE)
+
+
+thermAnnotate = read.delim(
+
+
+load("checkRev.R")
+reversibleRx$manual[reversibleRx$rx %in% misclass] <- 0
+reversibleRx$manual[reversibleRx$rx %in% c("r_0241", "r_0862", "r_0938", "r_0246", "r_0247", "r_0248", "r_0478", "r_0277")] <- 1
+
+#load or write stoichiometry matrix of reactions and their altered metabolites
+
+if(file.exists("yeast_stoi.R")){
+  load("yeast_stoi.R")
+} else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
+
 
 
 ######### treatment ###########
@@ -59,34 +118,14 @@ for(i in 1:length(nutrientFile[1,])){
 	
 	}}
 
-#rxnIDtoEnz(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))
-#rxchoose <- "r_0653"
-#x <- stoiMat[stoiMat[,colnames(stoiMat) == rxchoose] != 0,colnames(stoiMat) == rxchoose]
-#names(x) <- metIDtoSpec(names(x))
-#x
 
-#metchoose <- "s_1160"
-#x <- rxn_search(Stotal, metchoose, is_rxn = FALSE)
-#rownames(x) <- metIDtoSpec(rownames(x)); #colnames(x) <- rxnIDtoEnz(colnames(x))
-
-#metIDtoSpec(c("s_1063", "s_1059"))
-#rxnIDtoEnz(c("r_0885", "r_0707"))
-
-#load or write stoichiometry matrix of reactions and their altered metabolites
-
-if(file.exists("yeast_stoi.R")){
-	load("yeast_stoi.R")
-	} else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
-
-############ preserving compartmentation ############
-
-#reactions = unique(rxnFile$ReactionID)
-
-#reactions are compartment specific
+### Determine the compartmentation of each reaction ####
 
 compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$ReactionID == x][1]})
 
-#extract the metabolite ID corresponding to the extracellular introduction of nutrients
+### Define species involved in boundary-conditions ####
+
+## extract the metabolite ID corresponding to the extracellular introduction of nutrients ##
 
 sources <- c("D-glucose", "ammonium", "phosphate", "sulphate", "uracil", "L-leucine")
 		
@@ -98,7 +137,7 @@ boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$
 }
 
 
-#extrate the IDs of excreted metabolites
+## extract the IDs of excreted metabolites ##
 
 excreted <- c("acetate", "ethanol", "succinate(2-)", "(R)-lactate", "L-alanine", "L-glutamate")
 
@@ -110,18 +149,32 @@ excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$
 }
 
 
+## extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass ##
 
-#tmp <- stoiMat[metIDtoSpec(rownames(stoiMat)) == "(S)-lactate",]
-#tmp2 <- tmp[,apply(tmp != 0, 2, sum) != 0]
-#rownames(tmp2) <- metIDtoSpec(rownames(tmp2)); colnames(tmp2) <- rxnIDtoEnz(colnames(tmp2))
-#grep("lactate", rxnIDtoEnz(colnames(stoiMat)), value = TRUE)
+sinks <- compositionFile$AltName
+
+resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
+
+comp_met <- NULL
+for(x in 1:length(sinks)){
+  comp_met <- rbind(comp_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "cytoplasm"],])
+}
+
+## freely exchanging metabolites through extracellular compartment ##
+
+free_flux <- c("carbon dioxide", "oxygen", "water")
+
+resource_matches <- lapply(free_flux, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
+
+freeExchange_met <- NULL
+for(x in 1:length(free_flux)){
+  freeExchange_met <- rbind(freeExchange_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
+}
 
 
 skip_me = TRUE
-
-if(skip_me == FALSE){
-
 ######### Confirm mass balance of reactions ############
+if(skip_me == FALSE){
 
 met_chebi <- unlist(sapply(metabolites, metToCHEBI))
 met_chebi_comp <- metComp[metComp$ID %in% met_chebi,]
@@ -256,30 +309,6 @@ rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
 #chem_form[chem_form$ID %in% met_chebi,]
 #rxnparFile[grep("7814", rxnparFile[,3]),]
 
-
-
-
-#extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass
-
-sinks <- compositionFile$AltName
-
-resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
-
-comp_met <- NULL
-for(x in 1:length(sinks)){
-comp_met <- rbind(comp_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "cytoplasm"],])
-}
-
-#freely exchanging metabolites through extracellular compartment
-
-free_flux <- c("carbon dioxide", "oxygen", "water")
-
-resource_matches <- lapply(free_flux, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
-
-freeExchange_met <- NULL
-for(x in 1:length(free_flux)){
-freeExchange_met <- rbind(freeExchange_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
-}
 
 
 #### search for un-balanced rxns ######
@@ -526,7 +555,6 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
 # KEGG and EC reactions name
 
 reaction_info <- function(rxnName){
-  rxnName <- "r_0001"
   rxnStoi <- stoiMat[,colnames(stoiMat) == rxnName][stoiMat[,colnames(stoiMat) == rxnName] != 0]
   speciesNames <- metIDtoSpec(names(rxnStoi))
   rxnDir <- reversibleRx$reversible[reversibleRx$rx == rxnName]
@@ -547,29 +575,15 @@ reaction_info <- function(rxnName){
   }), collapse = ' + ')
   
   rxList <- list()
+  rxList$reaction = unname(rxnIDtoEnz(rxnName))
+  rxList$enzymes = unname(rxnIDtoGene(rxnName))
   rxList$stoichiometry = paste(substrate_prep, rxnDir, product_prep)
-  
-  
-  
-  
-  
-  
-  }
+  rxList$thermo = reversibleRx[reversibleRx$rx == rxnName,]
+  rxList  
+}
 
 
 
-# read in supplementary thermodynamics annotation file and combine it with the existing thermodynamics file
-
-
-rxnIDtoSGD <- function(rxnIDs){
-  #output the compartment where a reaction occurs followed by all of the genes involved in the rxn
-  
-  output <- t(sapply(rxnIDs, function(rxnID){
-    tmp <- rxnFile[rxnFile$ReactionID == rxnID,]
-    c(tmp$Compartment[1], paste(unique(strsplit(paste(tmp$MetName[is.na(tmp$StoiCoef)], collapse = ':'), ':')[[1]]), collapse = ':'))
-  }))
-  
-  }
 
 
 
