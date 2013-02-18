@@ -397,17 +397,32 @@ flux_vectors <- list()
 
 for(treatment in 1:length(names(treatment_par))){
 
-#reversibleRx[reversibleRx[,1] %in% c("r_0246", "r_0328", "r_0329", "r_0629", "r_0630", "r_0631", "r_0632", "r_0691", "r_0692", "r_0693", "r_0694", "r_0938", "r_0939", "r_0940"),2] <- 1
-
 #remove reactions which are defective 
 S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrophies, rem.unbalanced, rem.aggregate))]
 
+#split reactions which can carry forward and reverse flux into two identical reactions
+validrxns <- reversibleRx[reversibleRx$rx %in% colnames(S_rxns),]
+validrxnsFluxdir <- sapply(colnames(S_rxns), function(rxdir){
+  validrxns$reversible[validrxns$rx == rxdir]
+  })
 
-#added reactions for boundary fluxes
+stoiRxSplit <- NULL
+for(rxsplit in 1:length(validrxnsFluxdir)){
+  if(unname(validrxnsFluxdir[rxsplit]) == 0){out <- rbind(c(paste(c(names(validrxnsFluxdir)[rxsplit], "F"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "F"), c(paste(c(names(validrxnsFluxdir)[rxsplit], "R"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "R"))}
+  if(unname(validrxnsFluxdir[rxsplit]) == 1){out <- c(paste(c(names(validrxnsFluxdir)[rxsplit], "F"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "F")}  
+  if(unname(validrxnsFluxdir[rxsplit]) == -1){out <- c(paste(c(names(validrxnsFluxdir)[rxsplit], "R"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "R")}  
+  stoiRxSplit <- rbind(stoiRxSplit, out)
+  }
+stoiRxSplit <- as.data.frame(cbind(stoiRxSplit, 0)); colnames(stoiRxSplit) <- c("rxDesignation", "reaction", "direction", "bound")
 
-##### Nutrient Influx #####
-##### Unconstrained Chemical Influx #####
-##### Excreted Metabolite Efflux #####
+S_rxns_split <- sapply(stoiRxSplit$reaction, function(rx){
+  S_rxns[,colnames(S_rxns) == rx]
+  })
+colnames(S_rxns_split) <- stoiRxSplit$rxDesignation
+
+##### Stoichiometry and bounds of boundary fluxes #######
+
+## Nutrient Influx & Unconstrained Chemical Influx ##
 
 influx_rxns <- sapply(c(boundary_met$SpeciesID, freeExchange_met$SpeciesID), function(id){c(1:length(metabolites))[metabolites == id]})
 
@@ -416,6 +431,17 @@ for(i in 1:length(influx_rxns)){
 	influxS[influx_rxns[i],i] <- 1
 	}
 
+influxSplit <- data.frame(rxDesignation = c(paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
+   reaction = paste(c(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)), "boundary"), direction = rep(c("F", "R"), each = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName))), 
+  bound = c(sapply(boundary_met$SpeciesName, function(bmet){treatment_par[[treatment]]$nutrients$conc_per_t[treatment_par[[treatment]]$nutrients$nutrient %in% bmet]}), rep(0, times = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)) + length(freeExchange_met$SpeciesName)))
+  )
+                                                     
+influxS_split <- cbind(influxS, influxS)
+colnames(influxS_split) <- influxSplit$rxDesignation
+
+## Excreted Metabolite Efflux - non-negative ##
+
+
 efflux_rxns <- sapply(excreted_met$SpeciesID, function(id){c(1:length(metabolites))[metabolites == id]})
 
 effluxS <- matrix(0, ncol = length(efflux_rxns), nrow = length(metabolites))
@@ -423,96 +449,63 @@ for(i in 1:length(efflux_rxns)){
 	effluxS[efflux_rxns[i],i] <- -1
 	}
 
-	
-	
-##### Composition fxn #####
+## Composition fxn ##
 
 compVec <- rep(0, times = length(metabolites))
 for(i in 1:length(comp_met$SpeciesID)){
-	compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
-	}
+  compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
+}
 
-S <- cbind(S_rxns, influxS, effluxS, compVec)		
-colnames(S) <- c(colnames(S_rxns), sapply(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName, excreted_met$SpeciesName), function(x){paste(x, "boundary")}), "composition")
-#if(is.na(treatment_par[[treatment]]$auxotrophies)){save(S, file = "totalStoi.Rdata")}
+sinkStoi <- cbind(effluxS, compVec)
+sinkSplit <- data.frame(rxDesignation = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), reaction = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), direction = "F", bound = 0)
+
+S <- cbind(S_rxns_split, influxS_split, effluxS, compVec)
+Sinfo <- rbind(stoiRxSplit, influxSplit, sinkSplit)
 
 
 ################ F - flux balance ############
 
 Fzero <- rep(0, times = length(S[,1]))
 
+############ Gv >= h - bounds ########
 
-#dim nconst x nrxns
-#the reactions corresponding to the boundary fluxes added in influx reactions for nutrients are given a value of -1.
+## previous splitting of reversible reactions, allows restriction of each reaction's flux to be either non-negative or non-positive (depending on constrained direction) ##
 
-influxG <- matrix(0, ncol = length(S[1,]), nrow = length(boundary_met$SpeciesID))
-influxh <- NULL
+directG <- diag(ifelse(Sinfo$direction == "F", 1, -1))
+directh <- rep(0, length(Sinfo[,1]))
 
-for(i in 1:length(boundary_met$SpeciesName)){
-influxG[i, c(1:length(S[1,]))[colnames(S) %in% paste(as.character(boundary_met$SpeciesName)[i], "boundary")]] <- -1
-influxh	<- c(influxh, -1*treatment_par[[treatment]]$nutrients$conc_per_t[treatment_par[[treatment]]$nutrients$nutrient %in% boundary_met$SpeciesName[i]])
-
-	}
+## bounding maximum nutrient uptake rates ##
 
 
-effluxG <- matrix(0, ncol = length(S[1,]), nrow = length(excreted_met$SpeciesID))
-effluxh <- NULL
+influxG <- t(sapply(c(1:length(Sinfo[,1]))[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_')], function(rxchoose){
+  foo <- rep(0, length(Sinfo[,1])); foo[rxchoose] <- -1; foo
+  }))
+influxh <- -1 * as.numeric(Sinfo[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'),]$bound)
 
-for(i in 1:length(excreted_met$SpeciesID)){
-effluxG[i, c(1:length(S[1,]))[colnames(S) %in% paste(as.character(excreted_met$SpeciesName)[i], "boundary")]] <- 1
-effluxh	<- c(effluxh, 0)
-	
-	}	
-	
-#thermodynamic flux-constraints
-
-thermoG <- NULL
-thermoh <- NULL
-rxstack <- NULL
-cnstr_rxns <- c(1:length(S[1,]))[colnames(S) %in% reversibleRx[,1]]
-for(i in cnstr_rxns){
-	revC <- reversibleRx[,2][reversibleRx[,1] == colnames(S)[i]]
-	if(revC != 0){
-		pointVec <- rep(0, times = length(S[1,]))
-		pointVec[i] <- 1*revC
-		thermoG <- rbind(thermoG, pointVec)
-		thermoh <- c(thermoh, 0)
-		rxstack <- c(rxstack, colnames(S)[colnames(S) %in% reversibleRx[,1]][i])
-		}
-	}
-
-	
-
-Gtot <- rbind(influxG, effluxG, thermoG)
-htot <- c(influxh, effluxh, thermoh) 	
-
-#misclass <- "r_0885"
-#save(misclass, file = "checkRev.R")
-
-#Gtot <- rbind(influxG, effluxG, thermoG[167,])	
-#htot <- c(influxh, effluxh, thermoh[167]) 
-
-#Gtot <- rbind(influxG, effluxG, thermoG[c(1:166,168:204),])	
-#htot <- c(influxh, effluxh, thermoh[c(1:166,168:204)]) 
+Gtot <- rbind(directG, influxG)
+htot <- c(directh, influxh) 	
 
 
 ############### costFxn - indicates the final rxn in S ######
 #lp loss fxn
-costFxn = c(rep(0, times = length(S[1,]) -1), -1)
+flux_penalty = 0.001
+costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F", 1, -1) * flux_penalty
 
 #qp loss fxn
 #costFxn = c(rep(0, times = length(S[1,]) -1), 1)
-
-
-
 
 
 ######## use linear programming to maximize biomass #######
 
 linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
 
-#linp_solution$X[names(linp_solution$X) %in% c("r_0486", "r_0488", "r_0689", "r_1003", "r_0246")]
+#reconstruct reaction-specific flux from the F or R reaction which actually carried flux
 
+collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
+  sum(linp_solution$X[names(linp_solution$X) %in% Sinfo$rxDesignation[Sinfo$reaction == frcombo]])
+  })
+
+linp_solution$X[linp_solution$X != 0]
 
 flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X
 
