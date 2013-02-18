@@ -8,19 +8,20 @@ source("FBA_lib.R")
 options(stringsAsFactors = FALSE)
 inputFilebase = "yeast"
 
-#load SBML files describing metabolites, rxn stoichiometry.
+## Load SBML files describing metabolites, rxn stoichiometry. ##
 rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE, stringsAsFactors = FALSE)
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
+## Load files describing boundary conditions and reaction reversibility from ecoli ##
 metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
 compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 
-#load weizman free energy files and mapping designations
+## Load weizman free energy files and mapping designations ##
 rxDesignations <- read.delim("../KEGGrxns/yeastNameDict.tsv", sep = "\t", header = T)
 rxFreeEnergy <- read.delim("../KEGGrxns/kegg_reactions_PGC_ph5.0.csv", sep = ",", header = T); colnames(rxFreeEnergy) <- c("KEGGID", "freeEnergykJ_mol", "pH", "ionicStrength", "Note")
 rxFreeEnergy$KEGGIDreformat <- sapply(rxFreeEnergy$KEGGID, function(KID){
@@ -33,7 +34,15 @@ rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
 enzymes <- rxnIDtoGene(reactions)
 
-#for reactions where proteins match multiple KEGG reactions, manually choose which is the proper match
+## Load or write stoichiometry matrix of reactions and their altered metabolites ##
+
+if(file.exists("yeast_stoi.R")){
+  load("yeast_stoi.R")
+} else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
+
+
+
+# For reactions where proteins match multiple KEGG reactions, manually choose which is the proper match
 if(!file.exists("manualKEGGrxns.Rdata")){
 manualRxKEGGmatch <- NULL
 for(rx in reactions){
@@ -60,7 +69,7 @@ for(rx in reactions){
   load("manualKEGGrxns.Rdata")
 }
 
-#match unambiguous reactions to KEGG-associated free energy - multiple enzymes involved in a reaction or enzymes associated with multiple reactions degenerate this relationship - encorporate manual matching which was done on line 37
+# Match unambiguous reactions to KEGG-associated free energy - multiple enzymes involved in a reaction or enzymes associated with multiple reactions degenerate this relationship - encorporate manual matching which was done on line 37
 for(rx in reactions){
   if(enzymes[names(enzymes) == rx] == ""){next}
   rxEnzymes <- strsplit(enzymes[names(enzymes) == rx], split = '/')[[1]]
@@ -77,21 +86,23 @@ for(rx in reactions){
 #read in manually flipped and directed reactions (for flipped reations, the SM direction will be flipped and EC and Weiz direction will remain the same.  This is because SM (species matching) already flipped the free
 #sign of the free energy of a reaction if substrates and products were reversed.  
 
-rxn_search(named_stoi, "glucose", is_rxn = FALSE)
+#rxn_search(named_stoi, "ubiquinone", is_rxn = FALSE)
 
+thermAnnotate = read.delim("thermoAnnotate.txt", header = TRUE, sep = "\t")
+for(rxN in 1:length(thermAnnotate[,1])){
+  #flip reaction direction (and free energy) if stated directionality is unconventional  
+  stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]] <- stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]]*-1
+  reversibleRx[reversibleRx$rx == thermAnnotate$reaction[rxN],colnames(reversibleRx) %in% c("reversible", "SMfreeE")] <- reversibleRx[reversibleRx$rx == thermAnnotate$reaction[rxN],colnames(reversibleRx) %in% c("reversible", "SMfreeE")]*-1
+  
+  #manually define reaction directoin
+  reversibleRx$rxFlip[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$flip[rxN]
+  reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
+  }
 
-thermAnnotate = read.delim(
+#load("checkRev.R")
+#reversibleRx$manual[reversibleRx$rx %in% misclass] <- 0
+#reversibleRx$manual[reversibleRx$rx %in% c("r_0241", "r_0862", "r_0938", "r_0246", "r_0247", "r_0248", "r_0478", "r_0277")] <- 1
 
-
-load("checkRev.R")
-reversibleRx$manual[reversibleRx$rx %in% misclass] <- 0
-reversibleRx$manual[reversibleRx$rx %in% c("r_0241", "r_0862", "r_0938", "r_0246", "r_0247", "r_0248", "r_0478", "r_0277")] <- 1
-
-#load or write stoichiometry matrix of reactions and their altered metabolites
-
-if(file.exists("yeast_stoi.R")){
-  load("yeast_stoi.R")
-} else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
 
 
 
@@ -548,39 +559,7 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
   write.table(ternary_outputDF, file = paste(c("SGDprojectionFiles/", comp_name, "TernaryFlux.tsv"), collapse = ""), sep = "\t", row.names = F, col.names = T,  quote = F)  
 }
 
-##### write a function to list:
-# reactants -> products
-# Reaction name and designation
-# Thermodynamics
-# KEGG and EC reactions name
-
-reaction_info <- function(rxnName){
-  rxnStoi <- stoiMat[,colnames(stoiMat) == rxnName][stoiMat[,colnames(stoiMat) == rxnName] != 0]
-  speciesNames <- metIDtoSpec(names(rxnStoi))
-  rxnDir <- reversibleRx$reversible[reversibleRx$rx == rxnName]
-  if(rxnDir == 1){rxnDir <- " -> "}
-  if(rxnDir == 0){rxnDir <- " <=> "}
-  if(rxnDir == -1){rxnDir <- " <- "}
-  
-  substrate_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi < 0])), function(x){
-    tmp <- (rxnStoi[rxnStoi < 0] * -1)[x]
-    if(tmp == 1){tmp <- ''}
-    paste(tmp, speciesNames[rxnStoi < 0][x])
-    }), collapse = ' + ')
-  
-  product_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi > 0])), function(x){
-    tmp <- (rxnStoi[rxnStoi > 0])[x]
-    if(tmp == 1){tmp <- ''}
-    paste(tmp, speciesNames[rxnStoi > 0][x])
-  }), collapse = ' + ')
-  
-  rxList <- list()
-  rxList$reaction = unname(rxnIDtoEnz(rxnName))
-  rxList$enzymes = unname(rxnIDtoGene(rxnName))
-  rxList$stoichiometry = paste(substrate_prep, rxnDir, product_prep)
-  rxList$thermo = reversibleRx[reversibleRx$rx == rxnName,]
-  rxList  
-}
+reaction_info("r_1001")
 
 
 

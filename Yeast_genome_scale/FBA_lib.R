@@ -38,6 +38,7 @@ tmp
 
 rxn_search = function(stoiMat, search_string, is_rxn = TRUE, index = FALSE){
 	#search by metabolite or reactant and return all reactions and nonzero metabolites.
+  #stoiMat rows and columns must be named with metabolite and enzyme common names: named_stoi
 	if (is_rxn == TRUE){
 		colz = grep(search_string, colnames(stoiMat), fixed = TRUE)
 		} else {
@@ -88,6 +89,11 @@ rxnIDtoEnz <- function(rxn){
 		rxnFile$Reaction[rxnFile$ReactionID == x][1]
 		})}
 		
+rxnIDtoGene <- function(rxns){
+  sapply(rxns, function(rx){
+    paste(unique(strsplit(paste(rxnFile[rxnFile$ReactionID == rx,]$MetName[is.na(rxnFile[rxnFile$ReactionID == rx,]$StoiCoef)], collapse = ':'), ':')[[1]]), collapse = '/')
+    })}
+
 metToCHEBI <- function(mets){
 	#associate species IDs and CHEBI ids where available/applicable
 	if(length(grep("chebi", rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]])) == 0){
@@ -95,6 +101,16 @@ metToCHEBI <- function(mets){
 		}else{
 	unlist(strsplit(rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]], split = "%3A"))[2]	
 	}}
+
+#rxnIDtoSGD <- function(rxnIDs){
+  #output the compartment where a reaction occurs followed by all of the genes involved in the rxn
+  
+ # output <- t(sapply(rxnIDs, function(rxnID){
+  #  tmp <- rxnFile[rxnFile$ReactionID == rxnID,]
+  #  c(tmp$Compartment[1], paste(unique(strsplit(paste(tmp$MetName[is.na(tmp$StoiCoef)], collapse = ':'), ':')[[1]]), collapse = ':'))
+  #}))
+  
+
 
 
 eval_mets <- function(query_met, grep_it = FALSE){
@@ -112,3 +128,41 @@ eval_mets <- function(query_met, grep_it = FALSE){
 		}
 	eval_mat
 	}		
+  
+  
+  
+reaction_info <- function(rxnName){
+    
+  ##### write a function to list:
+  # reactants -> products
+  # Reaction name and designation
+  # Thermodynamics
+  # KEGG and EC reactions name
+    
+  rxnStoi <- stoiMat[,colnames(stoiMat) == rxnName][stoiMat[,colnames(stoiMat) == rxnName] != 0]
+  speciesNames <- metIDtoSpec(names(rxnStoi))
+  rxnDir <- reversibleRx$reversible[reversibleRx$rx == rxnName]
+  if(rxnDir == 1){rxnDir <- " -> "}
+  if(rxnDir == 0){rxnDir <- " <=> "}
+  if(rxnDir == -1){rxnDir <- " <- "}
+    
+  substrate_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi < 0])), function(x){
+    tmp <- (rxnStoi[rxnStoi < 0] * -1)[x]
+    if(tmp == 1){tmp <- ''}
+    paste(tmp, speciesNames[rxnStoi < 0][x])
+  }), collapse = ' + ')
+    
+  product_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi > 0])), function(x){
+    tmp <- (rxnStoi[rxnStoi > 0])[x]
+    if(tmp == 1){tmp <- ''}
+    paste(tmp, speciesNames[rxnStoi > 0][x])
+  }), collapse = ' + ')
+    
+  rxList <- list()
+  rxList$reaction = unname(rxnIDtoEnz(rxnName))
+  rxList$enzymes = unname(rxnIDtoGene(rxnName))
+  rxList$stoichiometry = paste(substrate_prep, rxnDir, product_prep)
+  rxList$thermo = reversibleRx[reversibleRx$rx == rxnName,]
+  rxList  
+  }  
+  
