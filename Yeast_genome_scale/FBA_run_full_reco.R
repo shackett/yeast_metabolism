@@ -572,8 +572,14 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
   write.table(ternary_outputDF, file = paste(c("SGDprojectionFiles/", comp_name, "TernaryFlux.tsv"), collapse = ""), sep = "\t", row.names = F, col.names = T,  quote = F)  
 }
 
-reaction_info("r_1001")
+suspects <- comp_outputDF[,1][abs(comp_outputDF[,3]) > 0.005]
+suspectID <- rxnEnzymes[sapply(rxnEnzymes$genes, function(matcher){
+  sum(strsplit(matcher, split = ':')[[1]] %in% suspects) != 0
+  }),]
+                          
 
+reaction_info("r_0155")
+rxn_search(named_stoi, "dihydrolipoamide")
 
 
 
