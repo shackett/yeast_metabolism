@@ -91,13 +91,18 @@ for(rx in reactions){
 thermAnnotate = read.delim("thermoAnnotate.txt", header = TRUE, sep = "\t")
 for(rxN in 1:length(thermAnnotate[,1])){
   #flip reaction direction (and free energy) if stated directionality is unconventional  
-  stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]] <- stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]]*-1
-  reversibleRx[reversibleRx$rx == thermAnnotate$reaction[rxN],colnames(reversibleRx) %in% c("reversible", "SMfreeE")] <- reversibleRx[reversibleRx$rx == thermAnnotate$reaction[rxN],colnames(reversibleRx) %in% c("reversible", "SMfreeE")]*-1
+  if(!is.na(thermAnnotate$flip[rxN]) & thermAnnotate$flip[rxN]){
+    stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]] <- stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]]*-1
+    reversibleRx[reversibleRx$rx == thermAnnotate$reaction[rxN],colnames(reversibleRx) %in% c("reversible", "SMfreeE")] <- reversibleRx[reversibleRx$rx == thermAnnotate$reaction[rxN],colnames(reversibleRx) %in% c("reversible", "SMfreeE")]*-1
+    }
   
-  #manually define reaction directoin
+  #manually define reaction direction
   reversibleRx$rxFlip[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$flip[rxN]
   reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
   }
+
+####### tmp #####
+reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
 
 #load("checkRev.R")
 #reversibleRx$manual[reversibleRx$rx %in% misclass] <- 0
@@ -360,10 +365,13 @@ for(l in 1:length(labelz)){
 	aggregate_rxns <- union(aggregate_rxns, rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE))
 	}
 
+rxn_search(named_stoi, "isa", is_rxn = TRUE, index = TRUE)
+
 #grep(labelz[l], colnames(named_stoi), fixed = TRUE)
 #aggregate_rxns <- c(colnames(rxn_search(named_stoi, "isa", is_rxn = TRUE)), colnames(rxn_search(named_stoi, "protein production", is_rxn = TRUE)))
 
 rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
+
 
 
 
@@ -374,7 +382,8 @@ carb_match <- rxn_search(named_stoi, "carbon dioxide", is_rxn = FALSE, index = T
 co_two_producing_rx <- apply(stoiMat[met_dict == "carbon dioxide",carb_match] < 0, 2, sum) == 0
 co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 
-reversibleRx[,2][reversibleRx[,1] %in% co_two_producing_rx] <- 1
+#temporarely turned off
+#reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
 
@@ -510,6 +519,10 @@ flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X
 growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
 }
+
+
+
+
 
 ###### output fluxes so that they can be visualzied using S. cerevisae cellular overview #####
 

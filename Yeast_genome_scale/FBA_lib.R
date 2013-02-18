@@ -102,15 +102,15 @@ metToCHEBI <- function(mets){
 	unlist(strsplit(rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]], split = "%3A"))[2]	
 	}}
 
-#rxnIDtoSGD <- function(rxnIDs){
-  #output the compartment where a reaction occurs followed by all of the genes involved in the rxn
+rxnIDtoSGD <- function(rxnIDs){
+  #output the compartment where a reaction occurs followed by all of the genes involved in the rxn  
   
- # output <- t(sapply(rxnIDs, function(rxnID){
-  #  tmp <- rxnFile[rxnFile$ReactionID == rxnID,]
-  #  c(tmp$Compartment[1], paste(unique(strsplit(paste(tmp$MetName[is.na(tmp$StoiCoef)], collapse = ':'), ':')[[1]]), collapse = ':'))
-  #}))
-  
-
+  output <- t(sapply(rxnIDs, function(rxnID){
+    tmp <- rxnFile[rxnFile$ReactionID == rxnID,]
+    c(tmp$Compartment[1], paste(unique(strsplit(paste(tmp$MetName[is.na(tmp$StoiCoef)], collapse = ':'), ':')[[1]]), collapse = ':'))
+  }))
+output
+}
 
 
 eval_mets <- function(query_met, grep_it = FALSE){
