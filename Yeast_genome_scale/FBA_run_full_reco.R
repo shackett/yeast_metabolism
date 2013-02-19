@@ -327,7 +327,7 @@ rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
 
 
 
-#### search for un-balanced rxns ######
+#### Search for un-balanced rxns ######
 
 is.unbalanced <- rep(NA, times = length(stoiMat[1,]))
 
@@ -338,16 +338,8 @@ for(i in 1:length(stoiMat[1,])){
 rem.unbalanced <- colnames(stoiMat)[is.unbalanced]
 
 
-#boundary_put <- stoiMat[,is.unbalanced][apply(abs(stoiMat[,is.unbalanced]), 1, sum) != 0,]
 
-#rownames(boundary_put) <- metIDtoSpec(rownames(boundary_put))
-#colnames(boundary_put) <- rxnIDtoEnz(colnames(boundary_put))
-
-#all_rxns <- rxnIDtoEnz(colnames(stoiMat))
-
-
-
-##### generic reactions #####
+##### Remove generic reactions - those which are not mass balanced or are generalizations of a class of species #####
 
 named_stoi <- stoiMat
 met_dict <- metIDtoSpec(rownames(named_stoi))
@@ -364,11 +356,6 @@ aggregate_rxns <- NULL
 for(l in 1:length(labelz)){
 	aggregate_rxns <- union(aggregate_rxns, rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE))
 	}
-
-rxn_search(named_stoi, "isa", is_rxn = TRUE, index = TRUE)
-
-#grep(labelz[l], colnames(named_stoi), fixed = TRUE)
-#aggregate_rxns <- c(colnames(rxn_search(named_stoi, "isa", is_rxn = TRUE)), colnames(rxn_search(named_stoi, "protein production", is_rxn = TRUE)))
 
 rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
 
@@ -456,10 +443,10 @@ for(i in 1:length(comp_met$SpeciesID)){
   compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
 }
 
-sinkStoi <- cbind(effluxS, compVec)
+sinkStoi <- cbind(effluxS, compVec); colnames(sinkStoi) <- c(paste(excreted_met$SpeciesName, "boundary"), "composition")
 sinkSplit <- data.frame(rxDesignation = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), reaction = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), direction = "F", bound = 0)
 
-S <- cbind(S_rxns_split, influxS_split, effluxS, compVec)
+S <- cbind(S_rxns_split, influxS_split, sinkStoi)
 Sinfo <- rbind(stoiRxSplit, influxSplit, sinkSplit)
 
 
@@ -505,9 +492,7 @@ collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
   sum(linp_solution$X[names(linp_solution$X) %in% Sinfo$rxDesignation[Sinfo$reaction == frcombo]])
   })
 
-linp_solution$X[linp_solution$X != 0]
-
-flux_vectors[[names(treatment_par)[treatment]]] <- linp_solution$X
+flux_vectors[[names(treatment_par)[treatment]]] <- collapsedFlux
 
 growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
@@ -556,7 +541,10 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
       comp_outputDF <- rbind(comp_outputDF, data.frame(Enzyme = rxGenes, tmpMat))
       }
     }
-  comp_outputDF[,-1] <- comp_outputDF[,-1]/max(abs(range(comp_outputDF[,-1])))
+  #flux relative to biomass objective
+  comp_outputDF[,-1] <- comp_outputDF[,-1]/(t(t(rep(1, length(comp_outputDF[,1])))) %*% sapply(choice_conditions, function(cmatch){growth_rate$growth[rownames(growth_rate) == cmatch]}))
+    #max(abs(range(comp_outputDF[,-1])))
+  colnames(comp_outputDF) <- paste("$", colnames(comp_outputDF), sep = "")
   
   #visualizing which reactions carry flux in a given condition
   ternary_outputDF <- comp_outputDF; ternary_outputDF[,-1][ternary_outputDF[,-1] < 0] <- -1; ternary_outputDF[,-1][ternary_outputDF[,-1] > 0] <- 1
@@ -571,11 +559,14 @@ suspectID <- rxnEnzymes[sapply(rxnEnzymes$genes, function(matcher){
   }),]
                           
 
+acondFlux <- flux_vectors[[c(1:length(flux_vectors))[names(flux_vectors) == "Glucose 0.05"]]]
+acondFlux[
+
 reaction_info("r_0155")
-rxn_search(named_stoi, "dihydrolipoamide")
-
-
-
+rxn_search(named_stoi, "adenylate")
+qplot(comp_outputDF[,4])
+heatmap.2(as.matrix(comp_outputDF[,-1]), symbreaks = TRUE)
+comp_outputDF[,1][comp_outputDF[,4] < -60]
 
 
 
