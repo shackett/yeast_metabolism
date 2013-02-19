@@ -8,20 +8,20 @@ source("FBA_lib.R")
 options(stringsAsFactors = FALSE)
 inputFilebase = "yeast"
 
-## Load SBML files describing metabolites, rxn stoichiometry. ##
+#### Load SBML files describing metabolites, rxn stoichiometry ####
 rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE, stringsAsFactors = FALSE)
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
-## Load files describing boundary conditions and reaction reversibility from ecoli ##
+#### Load files describing boundary conditions and reaction reversibility from ecoli ####
 metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
 compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 
-## Load weizman free energy files and mapping designations ##
+#### Load weizman free energy files and mapping designations ####
 rxDesignations <- read.delim("../KEGGrxns/yeastNameDict.tsv", sep = "\t", header = T)
 rxFreeEnergy <- read.delim("../KEGGrxns/kegg_reactions_PGC_ph5.0.csv", sep = ",", header = T); colnames(rxFreeEnergy) <- c("KEGGID", "freeEnergykJ_mol", "pH", "ionicStrength", "Note")
 rxFreeEnergy$KEGGIDreformat <- sapply(rxFreeEnergy$KEGGID, function(KID){
@@ -34,7 +34,7 @@ rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
 enzymes <- rxnIDtoGene(reactions)
 
-## Load or write stoichiometry matrix of reactions and their altered metabolites ##
+#### Load or write stoichiometry matrix of reactions and their altered metabolites ####
 
 if(file.exists("yeast_stoi.R")){
   load("yeast_stoi.R")
@@ -42,7 +42,7 @@ if(file.exists("yeast_stoi.R")){
 
 
 
-# For reactions where proteins match multiple KEGG reactions, manually choose which is the proper match
+#### For reactions where proteins match multiple KEGG reactions, manually choose which is the proper match ####
 if(!file.exists("manualKEGGrxns.Rdata")){
 manualRxKEGGmatch <- NULL
 for(rx in reactions){
@@ -86,8 +86,6 @@ for(rx in reactions){
 #read in manually flipped and directed reactions (for flipped reations, the SM direction will be flipped and EC and Weiz direction will remain the same.  This is because SM (species matching) already flipped the free
 #sign of the free energy of a reaction if substrates and products were reversed.  
 
-#rxn_search(named_stoi, "ubiquinone", is_rxn = FALSE)
-
 thermAnnotate = read.delim("thermoAnnotate.txt", header = TRUE, sep = "\t")
 for(rxN in 1:length(thermAnnotate[,1])){
   #flip reaction direction (and free energy) if stated directionality is unconventional  
@@ -100,18 +98,13 @@ for(rxN in 1:length(thermAnnotate[,1])){
   reversibleRx$rxFlip[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$flip[rxN]
   reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
   }
-
-####### tmp #####
 reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
 
-#load("checkRev.R")
-#reversibleRx$manual[reversibleRx$rx %in% misclass] <- 0
-#reversibleRx$manual[reversibleRx$rx %in% c("r_0241", "r_0862", "r_0938", "r_0246", "r_0247", "r_0248", "r_0478", "r_0277")] <- 1
 
 
 
 
-######### treatment ###########
+#### Define the treatment in terms of nutrient availability and auxotrophies ####
 
 dilution_rates <- seq(0.05, 0.3, 0.05)
 
@@ -135,11 +128,11 @@ for(i in 1:length(nutrientFile[1,])){
 	}}
 
 
-### Determine the compartmentation of each reaction ####
+#### Determine the compartmentation of each reaction ####
 
 compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$ReactionID == x][1]})
 
-### Define species involved in boundary-conditions ####
+#### Define species involved in boundary-conditions ####
 
 ## extract the metabolite ID corresponding to the extracellular introduction of nutrients ##
 
@@ -236,10 +229,6 @@ for(i in 1:length(ele_comp_mat[,1])){
 		}}
 		
 		
-		
-
-
-
 
 mass_balanced <- matrix(NA, nrow = length(stoiMat[1,]), ncol = length(ele_comp_mat[1,]) + 1); rownames(mass_balanced) <- colnames(stoiMat); colnames(mass_balanced) <- c("missingIDs", colnames(ele_comp_mat))
 mass_balanced <- as.data.frame(mass_balanced, stringsAsFactors = FALSE)
@@ -274,19 +263,14 @@ add_rxns <- mass_balanced[colnames(stoiMat) %in% good_rxns,][mass_balanced[colna
 non_na_MB <- mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),][!is.na(mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),]$P),]
 
 #reactions carrying flux that are not mass balanced for an element
-
 non_na_MB_stoi <- stoiMat[apply(stoiMat[,colnames(stoiMat) %in% rownames(non_na_MB[non_na_MB$P == FALSE,])] != 0, 1, sum) != 0,colnames(stoiMat) %in% rownames(non_na_MB[non_na_MB$P == FALSE,])]
 
 #for met
 rxnparFile[rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID == "s_0504"],]
 
-
-
 mb.ids <- sapply(rownames(non_na_MB_stoi)[is.na(ele_comp_mat[rownames(ele_comp_mat) %in% rownames(non_na_MB_stoi),][,1])], function(x){corrFile$SpeciesType[corrFile$SpeciesID == x]})
 #for rxn 
 rxnFile[rxnFile$ReactionID %in% "r_1279",]
-rxnFile[rxnFile$ReactionID %in% "r_1281",]
-rxnFile[rxnFile$ReactionID %in% "r_1448",]
 #destroy glycine-cleavage complex (lipoylprotein)
 
 stoiMat <- stoiMat[,!is.na(mass_balanced[,2])]
@@ -339,7 +323,7 @@ rem.unbalanced <- colnames(stoiMat)[is.unbalanced]
 
 
 
-##### Remove generic reactions - those which are not mass balanced or are generalizations of a class of species #####
+#### Remove generic reactions - those which are not mass balanced or are generalizations of a class of species ####
 
 named_stoi <- stoiMat
 met_dict <- metIDtoSpec(rownames(named_stoi))
@@ -369,8 +353,7 @@ carb_match <- rxn_search(named_stoi, "carbon dioxide", is_rxn = FALSE, index = T
 co_two_producing_rx <- apply(stoiMat[met_dict == "carbon dioxide",carb_match] < 0, 2, sum) == 0
 co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 
-#temporarely turned off
-#reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
+reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
 
@@ -736,10 +719,9 @@ write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.name
 limiting_fluxes <- matrix(nrow = length(names(treatment_par)), ncol = length(treatment_par[[1]]$nutrients[,1])); rownames(limiting_fluxes) <- names(treatment_par); colnames(limiting_fluxes) <- treatment_par[[1]]$nutrients[,1]
 
 for(treatment in 1:length(names(treatment_par))){
-
 limiting_fluxes[treatment,]	<-(reduced_flux_mat[sapply(sapply(treatment_par[[treatment]]$nutrients$nutrient, function(x){paste(x, "boundary")}), function(x){c(1:length(reduced_flux_mat[,1]))[rownames(reduced_flux_mat) %in% x]}), treatment]*-1)/treatment_par[[treatment]]$nutrients$conc_per_t
-	
 	}
+image(t(limiting_fluxes))
 #library(xtable)
 #xtable(limiting_fluxes)
 
