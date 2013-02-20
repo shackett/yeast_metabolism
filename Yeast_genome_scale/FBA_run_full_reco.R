@@ -1,12 +1,24 @@
+#lp
 library(lpSolve)
 library(limSolve)
 library(gplots)
+library(ggplot2)
+
 
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 source("FBA_lib.R")
 
 options(stringsAsFactors = FALSE)
 inputFilebase = "yeast"
+
+#calculate shadow prices to perform phenotypic phase plane analysis
+shadow_prices = TRUE
+if(shadow_prices){
+  treatmentPartials <- list()
+  library(lpSolveAPI)
+}
+
+
 
 #### Load SBML files describing metabolites, rxn stoichiometry ####
 rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
@@ -469,6 +481,81 @@ costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F
 
 linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
 
+if(shadow_prices){
+  #if the dual solution (shadow prices) are desired use an alternative solver which reports these values
+  #these shadow prices indicate how much the addition of a metabolite change growth rate.
+  
+  costFxn = c(rep(0, times = length(S[1,]) -1), -1) + rep(1, times = length(S[1,])) * flux_penalty
+  
+  #solve with lpSolveAPI
+  pS <- S; pS <- pS * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #all v must be greater than zero
+  lpObj <- make.lp(nrow = 0, ncol = length(S[1,]))
+  for(i in 1:length(S[,1])){
+    add.constraint(lpObj, pS[i,], "=", 0)
+    }
+  for(i in 1:length(influxh)){
+    set.bounds(lpObj, upper = influxh*-1, columns = apply(influxG, 1, function(x){c(1:length(x))[x == -1]}))
+    }
+  set.objfn(lpObj, costFxn)
+  
+  solve(lpObj)
+  get.objective(lpObj)
+  get.dual.solution(lpObj)[1:length(S[,1])]
+  
+  
+  
+  
+  #solve with limSolve so dual solution is available
+  pS <- S; pS <- pS * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #all v must be greater than zero
+  pdirectG <- diag(rep(1, times = length(Sinfo[,1]))); directh <- rep(0, length(Sinfo[,1]))
+  cost <- c(rep(0, times = length(S[1,]) -1), 1) - rep(1, times = length(Sinfo[,1])) * flux_penalty
+  #flux balance and equalities are combined into a single constraint: Sv <= 0, -Sv <= 0 and Gv 
+  
+  #linp_solution = solveLP(cvec = cost, bvec = c(Fzero, htot), Amat = rbind(pS, pdirectG, influxG), const.dir = c(rep("=", length(Fzero)), rep(">=", length(htot))), lpSolve = TRUE, maximum = TRUE, solve.dual = TRUE, maxiter = 20)
+  
+  nS <- pS*-1 #enforce FB by having Sv >= 0 and -Sv >= 0
+  pinfluxG <- influxG; pinfluxG[pinfluxG != 0] <- abs(pinfluxG[pinfluxG != 0])
+  pinfluxh <- as.numeric(Sinfo[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'),]$bound)
+  
+  bvec <- c(rep(Fzero, 2),  c(rep(0, times = length(pdirectG[,1])), pinfluxh))
+  
+  lpSolution <- solveLP(cvec = cost, 
+                        bvec = c(rep(Fzero, 2),  c(rep(0, times = length(pdirectG[,1])), pinfluxh)), 
+                        Amat = rbind(pS, nS, pdirectG, pinfluxG),
+                        const.dir = c(rep("<=", length(Fzero)*2), rep(">=", length(pdirectG[,1])), rep("<=", length(pinfluxh))),
+                        maximum = TRUE, solve.dual = TRUE, maxiter = 20, zero = 0.000001)
+  
+  
+  
+  treatmentPartials[[
+  
+  
+  ### v >= 0, 
+  #S*-1 <= 0, so Sv = 0
+  pS <- S; nS <- -1*S #enforce FB by having Sv >= 0 and -Sv >= 0
+  pG <- Gtot
+  signFlip <- ifelse(Sinfo$direction == "F", FALSE, TRUE)
+  pS[,signFlip] <- -1*pS[,signFlip]; nS[,signFlip] <- -1*nS[,signFlip] #flip reactions with fluxes constrained to be less than 0, so that stoichiometry is switched and flux is non-zero.
+  pH <- htot
+
+  
+  Amat <- rbind(pS, nS, pG)
+  bvec <- c(rep(0, times = 2*length(S[,1])), htot)
+  cost <- c(rep(0, times = length(S[1,]) -1), -1) - rep(1, times = length(Sinfo[,1])) * flux_penalty
+  #combined flux balance and bounds into a single constraint
+  
+  lpSolution <- solveLP(cvec = cost, bvec = bvec, Amat = Amat, maximum = F)
+  
+  
+  
+  
+  
+  }
+
+
+
+
+
 #reconstruct reaction-specific flux from the F or R reaction which actually carried flux
 
 collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
@@ -478,6 +565,11 @@ collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
 flux_vectors[[names(treatment_par)[treatment]]] <- collapsedFlux
 
 growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
+
+
+
+
+
 
 }
 
@@ -543,10 +635,10 @@ suspectID <- rxnEnzymes[sapply(rxnEnzymes$genes, function(matcher){
                           
 
 acondFlux <- flux_vectors[[c(1:length(flux_vectors))[names(flux_vectors) == "Glucose 0.05"]]]
-acondFlux[
 
-reaction_info("r_0155")
-rxn_search(named_stoi, "adenylate")
+
+reaction_info("r_0708")
+rxn_search(named_stoi, "glutamate deh", T)
 qplot(comp_outputDF[,4])
 heatmap.2(as.matrix(comp_outputDF[,-1]), symbreaks = TRUE)
 comp_outputDF[,1][comp_outputDF[,4] < -60]
@@ -633,7 +725,11 @@ std.reduced_flux_mat <- (renamed_reduced_flux - apply(renamed_reduced_flux, 1, m
 
 #write.table(reduced_flux_mat, file = "carriedFlux.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
 
-heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05)
+heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05, col = green2red(1000))
+
+heatmap.2(std.reduced_flux_mat[1:50,], Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.5, col = green2red(1000))
+
+
 
 #look at the subset of rxns carrying flux in ura and leu
 
@@ -645,7 +741,7 @@ renamed_reduced_flux[apply(renamed_reduced_flux[,!(growth_rate$limit %in% c("Leu
 flux_per_gr <- reduced_flux_mat/matrix(growth_rate$growth, ncol = length(reduced_flux_mat[1,]), nrow = length(reduced_flux_mat[,1]), byrow = TRUE)
 flux_per_gr <- flux_per_gr[apply(flux_per_gr, 1, sd) != 0,]
 
-heatmap.2(t(scale(t(flux_per_gr), TRUE, TRUE)), trace = "n")
+heatmap.2(t(scale(t(flux_per_gr), TRUE, TRUE)), trace = "n", cexRow = 0.05, col = green2red(1000))
 
 ####### BRIDGE TO NETWORK LAYOUT ########
 
