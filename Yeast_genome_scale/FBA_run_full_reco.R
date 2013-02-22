@@ -12,10 +12,11 @@ options(stringsAsFactors = FALSE)
 inputFilebase = "yeast"
 
 #calculate shadow prices to perform phenotypic phase plane analysis
-shadow_prices = TRUE
+shadow_prices = FALSE
 if(shadow_prices){
   treatmentPartials <- list()
   library(lpSolveAPI)
+  generatePhPP <- TRUE; PhPPgenerated <- FALSE
 }
 
 
@@ -116,6 +117,7 @@ reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.
 
 
 
+
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
 
 dilution_rates <- seq(0.05, 0.3, 0.05)
@@ -138,6 +140,45 @@ for(i in 1:length(nutrientFile[1,])){
 		}
 	
 	}}
+
+
+if(shadow_prices){
+  #### If Phenotypic phase plane analysis (PhPP) is being performed, establish which condititions will be compared ####
+  # which nutrients will be compared in a pairwise manner
+  nutrientComp <- c("ammonium", "phosphate", "D-glucose")
+  maxNutrientConc <- sapply(c(1:length(nutrientFile[,1])), function(x){nutrientFile[x, apply(nutrientFile, 1, which.max)[x]]})
+  names(maxNutrientConc) <- rownames(nutrientFile); maxNutrientConc <- maxNutrientConc[rowSums(nutrientFile == 0) == 0]
+  
+  PhPPcond <- list()
+  
+  #generate all pairs of conditions
+  nutrientPairs <- NULL
+  for(i in 1:length(nutrientComp)){
+    if(i == length(nutrientComp)){next} 
+    for(j in (i+1):length(nutrientComp)){
+      nutrientPairs <- rbind(nutrientPairs, c(nutrientComp[i], nutrientComp[j]))
+    }}
+  
+  # generate concentration of each varying nutrient on an exponentially sampled grid
+  conc_samples <- 20
+  orderedNutrient <- sapply(nutrientComp, function(x){maxNutrientConc[names(maxNutrientConc) == x]}); names(orderedNutrient) <- sapply(names(orderedNutrient), function(y){strsplit(y, split = '\\.')[[1]][1]})
+  nutrientGrad <- sapply(orderedNutrient, function(nconc){
+    nconc * 1/exp((c(0:20)*(log(1000)/conc_samples)))
+  })
+  
+  for(a_pairN in 1:length(nutrientPairs[,1])){
+    nutLattice <- expand.grid(nutrientGrad[,colnames(nutrientGrad) == nutrientPairs[a_pairN,1]], nutrientGrad[,colnames(nutrientGrad) == nutrientPairs[a_pairN,2]])
+    colnames(nutLattice) <- nutrientPairs[a_pairN,]
+    
+    invariantNut <- t(t(rep(1, length(nutLattice[,1])))) %*% maxNutrientConc[!(names(maxNutrientConc) %in% nutrientPairs[a_pairN,])]
+    colnames(invariantNut) <- names( maxNutrientConc[!(names(maxNutrientConc) %in% nutrientPairs[a_pairN,])])
+    
+    PhPPcond$nutrients[[a_pairN]] <- nutrientPairs[a_pairN,]
+    PhPPcond$gradient[[a_pairN]] <- cbind(nutLattice, invariantNut)
+  }
+}
+
+
 
 
 #### Determine the compartmentation of each reaction ####
@@ -481,11 +522,24 @@ costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F
 
 linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
 
+#reconstruct reaction-specific flux from the F or R reaction which actually carried flux
+
+collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
+  sum(linp_solution$X[names(linp_solution$X) %in% Sinfo$rxDesignation[Sinfo$reaction == frcombo]])
+})
+
+flux_vectors[[names(treatment_par)[treatment]]] <- collapsedFlux
+
+growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
+
+
+
 if(shadow_prices){
   #if the dual solution (shadow prices) are desired use an alternative solver which reports these values
   #these shadow prices indicate how much the addition of a metabolite change growth rate.
   
-  costFxn = c(rep(0, times = length(S[1,]) -1), -1) + rep(1, times = length(S[1,])) * flux_penalty
+  costFxn = c(rep(0, times = length(S[1,]) -1), -1) #+ rep(1, times = length(S[1,])) * flux_penalty #removed flux penalty so that partials growth / 
+  #partial metabolite change is the dual solution rather than this combined with flux resistance.
   
   #solve with lpSolveAPI
   pS <- S; pS <- pS * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #all v must be greater than zero
@@ -498,77 +552,39 @@ if(shadow_prices){
     }
   set.objfn(lpObj, costFxn)
   
+  #solve LP problem
   solve(lpObj)
-  get.objective(lpObj)
-  get.dual.solution(lpObj)[1:length(S[,1])]
   
-  
-  
-  
-  #solve with limSolve so dual solution is available
-  pS <- S; pS <- pS * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #all v must be greater than zero
-  pdirectG <- diag(rep(1, times = length(Sinfo[,1]))); directh <- rep(0, length(Sinfo[,1]))
-  cost <- c(rep(0, times = length(S[1,]) -1), 1) - rep(1, times = length(Sinfo[,1])) * flux_penalty
-  #flux balance and equalities are combined into a single constraint: Sv <= 0, -Sv <= 0 and Gv 
-  
-  #linp_solution = solveLP(cvec = cost, bvec = c(Fzero, htot), Amat = rbind(pS, pdirectG, influxG), const.dir = c(rep("=", length(Fzero)), rep(">=", length(htot))), lpSolve = TRUE, maximum = TRUE, solve.dual = TRUE, maxiter = 20)
-  
-  nS <- pS*-1 #enforce FB by having Sv >= 0 and -Sv >= 0
-  pinfluxG <- influxG; pinfluxG[pinfluxG != 0] <- abs(pinfluxG[pinfluxG != 0])
-  pinfluxh <- as.numeric(Sinfo[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'),]$bound)
-  
-  bvec <- c(rep(Fzero, 2),  c(rep(0, times = length(pdirectG[,1])), pinfluxh))
-  
-  lpSolution <- solveLP(cvec = cost, 
-                        bvec = c(rep(Fzero, 2),  c(rep(0, times = length(pdirectG[,1])), pinfluxh)), 
-                        Amat = rbind(pS, nS, pdirectG, pinfluxG),
-                        const.dir = c(rep("<=", length(Fzero)*2), rep(">=", length(pdirectG[,1])), rep("<=", length(pinfluxh))),
-                        maximum = TRUE, solve.dual = TRUE, maxiter = 20, zero = 0.000001)
-  
-  
-  
-  treatmentPartials[[
-  
-  
-  ### v >= 0, 
-  #S*-1 <= 0, so Sv = 0
-  pS <- S; nS <- -1*S #enforce FB by having Sv >= 0 and -Sv >= 0
-  pG <- Gtot
-  signFlip <- ifelse(Sinfo$direction == "F", FALSE, TRUE)
-  pS[,signFlip] <- -1*pS[,signFlip]; nS[,signFlip] <- -1*nS[,signFlip] #flip reactions with fluxes constrained to be less than 0, so that stoichiometry is switched and flux is non-zero.
-  pH <- htot
+  dual_solution <- get.dual.solution(lpObj)[1:length(S[,1])] 
+  names(dual_solution) <- rownames(S)
 
+  treatmentPartials[[names(treatment_par)[treatment]]] <- dual_solution
   
-  Amat <- rbind(pS, nS, pG)
-  bvec <- c(rep(0, times = 2*length(S[,1])), htot)
-  cost <- c(rep(0, times = length(S[1,]) -1), -1) - rep(1, times = length(Sinfo[,1])) * flux_penalty
-  #combined flux balance and bounds into a single constraint
-  
-  lpSolution <- solveLP(cvec = cost, bvec = bvec, Amat = Amat, maximum = F)
-  
-  
-  
-  
+  #generate a phenotypic phase plane if one hasn't previously been generated
+  if(generatePhPP & (PhPPgenerated == FALSE) & is.na(treatment_par[[treatment]]$auxotrophies)){
+    
+    for(nutComp in 1:length(PhPPcond$nutrients)){
+      nutrientConditions <- PhPPcond$gradient[[nutComp]]
+      
+      nutIndices <- sapply(colnames(nutrientConditions), function(rxmatch){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == paste(paste(rxmatch, "boundary"), "F", sep = "_")]})
+      
+      
+      for(nutCompConc in 1:lenght(nutrientConditions[,1])){
+        set.bounds(lpObj, upper = nutrientConditions[nutCompConc,], columns = nutIndices)
+        solve(lpObj)  
+        get.dual.solution(lpObj)[1:length(S[,1])]
+        get.objective(lpObj)
+      }
+      
+    }
+    
+    
+    
+    
+    
+    }
   
   }
-
-
-
-
-
-#reconstruct reaction-specific flux from the F or R reaction which actually carried flux
-
-collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
-  sum(linp_solution$X[names(linp_solution$X) %in% Sinfo$rxDesignation[Sinfo$reaction == frcombo]])
-  })
-
-flux_vectors[[names(treatment_par)[treatment]]] <- collapsedFlux
-
-growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
-
-
-
-
 
 
 }
@@ -642,6 +658,29 @@ rxn_search(named_stoi, "glutamate deh", T)
 qplot(comp_outputDF[,4])
 heatmap.2(as.matrix(comp_outputDF[,-1]), symbreaks = TRUE)
 comp_outputDF[,1][comp_outputDF[,4] < -60]
+
+
+#### Analysing shadow prices ###
+
+shadowCond <- sort(names(treatmentPartials))
+shadowMets <- NULL; for(met in 1:length(shadowCond)){shadowMets <- union(shadowMets, names(treatmentPartials[[met]]))}; shadowMets <- sort(shadowMets)
+
+shadowMetAbund <- matrix(NA, nrow = length(shadowMets), ncol = length(shadowCond)); colnames(shadowMetAbund) <- shadowCond; rownames(shadowMetAbund) <- shadowMets
+for(j in shadowCond){
+  condPrice <- treatmentPartials[[j]]
+  shadowMetAbund[,colnames(shadowMetAbund) == j] <- condPrice[sapply(shadowMets, function(x){c(1:length(condPrice))[names(condPrice) == x]})]
+  }
+
+
+nonNULLshadow <- shadowMetAbund[rowSums(shadowMetAbund != 0) != 0,]
+nonNULLshadow[nonNULLshadow < -3] <- -3; nonNULLshadow[nonNULLshadow > 3] <- 3
+heatmap.2(nonNULLshadow, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.5, col = green2red(100))
+
+
+
+
+
+
 
 
 
