@@ -6,6 +6,8 @@ library(ggplot2)
 chemoStat <- read.table("releventDR.csv", sep = ",", header = TRUE)
 chemoStat <- chemoStat[apply(is.na(chemoStat), 1, sum) < 2,]
 
+chemoStat$coult
+
 #plot(chemoStat$colterVol.uL.mL ~ chemoStat$PCMVol.mL)
 #the coulter counter under-estimates volume by ~20%
 coulter_underest <- median(chemoStat$colterVol.uL.mL/chemoStat$PCMVol.mL, na.rm = TRUE)
@@ -191,31 +193,17 @@ SS_change <- Inf
 it_continue <- TRUE
 while(it_continue){
 	
-	#fit_linMod <- lm(data = wellInfo, formula = log(refittedconc[length(refittedconc[,1]),]) ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
 	fit_linMod <- lm(data = wellInfo, formula = refittedconc[length(refittedconc[,1]),] ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
-	#fit_linMod <- glm(data = wellInfo, formula = refittedconc[length(refittedconc[,1]),] ~ factor(limitation) + actualDR + factor(limitation)*actualDR, family = Gamma(link = "log"))
 	
-	rmse <- sqrt(sum((fit_linMod$fitted - log(wellInfo$protConc))^2)/(length(wellInfo[,1]) - 10))
+	MSE <- sum((fit_linMod$fitted - wellInfo$protConc)^2)/(length(wellInfo[,1]) - 10)
 	
-	#MS logCond - mean(logCond) #should this be about the mean or the fitted value
-	#MSlog <- sapply(conditions$condition, function(x){
-	#	sum((log(wellInfo$protConc[wellInfo$Sample == x]) - mean(log(wellInfo$protConc[wellInfo$Sample == x])))^2)/sum(wellInfo$Sample == x)
-	#	})
-	MSlog <- sapply(conditions$condition, function(x){
-		sum((log(wellInfo$protConc[wellInfo$Sample == x]) - fit_linMod$fitted[wellInfo$Sample == x])^2)/sum(wellInfo$Sample == x)
+	withinCondVar <- sapply(conditions$condition, function(x){
+		var(wellInfo$protConc[wellInfo$Sample == x])
 		})
 	
+	#shrink by within-treatment MSE relative to average RMSE error
+	shrinkFrac <- sapply(wellInfo$Sample, function(x){withinCondVar[conditions$condition == x]})/(sapply(wellInfo$Sample, function(x){withinCondVar[conditions$condition == x]}) + MSE)
 	
-	shrinkFrac <- sapply(wellInfo$Sample, function(x){MSlog[conditions$condition == x]})/(sapply(wellInfo$Sample, function(x){MSlog[conditions$condition == x]}) + rmse^2)
-	
-	
-	#shrinkFrac <- 1 - 1/(abs(conclm2$resid)^2*(length(wellInfo[,1])/(length(wellInfo[,1]) - 10))/(rmse^2))
-	#shrinkFrac <- sapply(shrinkFrac, function(x){max(0, x)})
-	
-	#shrinkFrac <- 1 - 1/(abs(conclm2$resid)^2*(length(wellInfo[,1])/(length(wellInfo[,1]) - 10))/(rmse^2))
-	#shrinkFrac <- sapply(shrinkFrac, function(x){max(0, x)})
-
-	#updated_conc <- exp(fit_linMod$fitted)*shrinkFrac + (1-shrinkFrac)*wellInfo$protConc
 	updated_conc <- fit_linMod$fitted*shrinkFrac + (1-shrinkFrac)*wellInfo$protConc
 	refittedconc <- rbind(refittedconc, updated_conc)
 	
@@ -232,9 +220,6 @@ while(it_continue){
 
 plot(refittedconc[length(refittedconc[,1]),] ~ factor(wellInfo$Sample)) 
 plot(refittedconc[1,] ~ factor(wellInfo$Sample))
-#the log
-plot(log(refittedconc[length(refittedconc[,1]),]) ~ factor(wellInfo$Sample)) 
-plot(log(refittedconc[1,]) ~ factor(wellInfo$Sample))
 
 
 rownames(refittedconc) <- paste("It", 0:(length(refittedconc[,1]) - 1)); colnames(refittedconc) <- wellInfo$Sample
@@ -254,8 +239,8 @@ plotting_DF$limitation <- sapply(as.character(plotting_DF$Condition), function(c
 	wellInfo$limitation[wellInfo$Sample == cond][1]
 	})
 
-pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1) + theme(axis.text.x = element_text(size = 4, face = "bold"))
-pconc_plot + geom_boxplot()
+pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("mg protein/uL cellular volume") + scale_x_discrete("Experimental condition")
+pconc_plot + geom_boxplot() 
 
 conditions$prot_conc <- sapply(conditions$condition, function(cond){
 	mean(refittedconc[length(refittedconc[,1]),][names(refittedconc[length(refittedconc[,1]),]) == cond])
@@ -269,7 +254,50 @@ conditions$logSF[conditions$condition %in% c("p0.05H1", "p0.05H2")] <- NA
 dry_weight_frac <- refittedconc[length(refittedconc[,1]),] * wellInfo$cellVol/wellInfo$DWperCultmL
 dry_weight_DF <- melt(dry_weight_frac); colnames(dry_weight_DF) <- "ProteinDW_fraction"; dry_weight_DF$condition <- names(dry_weight_frac); dry_weight_DF$limitation <-  sapply(as.character(dry_weight_DF$condition), function(cond){wellInfo$limitation[wellInfo$Sample == cond][1]})
 
-dw_plot <- ggplot(dry_weight_DF, aes(x = factor(condition), y = ProteinDW_fraction, col = limitation))
+dw_plot <- ggplot(dry_weight_DF, aes(x = factor(condition), y = ProteinDW_fraction, col = limitation)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Protein fraction of dry-material") + scale_x_discrete("Experimental condition")
 dw_plot + geom_boxplot()
 
-save(conditions, plotting_DF, dry_weight_DF, file = "protSpecQuantOut.Rdata")
+#look at the yield in terms of dry-weight per culture volume
+
+#mass per mL
+dry_weight_turnover_DF <- data.frame(Condition = conditions$condition, DryWeight_conc = (sampleInfo$DryWeight/sampleInfo$cultureV), Protein = sapply(conditions$condition, function(cond){mean(((refittedconc[length(refittedconc[,1]),] * wellInfo$cellVol))[wellInfo$Sample == cond])}), DR = conditions$actualDR)
+
+dry_weight_turnover_DF$non_Protein <- dry_weight_turnover_DF$DryWeight_conc - dry_weight_turnover_DF$Protein
+dry_weight_turnover_DFmelt <- melt(dry_weight_turnover_DF, id.vars = c("DR", "Condition"))
+
+#make a stacked barplot # this is the amount of material in a chemostat, ignoring dif
+dry_weight_turnover_DFmelt <- dry_weight_turnover_DFmelt[!(dry_weight_turnover_DFmelt$variable == "DryWeight_conc"),]
+dry_weight_turnover_plot1 <- ggplot(dry_weight_turnover_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight(mg) per mL culture", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
+dry_weight_turnover_plot1 + geom_bar(stat = "identity", position = "stack")
+
+#dry weight conc * DR - optimal growth, in terms of biomass production at intermediate GRs
+dry_weight_turnover_DFmelt2 <- dry_weight_turnover_DFmelt; dry_weight_turnover_DFmelt2$value <- dry_weight_turnover_DFmelt$value * dry_weight_turnover_DFmelt$DR
+dry_weight_turnover_plot2 <- ggplot(dry_weight_turnover_DFmelt2, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight production (mg/hr) per mL culture", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
+dry_weight_turnover_plot2 + geom_bar(stat = "identity", position = "stack")
+
+
+####
+#divide by cellVolume (uL) per mL media to get mg protein/dry-matter per uL of cellular volume
+dry_weight_turnover_DF_cellular <- dry_weight_turnover_DF
+dry_weight_turnover_DF_cellular$DryWeight_conc <- dry_weight_turnover_DF_cellular$DryWeight_conc/conditions$VolFrac_mean
+dry_weight_turnover_DF_cellular$Protein <- dry_weight_turnover_DF_cellular$Protein/conditions$VolFrac_mean
+dry_weight_turnover_DF_cellular$non_Protein <- dry_weight_turnover_DF_cellular$non_Protein/conditions$VolFrac_mean
+
+dry_weight_turnover_D_cellular_DFmelt <- melt(dry_weight_turnover_DF_cellular, id.vars = c("DR", "Condition"))
+dry_weight_turnover_D_cellular_DFmelt <- dry_weight_turnover_D_cellular_DFmelt[!(dry_weight_turnover_D_cellular_DFmelt$variable == "DryWeight_conc"),]
+dry_weight_turnover_plot3 <- ggplot(dry_weight_turnover_D_cellular_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight (mg) per uL of cellular volume", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
+dry_weight_turnover_plot3 + geom_bar(stat = "identity", position = "stack")
+
+dry_weight_perCell_DF <- dry_weight_turnover_DF_cellular
+dry_weight_perCell_DF$cellVolume <- conditions$medcellVol
+dry_weight_perCell_DFmelt <- melt(dry_weight_perCell_DF, id.vars = c("DR", "Condition", "cellVolume"))
+dry_weight_perCell_DFmelt$value <- dry_weight_perCell_DFmelt$value * dry_weight_perCell_DFmelt$cellVolume
+dry_weight_perCell_DFmelt <- dry_weight_perCell_DFmelt[!(dry_weight_perCell_DFmelt$variable == "DryWeight_conc"),]
+dry_weight_perCell_plot <- ggplot(dry_weight_perCell_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold"), panel.grid.minor=element_blank(), panel.grid.major=element_blank()) + scale_y_continuous("pg protein/dry-material per cell", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
+dry_weight_perCell_plot + geom_bar(stat = "identity", position = "stack")
+
+
+
+
+
+save(conditions, plotting_DF, dry_weight_DF, dry_weight_turnover_DFmelt, dry_weight_turnover_DFmelt2, dry_weight_turnover_D_cellular_DFmelt, dry_weight_perCell_DFmelt, file = "protSpecQuantOut.Rdata")
