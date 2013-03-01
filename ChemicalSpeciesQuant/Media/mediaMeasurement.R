@@ -1,5 +1,55 @@
 setwd("~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Media")
 
+### libraries ###
+
+options(stringsAsFactors = FALSE)
+library(reshape)
+
+######### Functions ##########
+
+shrinkageRegression <- function(conditionDF, measuredVal){
+  
+  refittedconc <- matrix(measuredVal$conc, ncol = length(conditionDF[,1]))
+  SS_track <- Inf
+  SS_change <- Inf
+  it_continue <- TRUE
+  while(it_continue){
+    
+    if(length(unique(conditionDF$limitation)) == 1){
+      regModel <- model.matrix(data = conditionDF, ~ actualDR)  
+    }else{
+      regModel <- model.matrix(data = conditionDF, ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
+    }
+    
+    fit_linMod <- lm(refittedconc[length(refittedconc[,1]),] ~ regModel + 0)
+    
+    MSE <- sum((fit_linMod$fitted - measuredVal$conc)^2)/(length(conditionDF[,1]) - length(regModel[1,]))
+    
+    withinCondVar <- sapply(conditionDF$condition, function(x){
+      var(measuredVal$conc[measuredVal$collapsedName == x])
+    })
+    
+    #shrink by within-treatment MSE relative to average RMSE error
+    shrinkFrac <- sapply(measuredVal$collapsedName, function(x){withinCondVar[conditionDF$condition == x][1]})/(sapply(measuredVal$collapsedName, function(x){withinCondVar[conditionDF$condition == x][1]}) + MSE)
+    
+    updated_conc <- fit_linMod$fitted*shrinkFrac + (1-shrinkFrac)*measuredVal$conc
+    updated_conc[is.na(updated_conc)] <- refittedconc[length(refittedconc[,1]),is.na(updated_conc)]
+    refittedconc <- rbind(refittedconc, updated_conc)
+    
+    SS_change <- SS_track[length(SS_track)] - sum(fit_linMod$resid^2)
+    SS_track <- c(SS_track, sum(fit_linMod$resid^2))
+    if(SS_change < 10^-6){
+      it_continue <- FALSE
+    }else{
+      it_continue <- TRUE
+    }
+  }
+  refittedconc
+}
+
+######### Code ##########
+
+
 nutrientUptakeRates <- list()
 
 #### import DR and 
@@ -15,7 +65,7 @@ lowp <- min(nutrientFile[nutrientFile[,1] == "phosphate",][-1]) * 0.0002 * 10^9 
 
 #### Import absorbance data and fit phosphate concentration for non-phosphate limited conditions ###
 
-kineticDat <- read.delim("phosphateSpec/phosphateLow.txt", sep = "\t", header = FALSE)
+kineticDat <- read.delim("phosphateSpec/phosphateLow.txt", sep = "\t", header = FALSE, stringsAsFactors = FALSE)
 plateIDs <- unique(kineticDat[,14])[unique(kineticDat[,14]) != ""]
 kineticDat <- kineticDat[,-c(1,14)]
 
@@ -169,6 +219,8 @@ nutrientUptakeRates$phosphate <- rbind(phosphateUptakeNL, phosphateUptake)
 ## Difference between pre-enzyme absorbance (preread) and final incubated absorbance (after 70 minutes)
 
 ## Preread ##
+PLcorrect <- TRUE#use corrected or not
+
 
 kineticDat <- read.delim("ammoniumSpec/ammonium_preread.txt", sep = "\t", header = FALSE)
 plateIDs <- unique(kineticDat[,14])[unique(kineticDat[,14]) != ""]
@@ -185,7 +237,6 @@ for(i in 1:length(plateIDs)){
   plate_split[[i]] <- kinData
 }
 #collapse measurement replicates into a single plate
-PLcorrect <- TRUE#use corrected or not
 if(PLcorrect){plateIndices <- grep('Corrected', plateIDs)}else{plateIndices <- grep('Corrected', plateIDs, invert = TRUE)}
 
 absorb_plate_preread <- matrix(NA, ncol = 12, nrow = 8)
@@ -241,19 +292,18 @@ absorb_timecourse <- matrix(NA, nrow = 96, ncol = length(plateIDs[,1]))
 for(c in 1:length(plateIDs[,1])){
   absorb_timecourse[,c] <- as.numeric(melt(as.matrix(plate_split[[c]]))[,3])
 }
+#plot(absorb_timecourse[1,1:5] ~ as.numeric(plateIDs$timeDiff[1:5]))
 
 ### determine how much of the change in absorbance is from the competing reaction from change between 10 minutes and 50 minutes
 
 concAdj <- NA;
-concAdj[rowSums(is.na(absorb_timecourse)) == 0] <- apply(absorb_timecourse[rowSums(is.na(absorb_timecourse)) == 0,], 1, function(x){lm(x[2:5] ~ as.numeric(plateIDs$timeDiff)[2:5])$coef[2]}) * as.numeric(plateIDs$timeDiff[3])
+concAdj[rowSums(is.na(absorb_timecourse)) == 0] <- apply(absorb_timecourse[rowSums(is.na(absorb_timecourse)) == 0,], 1, function(x){lm(x[2:5] ~ as.numeric(plateIDs$timeDiff)[2:5])$coef[2]}) * as.numeric(plateIDs$timeDiff[4])
       
 
 image(absorb_plate_preread - absorb_plate_inc)
 
 absorb_change <- melt(absorb_plate_preread - absorb_plate_inc)
 colnames(absorb_change) <- c("row", "column", "absorbance")
-absorb_change$absorbance <- absorb_change$absorbance + concAdj
-
 
 #reagent difference starting at H6 results in large differences in absorbance (taking the difference between pre-read and post-incubation plates takes care of most of this effect
 #but this will also be used as an adjustment variable in the difference
@@ -264,20 +314,23 @@ absorb_change$absorbance[is.nan(absorb_change$absorbance)] <- NA
 absorb_change$conc <- NA
 absorb_change$conc[absorb_change$column == 8] <- absorb_change$conc[absorb_change$column == 9] <- c(40, 20, 10, 5, 0, 0, NA, NA)
 
-
 absorb_change$limitation <- c(experimental_samples$condition, rep(NA, length(absorb_change[,1]) - length(experimental_samples[,1])))
 absorb_change$DR <- c(experimental_samples$DR, rep(NA, length(absorb_change[,1]) - length(experimental_samples[,1])))
 absorb_change$collapsedName <- apply(absorb_change, 1, function(namepaste){paste(namepaste[colnames(absorb_change) %in% c("limitation", "DR")], collapse = '')})
 absorb_change$pl <- wellpl
 
-absorb_timecourse <- absorb_timecourse[!is.na(absorb_change$limitation) | !is.na(absorb_change$conc),]
-absorb_change <- absorb_change[!is.na(absorb_change$limitation) | !is.na(absorb_change$conc),]
+#absorb_change$absorbance <- absorb_change$absorbance + concAdj*(1*!is.na(absorb_change$limitation)) #adjust for competing reaction effect
 
-plot(absorb_timecourse[1,]  ~ plateIDs$timeDiff)
+absorb_change <- absorb_change[!is.na(absorb_change$limitation) | !is.na(absorb_change$conc),] #remove rows of empty wells
+
+#plot(absorb_timecourse[1,]  ~ plateIDs$timeDiff)
        
-absorb_change$microliterMedia <- NA;
-absorb_change$microliterMedia[absorb_change$limitation %in% c("p", "c", "u", "L")] <- 10*(1/20)*(2/19)
-absorb_change$microliterMedia[absorb_change$limitation %in% c("n")] <- 40
+#absorb_change$microliterMedia <- NA;
+#absorb_change$microliterMedia[absorb_change$limitation %in% c("p", "c", "u", "L")] <- 10*(1/20)*(2/19)
+#absorb_change$microliterMedia[absorb_change$limitation %in% c("n")] <- 40
+absorb_change$DF <- NA
+absorb_change$DF[absorb_change$limitation %in% c("p", "c", "u", "L")] <- 20 * 190/10 * 2
+absorb_change$DF[absorb_change$limitation %in% c("n")] <- 1
 
 plot(absorb_change$absorbance[!is.na(absorb_change$limitation)] ~ factor(absorb_change$collapsedName[!is.na(absorb_change$limitation)]))
 
@@ -297,14 +350,24 @@ stdconc <- invreg[2]/(6.22) * 200 * 10^-6 * 10^6 * 1000 #umoles per L of media #
 
 
 #concentration from molar absorptivity
-(absorb_change$absorbance[is.na(absorb_change$conc)] - invreg[1]) * 0.2 * (40/absorb_change$microliterMedia[is.na(absorb_change$conc)]) / 0.04 * 0.00273 / 17
+(absorb_change$absorbanceReagentAdj[is.na(absorb_change$conc)] - invreg[1]) * (0.22/0.04) * absorb_change$DF  * 0.00273 / 17 #M of ammonium
 invreg[2] * 0.2 / 0.001 * 0.00273 * 1000 #ug/ml
 
 
 absorb_change$absorbanceReagentAdj[is.na(absorb_change$conc)]/(6.22 * absorb_change$pl[is.na(absorb_change$conc)]) * 200 * 10^-6 # mmoles in well
 absorb_change$absorbanceReagentAdj[is.na(absorb_change$conc)]/(6.22 * absorb_change$pl[is.na(absorb_change$conc)]) * 200 * 10^-6 / absorb_change$microliterMedia[is.na(absorb_change$conc)] #mmoles per uL media
 absorb_change$absorbanceReagentAdj[is.na(absorb_change$conc)]/(6.22 * absorb_change$pl[is.na(absorb_change$conc)]) * 200 * 10^-6 / absorb_change$microliterMedia[is.na(absorb_change$conc)] * 10^3 #moles per L media
+absorb_change$absorbanceReagentAdj[is.na(absorb_change$conc)]/(6.22 * 200 * 10^-6 / absorb_change$microliterMedia[is.na(absorb_change$conc)] * 10^3 #moles per L media
 
+                                                               
+####                                                               
+
+absorb_change$absorbanceReagentAdj - mean(absorb_change$absorbanceReagentAdj[absorb_change$conc == 0]) #change in absorbance due to ammonium in sample
+(absorb_change$absorbanceReagentAdj - mean(absorb_change$absorbanceReagentAdj[absorb_change$conc == 0])) * 0.00273 * (0.22/0.04) * absorb_change$DF
+ 
+                                                               
+                                                               
+#####                                                              
 
 absorb_change$conc[is.na(absorb_change$conc)] <- conc_fit[1] + conc_fit[2]*absorb_change$absorbanceReagentAdj[is.na(absorb_change$conc)]
 plot(absorb_change$conc[!is.na(absorb_change$limitation)] ~ factor(absorb_change$collapsedName[!is.na(absorb_change$limitation)]))
@@ -325,15 +388,10 @@ measuredVal$shrunkConc <- shrunkConcEst[length(shrunkConcEst[,1]),]
 # 588 * 10^-12 #concentration in uL of 588 uM ammonium sulfate
 
 measuredVal$ceiling <- ifelse(measuredVal$limitation == "n", nutrientFile[nutrientFile$X == "ammonium",-1]$Ammonium, nutrientFile[nutrientFile$X == "ammonium",-1]$Glucose)
-
-
 measuredVal$conc * stdconc * 10^-12 * 1/measuredVal$microliterMedia * 10^6
-
-
 measuredVal$shrunkConc * stdconc * 10^-12 * 1/measuredVal$microliterMedia * 10^6
 
-
-
+shrunkConcEst[1,]
 
 
 
@@ -343,8 +401,8 @@ nutrientFile[nutrientFile$X == "ammonium",-1]$Glucose #not N-limited
 
 
 ammoniumUptake = data.frame(condition = unique(measuredVal$collapsedName), ammoniumUptakeShrunk = highp - sapply(unique(measuredVal$collapsedName), function(x){mean(measuredVal$shrunkConc[measuredVal$collapsedName == x])}), 
-                               ammoniumUptakeRaw = highp - sapply(unique(measuredVal$collapsedName), function(x){mean(measuredVal$conc[measuredVal$collapsedName == x])}),
-                               phosphateSD = sapply(unique(measuredVal$collapsedName), function(x){sd(measuredVal$conc[measuredVal$collapsedName == x])}))
+  ammoniumUptakeRaw = highp - sapply(unique(measuredVal$collapsedName), function(x){mean(measuredVal$conc[measuredVal$collapsedName == x])}),
+  phosphateSD = sapply(unique(measuredVal$collapsedName), function(x){sd(measuredVal$conc[measuredVal$collapsedName == x])}))
 
 
 
@@ -352,47 +410,6 @@ write.table(rbind(phosphateUptakeNL, phosphateUptake), file = "measuredNutrients
 
 
 
-######### Functions ##########
-
-shrinkageRegression <- function(conditionDF, measuredVal){
-  
-  refittedconc <- matrix(measuredVal$conc, ncol = length(conditionDF[,1]))
-  SS_track <- Inf
-  SS_change <- Inf
-  it_continue <- TRUE
-  while(it_continue){
-    
-    if(length(unique(conditionDF$limitation)) == 1){
-      regModel <- model.matrix(data = conditionDF, ~ actualDR)  
-    }else{
-      regModel <- model.matrix(data = conditionDF, ~ factor(limitation) + actualDR + factor(limitation)*actualDR)
-    }
-    
-    fit_linMod <- lm(refittedconc[length(refittedconc[,1]),] ~ regModel + 0)
-    
-    MSE <- sum((fit_linMod$fitted - measuredVal$conc)^2)/(length(conditionDF[,1]) - length(regModel[1,]))
-    
-    withinCondVar <- sapply(conditionDF$condition, function(x){
-      var(measuredVal$conc[measuredVal$collapsedName == x])
-    })
-    
-    #shrink by within-treatment MSE relative to average RMSE error
-    shrinkFrac <- sapply(measuredVal$collapsedName, function(x){withinCondVar[conditionDF$condition == x][1]})/(sapply(measuredVal$collapsedName, function(x){withinCondVar[conditionDF$condition == x][1]}) + MSE)
-    
-    updated_conc <- fit_linMod$fitted*shrinkFrac + (1-shrinkFrac)*measuredVal$conc
-    updated_conc[is.na(updated_conc)] <- refittedconc[length(refittedconc[,1]),is.na(updated_conc)]
-    refittedconc <- rbind(refittedconc, updated_conc)
-    
-    SS_change <- SS_track[length(SS_track)] - sum(fit_linMod$resid^2)
-    SS_track <- c(SS_track, sum(fit_linMod$resid^2))
-    if(SS_change < 10^-6){
-      it_continue <- FALSE
-    }else{
-      it_continue <- TRUE
-    }
-  }
-  refittedconc
-}
 
 
 
