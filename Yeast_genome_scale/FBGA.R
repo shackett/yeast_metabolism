@@ -6,14 +6,15 @@ setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 library(reshape2)
 
 # species involved in reaction
-n_c <- 25
+n_c <- 100
 metabs <- matrix(rgamma(50, 1, 2), nrow = n_c, ncol = 2); colnames(metabs) <- c("fu", "bar")
 enzyme <- matrix(rgamma(50, 1, 2), nrow = n_c, ncol = 2); colnames(enzyme) <- c("yfg1", "yfg2")
 # Model parameters, and correspondence between parameters and species - i.e. kcat - species 1 matches the activity of the first enzyme catalyzing the reaction. km - species 1 means this the affinity of the first metabolite (column 1) for  the enzyme
-assocConst <- data.frame(name = c("yfg1_kcat", "fu_km", "C"), type = c("kcat", "km", "ki"), specie = c(1, 1, 2), priorMean = NA, priorSD = NA)
+assocConst <- data.frame(name = c("yfg1_kcat", "fu_km", "C"), type = c("kcat", "km", "ki"), specie = c(1, 1, 2), priorMean = NA, priorSD = NA) # all of these parameters are lognormally distributed, the parameterization that I am using for this is the parameter MLE (prior mean) and the log standard deviation (priorSD)
+assocConst$priorSD <- assocConst$priorMean <- c(1, 0.25, 0.8)
+assocConstTRUE <- assocConst; assocConstTRUE$priorMean <- c(1, 0.5, 0.6)
 
-assocConst$priorSD <- assocConst$priorMean <- c(1, 0.25, 0.3)
-trueFlux <- (enzyme[,1] * assocConst$priorMean[1] * metabs[,1] / (metabs[,1] + assocConst$priorMean[2])) #simulate measured fluxes from the rxn equation form assuming that metabolites and enzymes are measured accurately
+trueFlux <- (enzyme[,1] * assocConstTRUE$priorMean[1] * metabs[,1] / (metabs[,1] + assocConstTRUE$priorMean[2])) #simulate measured fluxes from the rxn equation form assuming that metabolites and enzymes are measured accurately
 measuredFlux <- trueFlux*rlnorm(n_c, 0, 0.25) #simulate measured fluxes from the rxn equation form with added lognormal noise
 
 parNum <- length(assocConst[,1]) #how many parameters are there in the model
@@ -36,7 +37,8 @@ genMeanlogFit <- rep(NA, generations)
 
 #initialize with parameters drawn from the parameters prior
 gaConstants <- sapply(1:parNum, function(initConstN){
-  rlnorm(N, assocConst[initConstN,colnames(assocConst) == "priorMean"], assocConst[initConstN,colnames(assocConst) == "priorSD"])
+  #rlnorm(N, assocConst[initConstN,colnames(assocConst) == "priorMean"], assocConst[initConstN,colnames(assocConst) == "priorSD"])
+  exp(rnorm(N, log(assocConst[initConstN,colnames(assocConst) == "priorMean"]), assocConst[initConstN,colnames(assocConst) == "priorSD"]))
   })
 colnames(gaConstants) <- assocConst$name
 
@@ -44,8 +46,8 @@ for(genN in 1:generations){
   ### generations of selection (implicitely includes drift - because sampling is proportional to fitness but N is finite), and mutation
   
   indPrior <- apply(sapply(1:parNum, function(parN){
-    log(gaConstants[,parN]), assocConst$priorMean[parN]
-  dlnorm(gaConstants[,parN], assocConst$priorMean[parN], assocConst$priorSD[parN])
+    dnorm(log(gaConstants[,parN]), log(assocConst$priorMean[parN]),  assocConst$priorSD[parN])
+    #dlnorm(gaConstants[,parN], assocConst$priorMean[parN], assocConst$priorSD[parN])
   }), 1, prod) #presolve the prior probability of a model (of parameter values)
 
   ### Selection ###
@@ -69,7 +71,8 @@ for(genN in 1:generations){
     replpar <- sample(1:parNum, mutations[mutInd], replace = TRUE)
     indPars <- gaConstants[mutInd,]
     for(mut in replpar){
-      indPars[mut] <- rlnorm(1, assocConst[mut,colnames(assocConst) == "priorMean"], assocConst[mut,colnames(assocConst) == "priorSD"])
+      indPars[mut] <- exp(rnorm(1, log(assocConst[mut,colnames(assocConst) == "priorMean"]), assocConst[mut,colnames(assocConst) == "priorSD"]))
+        #rlnorm(1, assocConst[mut,colnames(assocConst) == "priorMean"], assocConst[mut,colnames(assocConst) == "priorSD"])
       }
     indPars
     })
@@ -83,7 +86,15 @@ for(genN in 1:generations){
   }
 
 
+# visualize the parameter correlation matrix
 
+
+
+# visualize parameter distributions colored by score
+
+
+# for pairs of parameters exceeding a correlation cutoff plot a bivariate histogram
+ggplot2
 
 
 
