@@ -40,7 +40,7 @@ rxnEqn <- as.formula(" ~ I(yfg1_kcat * yfg1 * fu / (fu + fu_km)) + 0")
 
 
  ## Genetic algorithm parameters ##
-N = 10000 # the number of parameter sets competing for ultimate fit
+N = 5000 # the number of parameter sets competing for ultimate fit
 mu = 0.1*length(assocConst[,1]) # the lambda mutation rate across all parameters 
 generations <- 100
 genMeanlogFit <- rep(NA, generations)
@@ -54,22 +54,6 @@ colnames(gaConstants) <- assocConst$name
 
 for(genN in 1:generations){
   ### generations of selection (implicitely includes drift - because sampling is proportional to fitness but N is finite), and mutation
-  
-  indPrior <- apply(sapply(1:parNum, function(parN){
-    dnorm(log(gaConstants[,parN]), log(assocConst$priorMean[parN]),  assocConst$priorSD[parN])
-    #dlnorm(gaConstants[,parN], assocConst$priorMean[parN], assocConst$priorSD[parN])
-  }), 1, prod) #presolve the prior probability of a model (of parameter values)
-
-  ### Selection ###
-  
-  indLogFit <- sapply(1:N, indFitnessFxn)
-  genMeanlogFit[genN] <- mean(indLogFit) #save the average log fitness of individuals
-
-  rFit <- exp(indLogFit - max(indLogFit)) #fitness relative to most fit individual
-  progeny <- rowSums(rmultinom(N, 1, rFit))
-  progeny <- unlist(sapply(1:N, function(x){rep(x, progeny[x])}))
-  
-  gaConstants <- gaConstants[progeny,] #replace current population with selected progeny
   
   ### Mutation ###
   
@@ -89,12 +73,32 @@ for(genN in 1:generations){
   
   gaConstants[mutInds,] <- t(newPar)
   
+  ######
+  
+  indPrior <- apply(sapply(1:parNum, function(parN){
+    dnorm(log(gaConstants[,parN]), log(assocConst$priorMean[parN]),  assocConst$priorSD[parN])
+    #dlnorm(gaConstants[,parN], assocConst$priorMean[parN], assocConst$priorSD[parN])
+  }), 1, prod) #presolve the prior probability of a model (of parameter values)
+
+  ### Selection ###
+  
+  indLogFit <- sapply(1:N, indFitnessFxn)
+  
+  rFit <- exp(indLogFit - max(indLogFit)) #fitness relative to most fit individual
+  progeny <- rowSums(rmultinom(N, 1, rFit))
+  progeny <- unlist(sapply(1:N, function(x){rep(x, progeny[x])}))
+  
+  genMeanlogFit[genN] <- mean(indLogFit[progeny]) #save the average log fitness of individuals
+
+  gaConstants <- gaConstants[progeny,] #replace current population with selected progeny
+  
   if(genN/10 == floor(genN/10)){
     print(paste("Generation", genN, "complete.  The mean log fitness is", signif(genMeanlogFit[genN], 5), sep = " "))
     }
   
   }
 
+plot(genMeanlogFit, pch = 16, col = "RED", cex = 0.3)
 
 finalFit <- t(sapply(1:N, indFitnessFxn, splitFit = TRUE))
 colnames(finalFit) <- c("fit", "prior")
@@ -113,8 +117,8 @@ par_fit_stack <- melt(par_fit, measure.vars = assocConst$name)
 par_fit_stack$logVal = log(par_fit_stack$value)
 #par_fit_stack2 <- melt(par_fit_stack, measure.vars = c("fit", "prior"))
 #colnames(par_fit_stack2) <- c("Parameter", "ParValue", "BayesFactorComponent", "BFVal"); par_fit_stack2$BFVal <- exp(par_fit_stack2$BFVal)
-dist_plotter <- ggplot(par_fit_stack, aes(x =  logVal)) + facet_grid(variable ~ .) + geom_abline
-dist_plotter + geom_histogram(par_fit_stack, aes(x = logVal), binwidth = 0.01)
+#dist_plotter <- ggplot(par_fit_stack, aes(x =  logVal)) + facet_grid(variable ~ .) + geom_abline
+#dist_plotter + geom_histogram(par_fit_stack, aes(x = logVal), binwidth = 0.01)
 
 colnames(par_fit_stack) <- c("Fit", "Prior", "name", "Value", "lnValue")
 maxCatVal <- sapply(assocConst$name, function(x){max(table(floor(par_fit_stack$lnValue[par_fit_stack$name == x] * 100)))})
@@ -135,10 +139,10 @@ dist_plotter + geom_histogram(data = par_fit_stack, aes(x = lnValue), binwidth =
 
 
 
-dist_plotter <- ggplot(par_fit_stack2, aes(x =  ParValue, fill = BFVal)) + facet_grid(BayesFactorComponent ~ Parameter)
-dist_plotter + geom_histogram() + scale_fill_gradient(name = "woot", low = "black", high = "firebrick1")
+#dist_plotter <- ggplot(par_fit_stack2, aes(x =  ParValue, fill = BFVal)) + facet_grid(BayesFactorComponent ~ Parameter)
+#dist_plotter + geom_histogram() + scale_fill_gradient(name = "woot", low = "black", high = "firebrick1")
 
-scale_fill_gradient(name = "Counts", low = "black", high = "firebrick1", trans = "log", breaks = hex_breaks, labels = hex_breaks)
+#scale_fill_gradient(name = "Counts", low = "black", high = "firebrick1", trans = "log", breaks = hex_breaks, labels = hex_breaks)
 
 # for pairs of parameters exceeding a correlation cutoff plot a bivariate histogram
 # find a good example first
