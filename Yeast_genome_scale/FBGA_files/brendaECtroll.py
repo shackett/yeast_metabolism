@@ -8,14 +8,16 @@ from SOAPpy import WSDL ## for extracting the URL of the endpoint (server script
 from SOAPpy import SOAPProxy ## for usage without WSDL file
 
 
-ec_file = 'ecnums.txt'
+ec_file = 'ECnr.txt'
 organism = 'Saccharomyces cerevisiae'
 
 endpointURL = "http://www.brenda-enzymes.info/soap2/brenda_server.php"
 client = SOAPProxy(endpointURL)
 
 
-ki_values = dict()
+observedLigands = set()
+
+""" Determine the Km values for all metabolites associated with an E.C. number """
 
 km_out = open("km_file.tsv", "w")
 km_out.write("ecNumber\tkmValue\tkmValueMaximum\tsubstrate\tcommentary\torganism\tligandStructureId\tliterature" + "\n")
@@ -23,15 +25,16 @@ km_out.write("ecNumber\tkmValue\tkmValueMaximum\tsubstrate\tcommentary\torganism
 for l in open(ec_file):
 	resultString = client.getKmValue("".join(("ecNumber*", re.split('\n',  l)[0], "#organism*", organism))).split('!')
 	 
-	#print "".join(("ecNumber*", re.split('\n',  l)[0], "#organism*", organism))
-	#print resultString[0]
-	
 	for entry in resultString: #split each Brenda Km entry into a separate line
-		entry_write = []
+		
 		
 		all_fields = entry.split('#')
 		all_fields.remove('')
 		
+		if len(all_fields) == 8:
+			observedLigands.add(all_fields[7].split('*')[1]) #add ligandID to set of ligand IDs
+		
+		entry_write = []
 		for field in all_fields:
 			entry_write.append(field.split('*')[1])
 		
@@ -40,22 +43,55 @@ for l in open(ec_file):
 km_out.close()
 	
 
+""" Determine the Ki values for all metabolites associated with an E.C. number """
+
+ki_out = open("ki_file.tsv", "w")
+ki_out.write("ecNumber\tkiValue\tkiValueMaximum\tinhibitor\tcommentary\torganism\tligandStructureId\tliterature" + "\n")
+
+for l in open(ec_file):
+	resultString = client.getKiValue("".join(("ecNumber*", re.split('\n',  l)[0], "#organism*", organism))).split('!')
+	 
+	for entry in resultString: #split each Brenda Km entry into a separate line
+		
+		all_fields = entry.split('#')
+		all_fields.remove('')
+		
+		if len(all_fields) == 8:
+			observedLigands.add(all_fields[7].split('*')[1]) #add ligandID to set of ligand IDs
+		
+		entry_write = []
+		for field in all_fields:
+			entry_write.append(field.split('*')[1])
+		
+		ki_out.write("\t".join(entry_write) + "\n")
+	
+ki_out.close()
 
 
+""" Determine the activity of activators values for all metabolites associated with an E.C. number """
 
+act_out = open("activator_file.tsv", "w")
+act_out.write("ecNumber\tactivatingCompound\torganism\tligandStructureId\tliterature" + "\n")
 
-#print resultString.split('!')
+for l in open(ec_file):
+	resultString = client.getActivatingCompound("".join(("ecNumber*", re.split('\n',  l)[0], "#organism*", organism))).split('!')
+	 
+	for entry in resultString: #split each Brenda Km entry into a separate line
+		
+		entry_write = []
+		
+		all_fields = entry.split('#')
+		all_fields.remove('')
+		
+		if len(all_fields) == 6:
+			observedLigands.add(all_fields[5].split('*')[1]) #add ligandID to set of ligand IDs
+		
+		for field in all_fields:
+			entry_write.append(field.split('*')[1])
+		
+		act_out.write("\t".join(entry_write) + "\n")
+	
+act_out.close()
 
-
-
-resultString = client.getKmValue("ecNumber*1.1.1.1#organism*Saccharomyces cerevisiae")
-#print resultString.split('!')
-#print woot[1]
-
-getActivatingCompound(String)
-
-
-resultString = client.getKiValue("ecNumber*1.1.1.1#organism*Saccharomyces cerevisiae")
-#print resultString.split('!')[0]
 
 
