@@ -1,7 +1,13 @@
 ## Current objectives ##
 
-- [ ] Display relative abundances of metabolic reactions using Cellular Overviews
-- [ ] Map protein to EC to KEGG in order to use group contribution free energy of reactions
+- [ ] Determine correspondence between metabolite binding sites for each enzyme with largely measured species
+- [ ] Use Jun's C script to generate reaction forms for each enzyme
+- [ ] Predict fluxes across experimental conditions
+- [ ] Associate relative metabolite/enzyme abundance with flux using unconstrained affinity parameters
+- [ ] Determine the absolute concentration of metabolites across our 25 chemostat conditions
+- [ ] Associate BRENDA metabolite IDs with metabolic model species ID (t IDs)
+- [ ] Balance organism-specific and organism-independent Km values to determine how strongly to weight organism-independent Km prior
+- [ ] Determine approximate substrate occupancy using Km values plus absolute metabolite abundance - balance likelihood-based fit of predicted flux with prior restraint on kinetic constants
 
 ---
 
@@ -42,6 +48,7 @@ Applies two measures of thermodynamic reaction reversibility to predict the reve
 ## KEGGrxns ##
 
 Relational files associating KEGG IDs and yeast systematic names
+**keggIDparser.py:** Generates a tsv containing yeast systematic name \t SGD ID \t KEGG ID \t KEGG description and EC number
 
 ---
 
@@ -82,6 +89,12 @@ Prepare the absolute concentrations of metabolites, so that these can be used to
   2. Using positioning files and flux information: draw a metabolic network in cytoscape and color reactions according to the flux carried.
 * metSty: Stores the positional information of metabolites nodes.
 * rxnSty: Stores the positional information of reaction nodes.
+
+** FBGA and FBGA_files **
+
+* FBGA.R: metabolites + enzyme ?= flux. Determine how well metabolite and enzyme experimental data can be aligned with flux levels.  Optimal fitted Km values are chosen using a genetic algorithm where fitness is based on how closely predicted and observed fluxes are matched given parameter values and based upon prior distribution of parameter values.
+** FBGA_files **
+* brendaECtroll.py: using a list of E.C. numbers which contain largely measured species (enzymes and metabolites) determine previously measured values of Km, Ki and activators from BRENDA.  This is done both for S. cerevisiae and across all organisms
 
 ---
 
