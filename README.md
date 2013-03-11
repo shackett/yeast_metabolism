@@ -76,6 +76,8 @@ Prepare the absolute concentrations of metabolites, so that these can be used to
 
 ## Yeast_genome_scale ##
 
+This directory includes files for predicting flux using experimental data (FBA) and scripts for determining the extent to which this predicted flux can be associated with proteomics and metabolomics data (FBGA)
+
 * FBA_run_full_reco.R: Integrate experimental data and in silico reconstruction
     * Experimental Data:
       1. Maximum nutrient uptake rates: Boer_nutrients
@@ -90,11 +92,11 @@ Prepare the absolute concentrations of metabolites, so that these can be used to
 * metSty: Stores the positional information of metabolites nodes.
 * rxnSty: Stores the positional information of reaction nodes.
 
-** FBGA and FBGA_files **
-
+**FBGA and FBGA_files:**
 * FBGA.R: metabolites + enzyme ?= flux. Determine how well metabolite and enzyme experimental data can be aligned with flux levels.  Optimal fitted Km values are chosen using a genetic algorithm where fitness is based on how closely predicted and observed fluxes are matched given parameter values and based upon prior distribution of parameter values.
-** FBGA_files **
+**FBGA_files:**
 * brendaECtroll.py: using a list of E.C. numbers which contain largely measured species (enzymes and metabolites) determine previously measured values of Km, Ki and activators from BRENDA.  This is done both for S. cerevisiae and across all organisms
+* generated files with km, ki, and activators from S. cerevisiae BRENDA data, as well as an expanded set (all) from all organisms.
 
 ---
 
