@@ -4,6 +4,7 @@ setwd("~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant")
 options(stringsAsFactors = FALSE)
 
 library(ggplot2)
+library(reshape)
 
 ### Default composition function ####
 
@@ -57,7 +58,7 @@ ggsave(file = "default_composition.pdf", height = 15, width = 15)
 
 ########### Chemostat specific information ###########
 
-chemostatInfo <- read.table("BulkComposition/chemostatDRmisc.tsv", sep = "\t", header = TRUE)
+chemostatInfo <- read.table("BulkComposition/chemostatDRmisc.tsv", sep = "\t", header = TRUE) #VolFrac_mean - uL cellular vol per mL media
 
 comp_by_cond <- list()
 tmp <- matrix(NA, ncol = length(chemostatInfo[,1]), nrow = length(compositionFile[,1]))
@@ -138,6 +139,11 @@ class_comp_plot <- ggplot(weightStackDF, aes(y = Abundance, factor(Condition), f
 class_comp_plot + geom_bar(colour = "black", stat = "identity") + scale_y_continuous("pg per cell", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(name = "Class", palette = "Set1")
 ggsave(file = "condition_composition.pdf", height = 12, width = 20)
 
+class_comp_plot <- ggplot(weightStackDF[!is.na(weightStackDF$Abundance),], aes(y = Abundance, factor(Condition), fill = factor(Class))) + barplot_theme
+class_comp_plot + geom_bar(stat = "identity", position = "fill") + scale_y_continuous("Fraction of cellular material", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(name = "Class", palette = "Set1")
+ggsave(file = "fractional_composition.pdf", height = 12, width = 20)
+
+
 #fill in structural composition components based on residual dry weight
 comp_by_cond$grams_per_cell[compositionFile$Class != "Energy Balance" & rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c,] <- t(t(compositionFile$weightPerUn[compositionFile$Class != "Energy Balance" & rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c]/sum(compositionFile$weightPerUn[compositionFile$Class != "Energy Balance" & rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c])
 )) %*% t(cond_dryweight - colSums(comp_by_cond$grams_per_cell[compositionFile$Class == "Amino Acid",]))
@@ -145,7 +151,18 @@ comp_by_cond$grams_per_cell[compositionFile$Class != "Energy Balance" & rowSums(
 #initially assume that ATP -> ADP + Pi flux is proportional to cellular dry weight
 
 comp_by_cond$moles_per_cell[compositionFile$Class != "Energy Balance",] <- comp_by_cond$grams_per_cell[compositionFile$Class != "Energy Balance",]/t(t(compositionFile$MW[compositionFile$Class != "Energy Balance"])) %*% rep(1, n_c)
-comp_by_cond$moles_per_cell[compositionFile$Class == "Energy Balance",] <- t(t(compositionFile$weightPerUn[compositionFile$Class == "Energy Balance"])) %*% t(cond_dryweight/sum(compositionFile$weightPerUn[compositionFile$Class != "Energy Balance"] * -1))
+comp_by_cond$moles_per_cell[compositionFile$Class == "Energy Balance",] <- -1*t(t(as.numeric(compositionFile$StoiCoef[compositionFile$Class == "Energy Balance"]))) %*% t(cond_dryweight/sum(compositionFile$weightPerUn[compositionFile$Class != "Energy Balance"] * -1))
 
 
+
+# generate weight per volume
+apply((comp_by_cond$grams_per_cell * 10^-12)/(t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$medcellVol * 10^-15), 2, sum, na.rm = TRUE)/10 #grams per 100mL of macromolecules - chunky but reasonable
+
+# determine the fluxes into macromolecule biosynthesis and energy per volume
+comp_by_cond$intacellularMolarity = (comp_by_cond$moles_per_cell * 10^-12)/(t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$medcellVol * 10^-15)
+comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$actualDR) #moles/L-hr 
+
+comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$VolFrac_mean/1000 #moles/L culture
+
+save(comp_by_cond, chemostatInfo, file = "boundaryFluxes.Rdata")
 
