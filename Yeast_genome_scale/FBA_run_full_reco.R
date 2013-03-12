@@ -1,32 +1,34 @@
-# Libraries
+#### Libraries ####
 library(lpSolve)
 library(limSolve)
 library(gplots)
 library(ggplot2)
-library(lattice)
+source("FBA_lib.R")
 
+
+
+#### Options ####
 
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
-source("FBA_lib.R")
 
 options(stringsAsFactors = FALSE)
 inputFilebase = "yeast"
 
-# Specify whether growth optimization should be through linear programming (LP) - maximizing biomass given nutrients or
+# Specify whether growth optimization should be through linear programming (LP) - maximizing biomass given nutrients or 
 # through quadratic programming (QP) - optimally matching experimental boundary fluxes to optimized ones.
 QPorLP <- "LP"
 
-
-## calculate shadow prices to perform phenotypic phase plane analysis
+#calculate shadow prices to perform phenotypic phase plane analysis
 shadow_prices = FALSE
-if(QPorLP != "LP"){shadow_prices = FALSE} #don't calculate shadow prices when QP problem is being solved
+if(QPorLP == "QP"){shadow_prices = FALSE} #don't calculate shadow prices when QP problem is being solved 
 if(shadow_prices){
   treatmentPartials <- list()
   library(lpSolveAPI)
   generatePhPP <- TRUE; PhPPgenerated <- FALSE
-}else{generatePhPP = FALSE}
+}else{generatePhPP = TRUE}
 # When optimization function changes, PhPP analysis becomes more complicated as composition becomes a function of nutrient conditions.  If experimental composition measurements over nutrient conditions were dense enough a
 # surface could be fitted and an interesting PhPP analysis could be performed.  Analysis of shadow prices is still useful when partials are evaluated only at observed experimental conditions.
+ 
 
 
 #### Load SBML files describing metabolites, rxn stoichiometry ####
@@ -42,6 +44,7 @@ nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
+
 
 #### Load weizman free energy files and mapping designations ####
 rxDesignations <- read.delim("../KEGGrxns/yeastNameDict.tsv", sep = "\t", header = T)
@@ -61,6 +64,7 @@ enzymes <- rxnIDtoGene(reactions)
 if(file.exists("yeast_stoi.R")){
   load("yeast_stoi.R")
 } else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
+
 
 
 #### For reactions where proteins match multiple KEGG reactions, manually choose which is the proper match ####
@@ -121,12 +125,33 @@ for(rxN in 1:length(thermAnnotate[,1])){
   }
 reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
 
-#save.image(file = "vito_files.Rdata")
+
 
 
 
 
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
+
+dilution_rates <- seq(0.05, 0.3, 0.05)
+
+treatment_par <- list()
+
+for(i in 1:length(nutrientFile[1,])){
+  for(j in 1:length(dilution_rates)){
+	treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["nutrients"]] <- data.frame(nutrient = rownames(nutrientFile), conc_per_t = nutrientFile[,i]*dilution_rates[j], stringsAsFactors = FALSE)
+	
+	#leu2
+	if(colnames(nutrientFile)[i] == "Leucine"){
+		treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID))
+		}
+	#ura3
+	if(colnames(nutrientFile)[i] == "Uracil"){
+		treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))		}
+	if(is.null(treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["auxotrophies"]])){
+		treatment_par[[paste(colnames(nutrientFile)[i], dilution_rates[j], collapse = "")]][["auxotrophies"]] <- NA
+		}
+	
+	}}
 
 treatment_par <- list()
 n_c <- 25
@@ -143,10 +168,7 @@ for(i in 1:n_c){
   treatment_par[[chemostatInfo$condition[i]]][["boundaryFlux"]] = comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$condition[i]]*chemostatInfo$actualDR[i]
   }
 
-
-
-
-if(generatePhPP){
+if(shadow_prices){
   #### If Phenotypic phase plane analysis (PhPP) is being performed, establish which condititions will be compared ####
   # which nutrients will be compared in a pairwise manner
   nutrientComp <- c("ammonium", "phosphate", "D-glucose")
@@ -164,10 +186,10 @@ if(generatePhPP){
     }}
   
   # generate concentration of each varying nutrient on an exponentially sampled grid
-  conc_samples <- 100
+  conc_samples <- 20
   orderedNutrient <- sapply(nutrientComp, function(x){maxNutrientConc[names(maxNutrientConc) == x]}); names(orderedNutrient) <- sapply(names(orderedNutrient), function(y){strsplit(y, split = '\\.')[[1]][1]})
   nutrientGrad <- sapply(orderedNutrient, function(nconc){
-    nconc * 1/exp((c(0:conc_samples)*(log(1000)/conc_samples)))
+    nconc * 1/exp((c(0:20)*(log(1000)/conc_samples)))
   })
   
   for(a_pairN in 1:length(nutrientPairs[,1])){
@@ -258,8 +280,6 @@ for(el in 1:length(stoiMat[1,])){
 		ele_comp_mat[el,] <- unlist(ele_comp[[el]][-c(1:2)])
 		}
 	}
-
-#write.table(data.frame(ID = metabolites, name = unname(metIDtoSpec(metabolites)),ele_comp_mat), file = "../ChemicalSpeciesQuant/stoiMetsComp.tsv", sep = "\t", col.names = TRUE, row.names = FALSE) #dump for boundary condition determination in boundaryDataBlender.R
 
 missed_compounds <- met_chebi[!is.na(met_chebi)][names(met_chebi[!is.na(met_chebi)]) %in% rownames(ele_comp_mat)[apply(is.na(ele_comp_mat), 1, sum) != 0]]
 
@@ -356,6 +376,19 @@ rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
 
 }
 
+#metIDtoSpec("s_0334")
+
+#rxnparFile[,3][rxnparFile[,1] %in% corrFile$SpeciesType[corrFile$SpeciesID %in% "r_0267"]]
+
+#taken from chebi
+#chem_form <- read.delim("../Yeast_reconstruction/Sequences/chemical_data.tsv", stringsAsFactors = FALSE)
+#chem_form <- chem_form[chem_form$SOURCE == "ChEBI",]
+
+
+#chem_form[chem_form$ID %in% met_chebi,]
+#rxnparFile[grep("7814", rxnparFile[,3]),]
+
+
 
 #### Search for un-balanced rxns ######
 
@@ -411,7 +444,7 @@ growth_rate <- data.frame(limit = sapply(names(treatment_par), function(x){unlis
 flux_vectors <- list()
 ######################## Set up the linear equations for FBA #######################
 
-for(treatment in 1:n_c){
+for(treatment in 1:length(names(treatment_par))){
 
 #remove reactions which are defective 
 S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrophies, rem.unbalanced, rem.aggregate))]
@@ -471,8 +504,6 @@ compVec <- rep(0, times = length(metabolites))
 for(i in 1:length(comp_met$SpeciesID)){
   compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
 }
-#treatment_par[[treatment]]$"boundaryFlux"[i]
-
 
 sinkStoi <- cbind(effluxS, compVec); colnames(sinkStoi) <- c(paste(excreted_met$SpeciesName, "boundary"), "composition")
 sinkSplit <- data.frame(rxDesignation = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), reaction = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), direction = "F", bound = 0)
@@ -506,7 +537,7 @@ htot <- c(directh, influxh)
 
 ############### costFxn - indicates the final rxn in S ######
 #lp loss fxn
-flux_penalty = 0
+flux_penalty = 0.001
 costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F", 1, -1) * flux_penalty
 
 #qp loss fxn
@@ -515,7 +546,7 @@ costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F
 
 ######## use linear programming to maximize biomass #######
 
-linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = TRUE)
+linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
 
 #reconstruct reaction-specific flux from the F or R reaction which actually carried flux
 
@@ -530,8 +561,6 @@ growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
 
 
 if(shadow_prices){
-  library(rgl)
-  
   #if the dual solution (shadow prices) are desired use an alternative solver which reports these values
   #these shadow prices indicate how much the addition of a metabolite change growth rate.
   
@@ -543,10 +572,10 @@ if(shadow_prices){
   lpObj <- make.lp(nrow = 0, ncol = length(S[1,]))
   for(i in 1:length(S[,1])){
     add.constraint(lpObj, pS[i,], "=", 0)
-  }
+    }
   for(i in 1:length(influxh)){
     set.bounds(lpObj, upper = influxh*-1, columns = apply(influxG, 1, function(x){c(1:length(x))[x == -1]}))
-  }
+    }
   set.objfn(lpObj, costFxn)
   
   #solve LP problem
@@ -554,7 +583,7 @@ if(shadow_prices){
   
   dual_solution <- get.dual.solution(lpObj)[1:length(S[,1])] 
   names(dual_solution) <- rownames(S)
-  
+
   treatmentPartials[[names(treatment_par)[treatment]]] <- dual_solution
   
   #generate a phenotypic phase plane if one hasn't previously been generated
@@ -565,58 +594,26 @@ if(shadow_prices){
       
       nutIndices <- sapply(colnames(nutrientConditions), function(rxmatch){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == paste(paste(rxmatch, "boundary"), "F", sep = "_")]})
       
-      nutShadow <- matrix(NA, nrow = length(nutrientConditions[,1]), ncol = length(S[,1]))
-      nutGR <- rep(NA, times = length(nutrientConditions[,1]))
-            
-      for(nutCompConc in 1:length(nutrientConditions[,1])){
+      
+      for(nutCompConc in 1:lenght(nutrientConditions[,1])){
         set.bounds(lpObj, upper = nutrientConditions[nutCompConc,], columns = nutIndices)
         solve(lpObj)  
-        nutShadow[nutCompConc,] <- get.dual.solution(lpObj)[1:length(S[,1])]
-        nutGR[nutCompConc] <- get.objective(lpObj)
-        }
-      
-      xlattice <- sort(unique(nutrientConditions[,1]))
-      ylattice <- sort(unique(nutrientConditions[,2]))
-      zlattice <- matrix(nutGR, conc_samples + 1, conc_samples + 1, byrow = TRUE)[(conc_samples + 1):1,(conc_samples + 1):1]
-        
-        
-      PhPPcond$nutShadow[[nutComp]] <- nutShadow
-      PhPPcond$nutGR[[nutComp]] <- nutGR
-      
-      #determine how to color different regions by shadow price clustering
-      #heatmap.2(t(nutShadow), trace = "none")
-      
-      gradColor <- colorRampPalette(c("aliceblue", "firebrick1"))(1000)
-      nutDF <- cbind(nutrientConditions, GR = abs(nutGR), color = gradColor[ceiling(nutDF$GR/max(nutDF$GR)*1000)])
-      
-      PhPPcond$plotDF[[nutComp]] <- nutDF
-      
-      #plot3d(x = nutDF[,colnames(nutDF) == PhPPcond$nutrient[[nutComp]][1]], y = nutDF[,colnames(nutDF) == PhPPcond$nutrient[[nutComp]][2]], z = nutDF$GR, col = nutDF$color, xlab = paste(PhPPcond$nutrient[[nutComp]][1], "M/hr"), ylab = paste(PhPPcond$nutrient[[nutComp]][2], "M/hr"), zlab = "Biomass")
-      #nutDFtmp <- nutDF; colnames(nutDFtmp)[1:2] <- c("x", "y")
-      #wireframe(GR ~ x*y, data = nutDFtmp, xlab = paste(PhPPcond$nutrient[[nutComp]][1], "M/hr"), ylab = paste(PhPPcond$nutrient[[nutComp]][2], "M/hr"), zlab = "Biomass", drape = TRUE)
+        get.dual.solution(lpObj)[1:length(S[,1])]
+        get.objective(lpObj)
       }
-    PhPPgenerated <- TRUE #only do this part once
-    }  
-  }    
-} 
-
-#generate a PhPP with experimental conditoins projected onto it
-#wireframe(z ~ x * y, data=dem, aspect = c(1, .5),
-#          scales = list(arrows = FALSE),
-#          panel.3d.wireframe = function(x, y, z,...) {
-#            panel.3dwire(x = x, y = y, z = z, ...)
-#            panel.3dscatter(x = x[1],
-#                            y = y[1],
-#                            z = z[1],
-#                            data=ramm,
-#                            ...)
-#          })
+      
+    }
+    
+    
+    
+    
+    
+    }
+  
+  }
 
 
-
-
-
-
+}
 
 
 
