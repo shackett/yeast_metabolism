@@ -411,7 +411,7 @@ growth_rate <- data.frame(limit = sapply(names(treatment_par), function(x){unlis
 flux_vectors <- list()
 ######################## Set up the linear equations for FBA #######################
 
-for(treatment in 1:length(names(treatment_par))){
+for(treatment in 1:n_c){
 
 #remove reactions which are defective 
 S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrophies, rem.unbalanced, rem.aggregate))]
@@ -471,6 +471,8 @@ compVec <- rep(0, times = length(metabolites))
 for(i in 1:length(comp_met$SpeciesID)){
   compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
 }
+#treatment_par[[treatment]]$"boundaryFlux"[i]
+
 
 sinkStoi <- cbind(effluxS, compVec); colnames(sinkStoi) <- c(paste(excreted_met$SpeciesName, "boundary"), "composition")
 sinkSplit <- data.frame(rxDesignation = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), reaction = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), direction = "F", bound = 0)
@@ -504,7 +506,7 @@ htot <- c(directh, influxh)
 
 ############### costFxn - indicates the final rxn in S ######
 #lp loss fxn
-flux_penalty = 0.001
+flux_penalty = 0
 costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F", 1, -1) * flux_penalty
 
 #qp loss fxn
@@ -513,7 +515,7 @@ costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F
 
 ######## use linear programming to maximize biomass #######
 
-linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
+linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = TRUE)
 
 #reconstruct reaction-specific flux from the F or R reaction which actually carried flux
 
