@@ -21,8 +21,9 @@ QPorLP <- "LP"
 shadow_prices = FALSE
 if(QPorLP == "QP"){shadow_prices = FALSE} #don't calculate shadow prices when QP problem is being solved 
 if(shadow_prices){
-  treatmentPartials <- list()
+  library(rgl)
   library(lpSolveAPI)
+  treatmentPartials <- list()
   generatePhPP <- TRUE; PhPPgenerated <- FALSE
 }else{generatePhPP = TRUE}
 # When optimization function changes, PhPP analysis becomes more complicated as composition becomes a function of nutrient conditions.  If experimental composition measurements over nutrient conditions were dense enough a
@@ -144,7 +145,14 @@ for(i in 1:n_c){
   
   #define observed fluxes per culture volume #eventually scale to the intracellular volume where these fluxes occur
   treatment_par[[chemostatInfo$condition[i]]][["boundaryFlux"]] = -1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$condition[i]]*chemostatInfo$actualDR[i]
+  
+  #temporarely remove energy balance reactions - setting boundary flux to zero
+  treatment_par[[i]]$"boundaryFlux"[compositionFile$Class == "Energy Balance"] <- 0
+  
   }
+
+
+#### During LP should the similarity of shadow prices across the nutrient landscape be investigated ####
 
 if(generatePhPP){
   #### If Phenotypic phase plane analysis (PhPP) is being performed, establish which condititions will be compared ####
@@ -419,7 +427,7 @@ reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
 
-#growth_rate <- data.frame(limit = sapply(names(treatment_par), function(x){unlist(strsplit(x, " "))[1]}), dr = sapply(names(treatment_par), function(x){unlist(strsplit(x, " "))[2]}), growth = NA)
+growth_rate <- data.frame(limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], growth = NA)
 
 flux_vectors <- list()
 ######################## Set up the linear equations for FBA #######################
@@ -480,6 +488,8 @@ for(i in 1:length(efflux_rxns)){
 ## Composition fxn ##
 
 compVec <- rep(0, times = length(metabolites))
+#construct a composition function accounting for only anabolism (no energy balance) 
+
 for(i in 1:length(comp_met$SpeciesID)){
   #compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
   compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- treatment_par[[treatment]]$"boundaryFlux"[i] 
@@ -516,33 +526,38 @@ htot <- c(directh, influxh)
 
 
 ############### costFxn - indicates the final rxn in S ######
+flux_penalty = 0.001 # resistance on fluxes to minimize feutality
+
 #lp loss fxn
-flux_penalty = 0.001
-costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F", 1, -1) * flux_penalty
+if(QPorLP == "LP"){costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F", 1, -1) * flux_penalty}
 
-#qp loss fxn
-#costFxn = c(rep(0, times = length(S[1,]) -1), 1)
+# QP loss fxn - boundaries should be as close to measured composition as possible and all other edges are penalized to minimize the sum of fluxes.
+# When variable precision of measurement is incorporated, composition/nutrient conditions will be split into seperate boundary conditions with weights proportional to the molar precision.
+if(QPorLP == "QP"){
+  costFxn = matrix(c(c(rep(0, times = length(S[1,]) -1), 1), flux_penalty*c(rep(1, times = length(S[1,]) -1), 0)), nrow = 2, byrow = TRUE)
+  costObjective = c(1,0)
+  }
 
+######## use linear programming to maximize biomass or QP to match boundary #######
 
-######## use linear programming to maximize biomass #######
+if(QPorLP == "LP"){optimSol <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)}
 
-linp_solution <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)
+if(QPorLP == "QP"){optimSol <- lsei(E = S, F = Fzero, G = Gtot, H = htot, A = costFxn, B = costObjective, type = 2)}
+
 
 #reconstruct reaction-specific flux from the F or R reaction which actually carried flux
 
 collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
-  sum(linp_solution$X[names(linp_solution$X) %in% Sinfo$rxDesignation[Sinfo$reaction == frcombo]])
+  sum(optimSol$X[names(optimSol$X) %in% Sinfo$rxDesignation[Sinfo$reaction == frcombo]])
 })
 
 flux_vectors[[names(treatment_par)[treatment]]] <- collapsedFlux
 
-growth_rate$growth[treatment] <- linp_solution$solutionNorm*-1
+growth_rate$growth[treatment] <- optimSol$X[names(optimSol$X) == "composition"]
 
 
 
 if(shadow_prices){
-  library(rgl)
-  
   #if the dual solution (shadow prices) are desired use an alternative solver which reports these values
   #these shadow prices indicate how much the addition of a metabolite change growth rate.
   
