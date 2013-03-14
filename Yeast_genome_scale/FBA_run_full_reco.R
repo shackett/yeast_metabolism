@@ -1,8 +1,12 @@
 #### Libraries ####
-library(lpSolve)
-library(limSolve)
+#library(lpSolve)
+#library(limSolve)
 library(gplots)
 library(ggplot2)
+
+#ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so
+library(gurobi)
+
 
 
 #### Options ####
@@ -526,23 +530,29 @@ htot <- c(directh, influxh)
 
 
 ############### costFxn - indicates the final rxn in S ######
-flux_penalty = 0.001 # resistance on fluxes to minimize feutality
 
 #lp loss fxn
-if(QPorLP == "LP"){costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F", 1, -1) * flux_penalty}
+if(QPorLP == "LP"){
+  flux_penalty = 0.001 # resistance on fluxes to minimize feutality
+  costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F", 1, -1) * flux_penalty
+  }
 
 # QP loss fxn - boundaries should be as close to measured composition as possible and all other edges are penalized to minimize the sum of fluxes.
 # When variable precision of measurement is incorporated, composition/nutrient conditions will be split into seperate boundary conditions with weights proportional to the molar precision.
 if(QPorLP == "QP"){
+  flux_penalty = 0.001   # this value needs to be high enough that sufficient convexity on the solution space is enforced.
   costFxn = matrix(c(c(rep(0, times = length(S[1,]) -1), 1), flux_penalty*c(rep(1, times = length(S[1,]) -1), 0)), nrow = 2, byrow = TRUE)
   costObjective = c(1,0)
+  htot_up = htot*100
+
   }
 
 ######## use linear programming to maximize biomass or QP to match boundary #######
 
 if(QPorLP == "LP"){optimSol <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)}
 
-if(QPorLP == "QP"){optimSol <- lsei(E = S, F = Fzero, G = Gtot, H = htot, A = costFxn, B = costObjective, type = 2)}
+if(QPorLP == "QP"){optimSol <- lsei(E = S, F = Fzero, G = Gtot, H = htot_up, A = costFxn, B = costObjective, type = 2)}
+#if(QPorLP == "QP"){optimSol <- lsei(E = S, F = Fzero, G = Gtot, H = htot, A = costFxn, B = costObjective, type = 1)}
 
 
 #reconstruct reaction-specific flux from the F or R reaction which actually carried flux
