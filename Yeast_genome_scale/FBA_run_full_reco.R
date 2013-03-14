@@ -4,11 +4,6 @@
 library(gplots)
 library(ggplot2)
 
-#ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so
-library(gurobi)
-
-
-
 #### Options ####
 
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
@@ -23,13 +18,17 @@ QPorLP <- "LP"
 
 #calculate shadow prices to perform phenotypic phase plane analysis
 shadow_prices = FALSE
-if(QPorLP == "QP"){shadow_prices = FALSE} #don't calculate shadow prices when QP problem is being solved 
+if(QPorLP == "QP"){shadow_prices = FALSE
+  #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so
+  library(gurobi) # QP solver interface
+  } #don't calculate shadow prices when QP problem is being solved 
 if(shadow_prices){
   library(rgl)
-  library(lpSolveAPI)
+  library(lpSolveAPI) # LP solver interface
   treatmentPartials <- list()
   generatePhPP <- TRUE; PhPPgenerated <- FALSE
-}else{generatePhPP = TRUE}
+}else{generatePhPP = FALSE}
+
 # When optimization function changes, PhPP analysis becomes more complicated as composition becomes a function of nutrient conditions.  If experimental composition measurements over nutrient conditions were dense enough a
 # surface could be fitted and an interesting PhPP analysis could be performed.  Analysis of shadow prices is still useful when partials are evaluated only at observed experimental conditions.
  
@@ -432,9 +431,171 @@ reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
 growth_rate <- data.frame(limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], growth = NA)
-
 flux_vectors <- list()
-######################## Set up the linear equations for FBA #######################
+  
+######################## Set up the equality and inequality constriants for FBA ################
+
+#remove reactions which are defective 
+S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(rem.unbalanced, rem.aggregate))]
+
+#split reactions which can carry forward and reverse flux into two identical reactions
+validrxns <- reversibleRx[reversibleRx$rx %in% colnames(S_rxns),]
+validrxnsFluxdir <- sapply(colnames(S_rxns), function(rxdir){
+  validrxns$reversible[validrxns$rx == rxdir]
+})
+
+stoiRxSplit <- NULL
+for(rxsplit in 1:length(validrxnsFluxdir)){
+  if(unname(validrxnsFluxdir[rxsplit]) == 0){out <- rbind(c(paste(c(names(validrxnsFluxdir)[rxsplit], "F"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "F"), c(paste(c(names(validrxnsFluxdir)[rxsplit], "R"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "R"))}
+  if(unname(validrxnsFluxdir[rxsplit]) == 1){out <- c(paste(c(names(validrxnsFluxdir)[rxsplit], "F"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "F")}  
+  if(unname(validrxnsFluxdir[rxsplit]) == -1){out <- c(paste(c(names(validrxnsFluxdir)[rxsplit], "R"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "R")}  
+  stoiRxSplit <- rbind(stoiRxSplit, out)
+}
+stoiRxSplit <- as.data.frame(cbind(stoiRxSplit)); colnames(stoiRxSplit) <- c("rxDesignation", "reaction", "direction")
+
+S_rxns_split <- sapply(stoiRxSplit$reaction, function(rx){
+  S_rxns[,colnames(S_rxns) == rx]
+})
+colnames(S_rxns_split) <- stoiRxSplit$rxDesignation
+
+##### Stoichiometry and bounds of boundary fluxes #######
+
+## Nutrient Influx & Unconstrained Chemical Influx ##
+
+influx_rxns <- sapply(c(boundary_met$SpeciesID, freeExchange_met$SpeciesID), function(id){c(1:length(metabolites))[metabolites == id]})
+
+influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
+for(i in 1:length(influx_rxns)){
+  influxS[influx_rxns[i],i] <- 1
+}
+
+influxSplit <- data.frame(rxDesignation = c(paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
+      reaction = paste(c(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)), "boundary"), direction = rep(c("F", "R"), each = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)))
+)
+
+# influxSplit <- data.frame(rxDesignation = c(paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
+#   reaction = paste(c(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)), "boundary"), direction = rep(c("F", "R"), each = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName))), 
+#   bound = c(sapply(boundary_met$SpeciesName, function(bmet){treatment_par[[treatment]]$nutrients$conc_per_t[treatment_par[[treatment]]$nutrients$nutrient %in% bmet]}), rep(0, times = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)) + length(freeExchange_met$SpeciesName)))
+#)
+
+influxS_split <- cbind(influxS, influxS)
+colnames(influxS_split) <- influxSplit$rxDesignation
+
+## Excreted Metabolite Efflux - non-negative ##
+
+efflux_rxns <- sapply(excreted_met$SpeciesID, function(id){c(1:length(metabolites))[metabolites == id]})
+
+effluxS <- matrix(0, ncol = length(efflux_rxns), nrow = length(metabolites))
+for(i in 1:length(efflux_rxns)){
+  effluxS[efflux_rxns[i],i] <- -1
+}
+
+## Composition fxn ##
+
+compVec <- rep(0, times = length(metabolites)) #overwritten in each condition
+
+sinkStoi <- cbind(effluxS, compVec); colnames(sinkStoi) <- c(paste(excreted_met$SpeciesName, "boundary"), "composition")
+sinkSplit <- data.frame(rxDesignation = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), reaction = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), direction = "F")
+
+S <- cbind(S_rxns_split, influxS_split, sinkStoi)
+
+S <- S * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #invert stoichiometry for backwards flux
+
+Sinfo <- rbind(stoiRxSplit, influxSplit, sinkSplit)
+
+
+################ F - flux balance ############
+
+Fzero <- rep(0, times = length(S[,1]))
+
+############ Gv >= h - bounds ########
+
+## previous splitting of reversible reactions, allows restriction of each reaction's flux to be either non-negative or non-positive (depending on constrained direction) ##
+
+directG <- diag(ifelse(Sinfo$direction == "F", 1, -1))
+
+## bounding maximum nutrient uptake rates ##
+
+
+influxG <- t(sapply(c(1:length(Sinfo[,1]))[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_')], function(rxchoose){
+  foo <- rep(0, length(Sinfo[,1])); foo[rxchoose] <- -1; foo
+}))
+
+Gtot <- rbind(directG, influxG)
+  
+########### Linear programming to maximize growth given nutrient availability and calculate dual solution / shadow prices #######################
+
+if(QPorLP == "LP"){
+  
+  library(lpSolveAPI) # interface to lpSolve
+  
+  for(treatment in 1:n_c){
+  
+    
+    
+    
+    
+    Sinfo[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'),]
+  
+  
+    }  
+  }  
+  
+  directh <- rep(0, length(Sinfo[,1]))
+  influxh <- -1 * as.numeric(Sinfo[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'),]$bound)
+  htot <- c(directh, influxh)   
+
+
+  #construct a composition function accounting for only anabolism (no energy balance) 
+  
+  for(i in 1:length(comp_met$SpeciesID)){
+    #compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
+    compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- treatment_par[[treatment]]$"boundaryFlux"[i] 
+  }
+  
+  
+  
+  
+  
+
+
+
+
+
+#set flux through auxotrophies to zero
+treatment_par[[treatment]]$auxotrophies
+
+  
+  costFxn = c(rep(0, times = length(S[1,]) -1), -1) #+ rep(1, times = length(S[1,])) * flux_penalty #removed flux penalty so that partials growth / 
+  #partial metabolite change is the dual solution rather than this combined with flux resistance.
+  
+  #solve with lpSolveAPI
+  pS <- S; pS <- pS * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #all v must be greater than zero
+  lpObj <- make.lp(nrow = 0, ncol = length(S[1,]))
+  for(i in 1:length(S[,1])){
+    add.constraint(lpObj, pS[i,], "=", 0)
+  }
+  for(i in 1:length(influxh)){
+    set.bounds(lpObj, upper = influxh*-1, columns = apply(influxG, 1, function(x){c(1:length(x))[x == -1]}))
+  }
+  set.objfn(lpObj, costFxn)
+  
+  #solve LP problem
+  solve(lpObj)
+  
+  dual_solution <- get.dual.solution(lpObj)[1:length(S[,1])] 
+  names(dual_solution) <- rownames(S)
+  
+  treatmentPartials[[names(treatment_par)[treatment]]] <- dual_solution
+  
+
+  }
+
+
+
+
+
+
 
 for(treatment in 1:n_c){
 
