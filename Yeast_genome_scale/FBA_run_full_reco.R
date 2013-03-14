@@ -153,6 +153,7 @@ for(i in 1:n_c){
   treatment_par[[i]]$"boundaryFlux"[compositionFile$Class == "Energy Balance"] <- 0
   
   }
+possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID)), as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID)))
 
 
 #### During LP should the similarity of shadow prices across the nutrient landscape be investigated ####
@@ -473,11 +474,6 @@ influxSplit <- data.frame(rxDesignation = c(paste(paste(c(boundary_met$SpeciesNa
       reaction = paste(c(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)), "boundary"), direction = rep(c("F", "R"), each = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)))
 )
 
-# influxSplit <- data.frame(rxDesignation = c(paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
-#   reaction = paste(c(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)), "boundary"), direction = rep(c("F", "R"), each = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName))), 
-#   bound = c(sapply(boundary_met$SpeciesName, function(bmet){treatment_par[[treatment]]$nutrients$conc_per_t[treatment_par[[treatment]]$nutrients$nutrient %in% bmet]}), rep(0, times = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)) + length(freeExchange_met$SpeciesName)))
-#)
-
 influxS_split <- cbind(influxS, influxS)
 colnames(influxS_split) <- influxSplit$rxDesignation
 
@@ -529,30 +525,62 @@ if(QPorLP == "LP"){
   
   library(lpSolveAPI) # interface to lpSolve
   
+  lpObj <- make.lp(nrow = 0, ncol = length(S[1,]))
+  for(i in 1:length(S[,1])){
+    add.constraint(lpObj, S[i,], "=", 0)
+  }
+  
   for(treatment in 1:n_c){
   
+    delete.column(lpObj, length(S[1,])) #delete the current composition function so that it can be overwritten
     
+    compVec <- rep(0, times = length(metabolites))
+    for(i in 1:length(comp_met$SpeciesID)){
+      compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- treatment_par[[treatment]]$"boundaryFlux"[i] 
+    }  
     
-    
-    
-    Sinfo[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'),]
+    add.column(lpObj, compVec) #add back the condition-specific molar anabolic rates
   
-  
+    cond_nut_bound <- data.frame(index = sapply(paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'), function(x){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == x]}), treatment_par[[treatment]]$nutrients)
+    
+    for(i in 1:length(cond_nut_bound[,1])){
+      set.bounds(lpObj, upper = cond_nut_bound$conc_per_t[i], columns = cond_nut_bound$index[i])
+    }  
+    
+    # set condition-specific auxotrophies - overwrite possible auxotrophies with Inf max flux
+    #auxoIndecies <- c(1:length(Sinfo[,1]))[Sinfo$reaction %in% possibleAuxotrophies]
+    #set.bounds(lpObj, upper = ifelse(Sinfo[auxoIndecies,]$reaction %in% treatment_par[[treatment]]$auxotrophies, 0, Inf), columns = auxoIndecies)
+    
+    ###### Determine flux distributions and growth rate - jointly maximizing growth and minimizing #########
+    
+    flux_penalty = 0.001 # resistance on fluxes to minimize feutality
+    
+    costFxn = c(rep(0, times = length(S[1,]) -1), -1) + c(rep(1, times = length(S[1,])-1), 0)*flux_penalty
+      
+    set.objfn(lpObj, costFxn)
+    solve(lpObj)
+    growth_rate$growth[treatment] <- get.objective(lpObj)*-1
+    
+    objective_flux <- get.variables(lpObj)
+    
+    collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
+      frindices <- c(1:length(Sinfo[,1]))[Sinfo$reaction == frcombo]
+      sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * objective_flux[frindices])
+    })
+    
+    flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
+    
+    ###### Determine shadow prices ######
+    
+    costFxn = c(rep(0, times = length(S[1,]) -1), -1)
+    set.objfn(lpObj, costFxn)
+    solve(lpObj)
+    
+    flux_vectors[[names(treatment_par)[treatment]]]$"shadowPrices" <- get.dual.solution(lpObj)[2:(length(S[,1])+1)] 
     }  
   }  
   
-  directh <- rep(0, length(Sinfo[,1]))
-  influxh <- -1 * as.numeric(Sinfo[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'),]$bound)
-  htot <- c(directh, influxh)   
 
-
-  #construct a composition function accounting for only anabolism (no energy balance) 
-  
-  for(i in 1:length(comp_met$SpeciesID)){
-    #compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
-    compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- treatment_par[[treatment]]$"boundaryFlux"[i] 
-  }
-  
   
   
   
@@ -562,35 +590,8 @@ if(QPorLP == "LP"){
 
 
 
-#set flux through auxotrophies to zero
-treatment_par[[treatment]]$auxotrophies
 
   
-  costFxn = c(rep(0, times = length(S[1,]) -1), -1) #+ rep(1, times = length(S[1,])) * flux_penalty #removed flux penalty so that partials growth / 
-  #partial metabolite change is the dual solution rather than this combined with flux resistance.
-  
-  #solve with lpSolveAPI
-  pS <- S; pS <- pS * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #all v must be greater than zero
-  lpObj <- make.lp(nrow = 0, ncol = length(S[1,]))
-  for(i in 1:length(S[,1])){
-    add.constraint(lpObj, pS[i,], "=", 0)
-  }
-  for(i in 1:length(influxh)){
-    set.bounds(lpObj, upper = influxh*-1, columns = apply(influxG, 1, function(x){c(1:length(x))[x == -1]}))
-  }
-  set.objfn(lpObj, costFxn)
-  
-  #solve LP problem
-  solve(lpObj)
-  
-  dual_solution <- get.dual.solution(lpObj)[1:length(S[,1])] 
-  names(dual_solution) <- rownames(S)
-  
-  treatmentPartials[[names(treatment_par)[treatment]]] <- dual_solution
-  
-
-  }
-
 
 
 
