@@ -142,8 +142,8 @@ for(i in 1:n_c){
   treatment_par[[chemostatInfo$condition[i]]][["nutrients"]] <- data.frame(nutrient = rownames(nutrientFile), conc_per_t = nutrientFile[,colnames(nutrientFile) == nutrientCode$nutrient[nutrientCode$shorthand == chemostatInfo$limitation[i]]]*chemostatInfo$actualDR[i])
   
   #define ura3 and leu2 auxotrophies
-  if(chemostatInfo$limitation[i] == "u"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID))}
-  if(chemostatInfo$limitation[i] == "L"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))}
+  if(chemostatInfo$limitation[i] == "L"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID))}
+  if(chemostatInfo$limitation[i] == "u"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))}
   if(chemostatInfo$limitation[i] %in% c("c", "p", "n")){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- NA}
   
   #define observed fluxes per culture volume #eventually scale to the intracellular volume where these fluxes occur
@@ -543,13 +543,12 @@ if(QPorLP == "LP"){
   
     cond_nut_bound <- data.frame(index = sapply(paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'), function(x){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == x]}), treatment_par[[treatment]]$nutrients)
     
-    for(i in 1:length(cond_nut_bound[,1])){
-      set.bounds(lpObj, upper = cond_nut_bound$conc_per_t[i], columns = cond_nut_bound$index[i])
-    }  
+    set.bounds(lpObj, upper = cond_nut_bound$conc_per_t, columns = cond_nut_bound$index) #set maximize flux into nutrient import as the DR*concentration
+      
     
     # set condition-specific auxotrophies - overwrite possible auxotrophies with Inf max flux
-    #auxoIndecies <- c(1:length(Sinfo[,1]))[Sinfo$reaction %in% possibleAuxotrophies]
-    #set.bounds(lpObj, upper = ifelse(Sinfo[auxoIndecies,]$reaction %in% treatment_par[[treatment]]$auxotrophies, 0, Inf), columns = auxoIndecies)
+    auxoIndecies <- c(1:length(Sinfo[,1]))[Sinfo$reaction %in% possibleAuxotrophies]
+    set.bounds(lpObj, upper = ifelse(Sinfo[auxoIndecies,]$reaction %in% treatment_par[[treatment]]$auxotrophies, 0, Inf), columns = auxoIndecies)
     
     ###### Determine flux distributions and growth rate - jointly maximizing growth and minimizing #########
     
@@ -579,15 +578,18 @@ if(QPorLP == "LP"){
     flux_vectors[[names(treatment_par)[treatment]]]$"shadowPrices" <- get.dual.solution(lpObj)[2:(length(S[,1])+1)] 
     }  
   }  
-  
 
-  
-  
-  
-  
+rxNames <- unique(Sinfo$reaction); rxNames[grep('r_[0-9]+', rxNames)] <- unname(rxnIDtoEnz(rxNames[grep('r_[0-9]+', rxNames)]))
+fluxMat <- matrix(NA, ncol = n_c, nrow = length(flux_vectors[[1]]$flux)); colnames(fluxMat) <- names(flux_vectors); rownames(fluxMat) <- rxNames
 
+shadowMat <- matrix(NA, ncol = n_c, nrow = length(flux_vectors[[1]]$shadowPrices)); colnames(shadowMat) <- names(flux_vectors); rownames(shadowMat) <- unname(metIDtoSpec(rownames(S)))
 
+for(i in 1:n_c){
+  shadowMat[,i] <- flux_vectors[[i]]$shadowPrices
+  fluxMat[,i] <- flux_vectors[[i]]$flux
+  }
 
+#shadowMat[abs(rowSums(shadowMat[,16:25])) > 10^-5,]
 
 
 
