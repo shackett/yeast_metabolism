@@ -280,6 +280,8 @@ X^{*}_{ij} &= X_{ij} - \delta^{o}_{j}\label{normalizeC}
 <<normalizeProtAbund, dependson = "EMprep", cache = TRUE>>=
 load('../BulkComposition/protSpecQuantOut.Rdata')
 
+sampleChemoInfo <- conditions[sapply(proteomicsBlocking$Condition, function(x){c(1:length(conditions[,1]))[conditions$condition == x]}),] #align chemostat conditions to tech replicates
+
 added_conds <- conditions[conditions$condition == "p0.30",]; added_conds$condition <- "p0.30_ORBI"
 conditions <- rbind(conditions, added_conds)
 
@@ -445,8 +447,6 @@ Overlap_lattice$RowInstrument <- proteomicsBlocking$Instrument[Overlap_lattice$R
 Overlap_lattice$ColInstrument <- proteomicsBlocking$Instrument[Overlap_lattice$Column]
 Overlap_lattice$RowSet <- proteomicsBlocking$Set[Overlap_lattice$Row]
 Overlap_lattice$ColSet <- proteomicsBlocking$Set[Overlap_lattice$Column]
-Overlap_lattice$RowBlock <- proteomicsBlocking$Block[Overlap_lattice$Row]
-Overlap_lattice$ColBlock <- proteomicsBlocking$Block[Overlap_lattice$Column]
 
 OverlapSummary <- t(mapply(function(x,y){x + y
     counts <- table(binPepMatrix[,x], binPepMatrix[,y])
@@ -464,7 +464,7 @@ Overlap_lattice <- Overlap_lattice[Overlap_lattice$RowInstrument != "ORBI" & Ove
 tile_theme <- theme(text = element_text(size = 18, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "top", panel.grid = element_blank(), legend.key.width = unit(6, "line"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "darkgray"), axis.text.x = element_text(angle = 90) ) 
 
 
-IntersectVsUnion <- ggplot(Overlap_lattice, aes(Rowsample, Colsample, fill = IntersectVsUnion)) + facet_grid(RowInstrument + RowSet ~ ColInstrument + ColSet) + tile_theme
+IntersectVsUnion <- ggplot(Overlap_lattice, aes(Colsample, Rowsample, fill = IntersectVsUnion)) + facet_grid(RowInstrument + RowSet ~ ColInstrument + ColSet) + tile_theme
 IntersectVsUnion + geom_tile() + scale_fill_gradient(limits = c(0,1), low="blue", high="yellow")
 
 ggsave("figure/mvIntersectVsUnion.pdf", width = 15, height = 15)
@@ -473,41 +473,44 @@ set2block <- Overlap_lattice[Overlap_lattice$ColSet == 2 & Overlap_lattice$RowSe
 set2block$Rowsample <- as.factor(set2block$Rowsample); set2block$Colsample <- as.factor(set2block$Colsample)
 levels(set2block$Rowsample) <- levels(set2block$Colsample) <- proteomicsBlocking[proteomicsBlocking$Set == 2,][order(proteomicsBlocking$Block[proteomicsBlocking$Set == 2], proteomicsBlocking$Order[proteomicsBlocking$Set == 2]),]$Condition
   
-IntersectVsUnion <- ggplot(set2block, aes(Rowsample, Colsample, fill = IntersectVsUnion)) + tile_theme
+IntersectVsUnion <- ggplot(set2block, aes(Colsample, Rowsample, fill = IntersectVsUnion)) + tile_theme
 IntersectVsUnion + geom_tile() + scale_fill_gradient(low="blue", high="yellow") + geom_vline(xintercept = 5.5 + 5*c(-1:4), size = 1.5) +  geom_hline(yintercept = 5.5 + 5*c(-1:4), size = 1.5)
 
 ggsave("figure/mvIntersectVsUnionSet2.pdf", width = 8, height = 8)
 
 
-IntersectVsUnion <- ggplot(Overlap_lattice, aes(Rowsample, Colsample, fill = Intersection)) + facet_grid(RowInstrument + RowSet ~ ColInstrument + ColSet) + tile_theme
+IntersectVsUnion <- ggplot(Overlap_lattice, aes(Colsample, Rowsample, fill = Intersection)) + facet_grid(RowInstrument + RowSet ~ ColInstrument + ColSet) + tile_theme
 IntersectVsUnion + geom_tile() + scale_fill_gradient(low="aliceblue", high="firebrick1")
 
 ggsave("figure/mvIntersection.pdf", width = 15, height = 15)
 
 ###### Predict p(missing) as a function of treatment + instrument*block*set
 
-missingPeptideSource <- data.frame(Condition = rep(NA, times = length(binPepMatrixL[,1])), Condition_slope = NA, Instrument = NA, Set_Block = NA, Instrument_Set_Block = NA, HeavyPresent = NA)
+#missingPeptideSource <- data.frame(Condition = rep(NA, times = length(binPepMatrixL[,1])), Condition_slope = NA, Instrument = NA, Set_Block = NA, Instrument_Set_Block = NA, HeavyPresent = NA)
 
+#missingPeptideSource <- data.frame(residDF = rep(NA, times = length(binPepMatrixL[,1])), residDeviance = NA, modelDF = NA, modelDeviance = NA)
+missingPeptideSource <- data.frame(fullAIC = rep(NA, times = length(binPepMatrixL[,1])), blockAIC = NA, minimalAIC = NA)
 
+#sampleChemoInfo <- conditions[sapply(proteomicsBlocking$Condition, function(x){c(1:length(conditions[,1]))[conditions$condition == x]}),]
 
+bio_offset <- model.matrix(~ factor(limitation)*actualDR + 0, sampleChemoInfo)
+bio_slopes <- model.matrix(~ factor(limitation)*actualDR + 0, sampleChemoInfo)
+blocking_variables <- model.matrix(~ factor(Instrument)*factor(Set)*factor(Block), proteomicsBlocking)
+  
 for(i in 1:length(missingPeptideSource[,1])){
+  fullMod = glm(binPepMatrixL[i,] ~ binPepMatrixH[i,] + bio_variables + blocking_variables, family = binomial)
+  blockMod = glm(binPepMatrixL[i,] ~ binPepMatrixH[i,] + blocking_variables, family = binomial)
+  minimalMod = glm(binPepMatrixL[i,] ~ binPepMatrixH[i,], family = binomial)
+  missingPeptideSource[i,] <- c(extractAIC(fullMod)[2], extractAIC(blockMod)[2], extractAIC(minimalMod)[2])
   
-  
+  ### permutation testing to determine if AIC values are as extreme as one would expect by chance - put this into another script if desired
   }
+hist(missingPeptideSource[,2] - missingPeptideSource[,1], breaks = 200)
+hist(missingPeptideSource[,3] - missingPeptideSource[,2], breaks = 200)
 
-
-binPepMatrixL
-binPepMatrixH
-
+table(apply(missingPeptideSource, 1, which.min))
 @
 
-<<missingOverlap1, dependson = "mvmat", label = "missingOverlap1", echo = FALSE, include = FALSE, cache = TRUE>>=
-heatmap.2(IntersectVsUnion, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
-@
-
-<<missingOverlap2, dependson = "mvmat", label = "missingOverlap2", echo = FALSE, include = FALSE, cache = TRUE>>=
-heatmap.2(pMatchAB, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
-@
 
 \begin{figure}[h!]
 \begin{center}
@@ -525,7 +528,12 @@ heatmap.2(pMatchAB, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yello
 \begin{figure}
 <<missingPepbyCond, cache = TRUE>>=
 #split by instrument facet with free_x
-plot(apply(is.na(lightIC), 2, sum) ~ c(apply(lightIC, 2, sum, na.rm = TRUE) + apply(heavyIC, 2, sum, na.rm = TRUE)), col = as.factor(conditions$limitation), pch = 16)
+missingValByIC = data.frame(measuredPeptides = apply(!is.na(lightIC), 2, sum), TIC = apply(lightIC, 2, sum, na.rm = TRUE), limitation = sampleChemoInfo$limitation, instrument = proteomicsBlocking$Instrument, set = proteomicsBlocking$Set)
+
+scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
+
+missingValByICplot <- ggplot(missingValByIC, aes(x = measuredPeptides, y = TIC, color = factor(limitation), size = 3)) + facet_wrap(~ instrument + set, nrow = 1, scales = "free_y")
+missingValByICplot + geom_point() + scatter_theme + scale_size_identity(NULL) + scale_color_discrete("Limitation")
 @
 \caption{Number of missing peptide values for an experiment versus limitation and TIC.  The point in the top-right is measured on an Orbi-trap.  Its large number of missing peptides, equivalent to the TOF suggests that the large number of missing peptides under phosphate limitation is due to blocking effects or biology rather than the Q-TOF not behaving appropriately during the first run}
 \end{figure}
@@ -533,7 +541,9 @@ plot(apply(is.na(lightIC), 2, sum) ~ c(apply(lightIC, 2, sum, na.rm = TRUE) + ap
 
 <<mvmat_red, dependson = "mvmat", cache = TRUE>>=
 uq_ProtPepMatrix <- ProtPepMatrix[rowSums(ProtPepMatrix) == 1,]
-uq_binPepMatrix <- binPepMatrix[rowSums(ProtPepMatrix) == 1,]
+uq_binPepMatrix <- cbind(binPepMatrixL, binPepMatrixH)[rowSums(ProtPepMatrix) == 1,]
+  
+  #binPepMatrix[rowSums(ProtPepMatrix) == 1,]
 
 cond_peps <- t(((t(uq_binPepMatrix) %*% uq_ProtPepMatrix) != 0)*1)
 cond_peps <- cond_peps[!(rowSums(cond_peps) %in% c(0, length(cond_peps[1,]))),]
