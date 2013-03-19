@@ -36,7 +36,7 @@ opts_chunk$set(echo = FALSE)
 
 setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
 load('20130313ProtPepMatrices.Rdata')
-proteomicsBlcking <- read.table("proteomicsBlocking.tsv", header = TRUE)
+proteomicsBlocking <- read.table("proteomicsBlocking.tsv", header = TRUE)
 source("pep_library.R")
 plotting_fxn()
 matrix_fxn()
@@ -434,12 +434,19 @@ barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", time
 library(reshape2)
 
 #look at structure in the missing values
-binPepMatrix <- ifelse(is.finite(lightIC), 1, 0)
-binPepMatrixH <- ifelse(is.finite(heavyIC), 1, 0)
-
-
+binPepMatrixL <- lightIC; binPepMatrixL[binPepMatrixL < ICthreshold] <- NA; binPepMatrixL <- ifelse(is.finite(binPepMatrixL), 1, 0)
+binPepMatrixH <- heavyIC; binPepMatrixH[binPepMatrixH < ICthreshold] <- NA; binPepMatrixH <- ifelse(is.finite(binPepMatrixH), 1, 0)
+  
 Overlap_lattice <- expand.grid(c(1:length(binPepMatrix[1,])), c(1:length(binPepMatrix[1,])))
 colnames(Overlap_lattice) <- c("Row", "Column")
+Overlap_lattice$Rowsample <- proteomicsBlocking$Condition[Overlap_lattice$Row]
+Overlap_lattice$Colsample <- proteomicsBlocking$Condition[Overlap_lattice$Column]
+Overlap_lattice$RowInstrument <- proteomicsBlocking$Instrument[Overlap_lattice$Row]
+Overlap_lattice$ColInstrument <- proteomicsBlocking$Instrument[Overlap_lattice$Column]
+Overlap_lattice$RowSet <- proteomicsBlocking$Set[Overlap_lattice$Row]
+Overlap_lattice$ColSet <- proteomicsBlocking$Set[Overlap_lattice$Column]
+Overlap_lattice$RowBlock <- proteomicsBlocking$Block[Overlap_lattice$Row]
+Overlap_lattice$ColBlock <- proteomicsBlocking$Block[Overlap_lattice$Column]
 
 OverlapSummary <- t(mapply(function(x,y){x + y
     counts <- table(binPepMatrix[,x], binPepMatrix[,y])
@@ -448,14 +455,54 @@ OverlapSummary <- t(mapply(function(x,y){x + y
 colnames(OverlapSummary) <- c("IntersectVsUnion", "Intersection", "pMatchAB")
 
 Overlap_lattice <- cbind(Overlap_lattice, OverlapSummary)
+Overlap_lattice <- Overlap_lattice[Overlap_lattice$RowInstrument != "ORBI" & Overlap_lattice$ColInstrument != "ORBI",]
 
-IntersectVsUnion <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "IntersectVsUnion")
-Intersection <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "Intersection")
-pMatchAB <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "pMatchAB")
+#IntersectVsUnion <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "IntersectVsUnion")
+#Intersection <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "Intersection")
+#pMatchAB <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "pMatchAB")
+
+tile_theme <- theme(text = element_text(size = 18, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "top", panel.grid = element_blank(), legend.key.width = unit(6, "line"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "darkgray"), axis.text.x = element_text(angle = 90) ) 
+
+
+IntersectVsUnion <- ggplot(Overlap_lattice, aes(Rowsample, Colsample, fill = IntersectVsUnion)) + facet_grid(RowInstrument + RowSet ~ ColInstrument + ColSet) + tile_theme
+IntersectVsUnion + geom_tile() + scale_fill_gradient(limits = c(0,1), low="blue", high="yellow")
+
+ggsave("figure/mvIntersectVsUnion.pdf", width = 15, height = 15)
+
+set2block <- Overlap_lattice[Overlap_lattice$ColSet == 2 & Overlap_lattice$RowSet == 2,]
+set2block$Rowsample <- as.factor(set2block$Rowsample); set2block$Colsample <- as.factor(set2block$Colsample)
+levels(set2block$Rowsample) <- levels(set2block$Colsample) <- proteomicsBlocking[proteomicsBlocking$Set == 2,][order(proteomicsBlocking$Block[proteomicsBlocking$Set == 2], proteomicsBlocking$Order[proteomicsBlocking$Set == 2]),]$Condition
+  
+IntersectVsUnion <- ggplot(set2block, aes(Rowsample, Colsample, fill = IntersectVsUnion)) + tile_theme
+IntersectVsUnion + geom_tile() + scale_fill_gradient(low="blue", high="yellow") + geom_vline(xintercept = 5.5 + 5*c(-1:4), size = 1.5) +  geom_hline(yintercept = 5.5 + 5*c(-1:4), size = 1.5)
+
+ggsave("figure/mvIntersectVsUnionSet2.pdf", width = 8, height = 8)
+
+
+IntersectVsUnion <- ggplot(Overlap_lattice, aes(Rowsample, Colsample, fill = Intersection)) + facet_grid(RowInstrument + RowSet ~ ColInstrument + ColSet) + tile_theme
+IntersectVsUnion + geom_tile() + scale_fill_gradient(low="aliceblue", high="firebrick1")
+
+ggsave("figure/mvIntersection.pdf", width = 15, height = 15)
+
+###### Predict p(missing) as a function of treatment + instrument*block*set
+
+missingPeptideSource <- data.frame(Condition = rep(NA, times = length(binPepMatrixL[,1])), Condition_slope = NA, Instrument = NA, Set_Block = NA, Instrument_Set_Block = NA, HeavyPresent = NA)
+
+
+
+for(i in 1:length(missingPeptideSource[,1])){
+  
+  
+  }
+
+
+binPepMatrixL
+binPepMatrixH
+
 @
 
 <<missingOverlap1, dependson = "mvmat", label = "missingOverlap1", echo = FALSE, include = FALSE, cache = TRUE>>=
-heatmap.2(Intersection, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+heatmap.2(IntersectVsUnion, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
 @
 
 <<missingOverlap2, dependson = "mvmat", label = "missingOverlap2", echo = FALSE, include = FALSE, cache = TRUE>>=
@@ -465,11 +512,11 @@ heatmap.2(pMatchAB, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yello
 \begin{figure}[h!]
 \begin{center}
 \subfloat[p(A $\cap$ B)]{
-\includegraphics[width=0.4\textwidth]{figure/missingOverlap1}
+\includegraphics[width=0.4\textwidth]{figure/mvIntersection.pdf}
 }
 \qquad
 \subfloat[A $\cap$ B / A $\cup$ B)]{
-\includegraphics[width=0.4\textwidth]{figure/missingOverlap2.pdf}}
+\includegraphics[width=0.4\textwidth]{figure/mvIntersectVsUnion.pdf}}
 \end{center}
 \label{repFitSD2}
 \caption{Overlap of missing ascertained peptides across conditions}
