@@ -27,7 +27,7 @@
 
 \Sexpr{opts_chunk$set(tidy=TRUE, message=FALSE)}
 <<setup, echo=FALSE,results='hide'>>=
-options(width=80)
+options(width=80, stringsAsFactors = FALSE)
 library(knitr)
 
 opts_knit$set(progress = TRUE, verbose = TRUE)
@@ -35,7 +35,8 @@ opts_chunk$set(echo = FALSE)
 
 
 setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
-load('20121109ProtPepMatrices.Rdata')
+load('20130313ProtPepMatrices.Rdata')
+proteomicsBlcking <- read.table("proteomicsBlocking.tsv", header = TRUE)
 source("pep_library.R")
 plotting_fxn()
 matrix_fxn()
@@ -71,7 +72,7 @@ library(xtable)
 
 <<dataImp, cache=TRUE>>=
 
-quality_frac <- 0.8
+quality_frac <- 0.1
 ICthreshold <- 2^15
 #only consider peptides that match unambiguously to a single protein
 unq_matches_only <- FALSE
@@ -430,27 +431,35 @@ barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", time
 
 <<mvmat, dependson = "EMsetup", cache = TRUE>>=
 
+library(reshape2)
+
 #look at structure in the missing values
 binPepMatrix <- ifelse(is.finite(lightIC), 1, 0)
+binPepMatrixH <- ifelse(is.finite(heavyIC), 1, 0)
 
-pnonmissingOverSingles <- matrix(NA, ncol = length(binPepMatrix[1,]), nrow = length(binPepMatrix[1,]))
-rownames(pnonmissingOverSingles) <- colnames(binPepMatrix); colnames(pnonmissingOverSingles) <- colnames(binPepMatrix)
-pnonmissingOverTotal <- pnonmissingOverSingles
-for(i in 1:length(pnonmissingOverSingles[1,])){
-	for(j in 1:length(pnonmissingOverSingles[1,])){	
-	pnonmissingOverTotal[i,j] <- sum(apply(binPepMatrix[,c(i, j)], 1, sum) == 2)/length(binPepMatrix[,1])
-  	pnonmissingOverSingles[i,j] <- sum(apply(binPepMatrix[,c(i, j)], 1, sum) == 2) / sum(apply(binPepMatrix[,c(i, j)], 1, sum) > 0)
-	}
-}
 
+Overlap_lattice <- expand.grid(c(1:length(binPepMatrix[1,])), c(1:length(binPepMatrix[1,])))
+colnames(Overlap_lattice) <- c("Row", "Column")
+
+OverlapSummary <- t(mapply(function(x,y){x + y
+    counts <- table(binPepMatrix[,x], binPepMatrix[,y])
+    c(counts[2,2]/(counts[2,1] + counts[1,2] + counts[2,2]), counts[2,2], counts[2,2]^2/((counts[2,1] + counts[2,2])*(counts[1,2] + counts[2,2])))
+    }, Overlap_lattice[,1], Overlap_lattice[,2]))
+colnames(OverlapSummary) <- c("IntersectVsUnion", "Intersection", "pMatchAB")
+
+Overlap_lattice <- cbind(Overlap_lattice, OverlapSummary)
+
+IntersectVsUnion <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "IntersectVsUnion")
+Intersection <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "Intersection")
+pMatchAB <- acast(Overlap_lattice, formula = Row ~ Column, mean, value.var = "pMatchAB")
 @
 
 <<missingOverlap1, dependson = "mvmat", label = "missingOverlap1", echo = FALSE, include = FALSE, cache = TRUE>>=
-heatmap.2(pnonmissingOverTotal, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+heatmap.2(Intersection, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
 @
 
 <<missingOverlap2, dependson = "mvmat", label = "missingOverlap2", echo = FALSE, include = FALSE, cache = TRUE>>=
-heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
+heatmap.2(pMatchAB, Colv = FALSE, Rowv = FALSE, trace = "none", col = blue2yellow(100), dendrogram = "none")
 @
 
 \begin{figure}[h!]
@@ -459,7 +468,7 @@ heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", co
 \includegraphics[width=0.4\textwidth]{figure/missingOverlap1}
 }
 \qquad
-\subfloat[A $\cap$ B / max(A, B)]{
+\subfloat[A $\cap$ B / A $\cup$ B)]{
 \includegraphics[width=0.4\textwidth]{figure/missingOverlap2.pdf}}
 \end{center}
 \label{repFitSD2}
@@ -468,6 +477,7 @@ heatmap.2(pnonmissingOverSingles, Colv = FALSE, Rowv = FALSE, trace = "none", co
 
 \begin{figure}
 <<missingPepbyCond, cache = TRUE>>=
+#split by instrument facet with free_x
 plot(apply(is.na(lightIC), 2, sum) ~ c(apply(lightIC, 2, sum, na.rm = TRUE) + apply(heavyIC, 2, sum, na.rm = TRUE)), col = as.factor(conditions$limitation), pch = 16)
 @
 \caption{Number of missing peptide values for an experiment versus limitation and TIC.  The point in the top-right is measured on an Orbi-trap.  Its large number of missing peptides, equivalent to the TOF suggests that the large number of missing peptides under phosphate limitation is due to blocking effects or biology rather than the Q-TOF not behaving appropriately during the first run}
@@ -1118,13 +1128,50 @@ hist_theme <- theme(text = element_text(size = 23, face = "bold"), title = eleme
 plotted_count_max <- max(table(cut(pt_corrs$correlation,seq(min(pt_corrs$correlation),max(pt_corrs$correlation),0.04)))) 
                            
 cor_plot <- ggplot(pt_corrs, aes(x = correlation)) + hist_theme
-cor_plot <- cor_plot + scale_x_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(-1,1), breaks = seq(floor(min(pt_corrs$correlation)*10)/10, ceiling(max(pt_corrs$correlation)*10)/10, 0.2)) + scale_y_discrete(name = "Counts", expand = c(0,0), breaks = (0:ceiling(plotted_count_max/5))*5) + geom_histogram(colour = "aliceblue", fill = "limegreen", binwidth = 0.04)
-cor_plot
-ggsave(plot = cor_plot, "PTspearmans.pdf", height = 12, width = 16)
+cor_plot <- cor_plot + scale_x_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(-1,1), breaks = seq(-1, 1, 0.2)) + scale_y_discrete(name = "Counts", expand = c(0,0), breaks = (0:ceiling(plotted_count_max/5))*5) + geom_histogram(colour = "aliceblue", fill = "limegreen", binwidth = 0.04)
+ggsave(plot = cor_plot, "figure/PTspearmans.pdf", width = 12, height = 16)
+
+#generate a null distribution of spearman correlations via permutaiton testing
+perms <- 1000
+#generate a matrix of permutation indices
+spearCorrNULL <- matrix(NA, ncol = perms, nrow = length(shared_prot[1,]))
+for(gene in 1:length(shared_prot[1,])){
+  #permute protein pattern w.r.t. transcript pattern
+  sampleIndices <- sapply(1:perms, function(perm){sample(1:length(shared_prot[,1]), length(shared_prot[,1]))})
+  permutedData <- apply(sampleIndices, 2, function(permDat){shared_prot[permDat,gene]})
+  spearCorrNULL[gene,] <- apply(permutedData, 2, function(nullCorr){cor(nullCorr, shared_trans[,gene], method = "spearman")})
+}
+
+nullSpears <- melt(spearCorrNULL); colnames(nullSpears) <- c("gene", "permutation", "correlation")
+cor_plotNULL <- ggplot(nullSpears, aes(x = correlation)) + hist_theme + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+cor_plotNULL <- cor_plotNULL + scale_x_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(-1,1), breaks = seq(-1, 1, 0.2)) + scale_y_discrete(name = "Counts", expand = c(0,0)) + geom_histogram(colour = "aliceblue", fill = "chocolate1", binwidth = 0.04)
+ggsave(plot = cor_plotNULL, "figure/PTspearmansNULL.pdf", width = 12, height = 16)
+
+
+#two tailed test using permutations to establish which correlations are discoveries
+library(qvalue)
+
+spearPvalue <- sapply(1:length(shared_prot[1,]), function(spearp){
+  sum(pt_corrs$correlation[spearp] <= spearCorrNULL[spearp,])/perms
+  })
+spearPvalue_twotailed <- 1 - abs((0.5 - spearPvalue)*2)
+corrQval <- qvalue(spearPvalue_twotailed) 
+corrQval$pi0  
+
+pt_corrs$significant <- corrQval$qvalues <= 0.05
+
+cor_plot <- ggplot(pt_corrs, aes(x = correlation, fill = significant)) + hist_theme
+cor_plot <- cor_plot + scale_x_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(-1,1), breaks = seq(-1, 1, 0.2)) + scale_y_discrete(name = "Counts", expand = c(0,0), breaks = (0:ceiling(plotted_count_max/5))*5) + geom_histogram(colour = "aliceblue", binwidth = 0.04) + scale_fill_manual(name = "Correlation Significance", values = c("TRUE" = "limegreen", "FALSE" = "orange"))
+ggsave(plot = cor_plot, "figure/PTspearmansSig.pdf", width = 12, height = 16)
+
 
 @
 \caption{Distribution of spearman correlations across transcript-protein pairs}
 \end{figure}
+
+To determine which correlations between proteins and transcript relative abundances were more positively- or anti-correlated than we would expect by chance, a null distribution of correlations for each gene was found by permutation testing.  Briefly, for each gene: transcript relative abundances were fixed and for each of \Sexpr{perms} permutations, corresponding protein relative abundances were samples without replacement.  P-values were found as the quantile of the observed spearman correlation relative to the null permutaitons.  Across the \Sexpr{pt_corrs$significant} genes, the expected fraction of true null correlations was found to be \Sexpr{round(corrQval$pi0, 3)}.  Of the correlations that deviated from this null trend, \Sexpr{sum(pt_corrs$correlation[pt_corrs$significant] > 0)} and \Sexpr{sum(pt_corrs$correlation[pt_corrs$significant] < 0)} were more positive and negative respectively than would be expected by chance.  
+
+
 
 <<fileDump1, dependson = "c(mvmat_red, mv_impute, PTcor)", echo = TRUE, cache = TRUE, warning = FALSE>>=
 #file dump
@@ -1146,6 +1193,7 @@ gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1
 colnames(imput_abund_desc) <- unname(gene_desc)
 
 impute_abund_names <- colnames(impute_abund)
+impute_abund_degenNames <- impute_abund
 colnames(impute_abund) <- unname(sapply(colnames(impute_abund), function(x){strsplit(x, split = "/")[[1]][1]}))
 
 localDF_Eweight$Gene[-1] <- colnames(imput_abund_desc)                           
