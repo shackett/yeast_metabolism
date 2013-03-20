@@ -561,9 +561,9 @@ heatmap.2(cond_peps, Rowv = TRUE, Colv = FALSE, trace = "none", col=blackOrange(
 
 <<cluster_misval, dependson = "mvmat_red", cache = TRUE>>=
 	
-k_clust_misVal <- 5
+k_clust_misVal <- 10
 
-mv_clust <- stepFlexclust(cond_peps, k = k_clust_misVal, nrep=100, verbose=FALSE, FUN = kcca, family = kccaFamily(which = 'kmedians'))
+mv_clust <- stepFlexclust(cond_peps, k = k_clust_misVal, nrep=10, verbose=FALSE, FUN = kcca, family = kccaFamily(which = 'kmedians'))
 
 clust_counts1 <- matrix(NA, nrow = k_clust_misVal, ncol = n_c)
 clust_counts0 <- matrix(NA, nrow = k_clust_misVal, ncol = n_c)
@@ -577,70 +577,45 @@ clust_ypos_adj <- matrix(5*rep(0:(k_clust_misVal-1), each = n_c), nrow = k_clust
 clust_xpos <- matrix(rep(1:n_c, times = k_clust_misVal), nrow = k_clust_misVal, ncol = n_c, byrow = TRUE)
 clust_num <- matrix(rep(1:(k_clust_misVal), each = n_c), nrow = k_clust_misVal, ncol = n_c, byrow = TRUE)
 
-clust_plot_df <- data.frame(condition = c(c(clust_xpos), c(clust_xpos)), cluster_val = c(c(1 + clust_ypos_adj), c(clust_ypos_adj)),counts = c(c(clust_counts1), c(clust_counts0)), shape = as.factor(c(c(clust_num), c(clust_num))), medianoid = as.factor(c(c(mv_clust@centers), c(1 - mv_clust@centers))))
+clust_plot_df <- data.frame(condition = c(c(clust_xpos), c(clust_xpos)), cluster_val = c(c(1 + clust_ypos_adj), c(clust_ypos_adj)),counts = c(c(clust_counts1), c(clust_counts0)), shape = as.factor(c(c(clust_num), c(clust_num))), medianoid = c(c(mv_clust@centers), c(1 - mv_clust@centers)))
+
+clust_one_frac <- clust_counts1/(clust_counts1 + clust_counts0)
+clusterCoherence <- apply(abs(clust_one_frac[,1:n_c] - clust_one_frac[,(n_c+1):length(clust_one_frac[1,])]), 1, mean)
+clusterCoherenceDF <- data.frame(clusterCoherence, x = -3, y = clust_ypos_adj[,1] + 0.5)
 
 @
 
 \begin{figure}[h!]
 <<plot_missingvalClusters, dependson = "cluster_misval", echo = FALSE, cache = TRUE>>=
-clust_plot <- ggplot(clust_plot_df, aes(x = condition, y = cluster_val, size = counts, color = medianoid))
-clust_plot <- clust_plot + theme(axis.text.y = element_blank(), axis.title.y = element_blank())
-clust_plot + geom_point()
+manhattan_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "white"), legend.position = "right", panel.grid = element_blank(), axis.ticks = element_blank(), axis.text = element_blank())
+
+clust_plot <- clust_plot + theme(axis.text.y = element_blank(), axis.title.y = element_blank()) + geom_vline(xintercept = n_c) + manhattan_theme
+clust_plot + geom_point(data = clust_plot_df, aes(x = condition, y = cluster_val, size = counts, color = medianoid)) + 
+  geom_point(data= clusterCoherenceDF, aes(x = x, y = y, color = clusterCoherence, size = 200)) + scale_color_gradient(low = "cornflowerblue",high = "RED")
+
 @
+\caption{Patterns of protein-level missing data over \Sexpr{n_c} experimental samples: experimental (light) on the left and reference (heavy) on the right.  Medianoids are indicated by the coloring of the dot in a cluster $\cdot$ condition,  sizes of the dots reflect how many proteins in that cluster are in agreement and disagreement with the medianoid in that condition.  Most large clusters reflect sparse missing or present data, while smaller clusters either reflect block/instrument associated missing data or some weak biological differences.  The dot to the left of each cluster reflects is the absolute value of the difference between p(1 | heavy) and p(1 | light), averaged over conditions.  This is measure of the discordance between L/H ascertainments.  GSEA could be performed on these clusters, but the only interesting clusters are too small to }
 \end{figure}
 
-<<GSEA_prep, cache = TRUE>>=
-library(GSEABase)
-library(org.Sc.sgd.db)
+<<dependson = "cluster_misval">>=
 
-frame = toTable(org.Sc.sgdGO)
+if(length(clusterCoherence[clusterCoherence > 0.2]) != 0){
+  for(a_clust in c(1:k_clust_misVal)[clusterCoherence > 0.2]){
+    clust_genes <- names(mv_clust@cluster)[mv_clust@cluster == a_clust]
+    print(paste("Cluster", a_clust, "of", length(clust_genes), "genes"))
+    gene_desc <- sapply(clust_genes, function(gene){try(orf2desc(unlist(strsplit(gene, split = '[/]'))[1]), silent = TRUE)})
+    gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- sapply(names(gene_desc)[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})], function(gene){try(orf2desc(unlist(strsplit(gene, split = '[-/]'))[1]), silent = TRUE)})
+    gene_desc[sapply(gene_desc, function(gene){ifelse(strsplit(gene, split = " ")[[1]][1] == "Error", TRUE, FALSE)})] <- "No Annotation"  
+    print(unname(unlist(gene_desc)))
+  }
+}
 
-goframeData = data.frame(frame$go_id, frame$Evidence, frame$systematic_name)
-goFrame=GOFrame(goframeData,organism="Saccharomyces cerevisiae")
-goAllFrame=GOAllFrame(goFrame)
-gsc <- GeneSetCollection(goAllFrame, setType = GOCollection())
-@
 
-<<perform_GSEA, dependson= c("GSEA_prep", "cluster_misval"), cache = TRUE>>=
-library(methods)
-library(GOstats)
-library(GSEABase)
-FDR = .05
-
-#MF - molecular function, BP - biological process, CC cellular component
-GSEA.test = function(genes, category) {
-	universe = rownames(cond_peps)
-	
-	params <- GSEAGOHyperGParams(name="GSEA for Bar-Seq data",
-		geneSetCollection=gsc,
-		geneIds = genes,
-		universeGeneIds = universe,
-		ontology = category,
-		pvalueCutoff = 1,
-		conditional = FALSE,
-		testDirection = "over")
-	hyperGTest(params)
-	}
-
-sum_table <- NULL
-for(kval in 1:k_clust_misVal){
-	test <- names(mv_clust@cluster[mv_clust@cluster == kval])
-	for(ont in c("MF", "BP", "CC")){
-		go_sum <- summary(GSEA.test(test, ont))
-		lowp <- go_sum[go_sum$Pvalue < 0.001,]
-		if(length(lowp[,1]) != 0){
-			colnames(lowp)[1] <- "GOID"
-			sum_table <- rbind(sum_table, cbind(k = kval, category = ont, lowp))
-			}
-		}
-	}
-@
-
-<<GSEAtable, dependson = "perform_GSEA", results = "asis", echo = FALSE>>=
-xtable(sum_table, digits = 5)
 @
 
 
+
+names(mv_clust@cluster)[mv_clust@cluster == 1]
 
 
 
