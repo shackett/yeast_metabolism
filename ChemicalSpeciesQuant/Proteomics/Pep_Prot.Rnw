@@ -122,21 +122,81 @@ good_heavy <- heavyIC[good_samples,]
 
 #map measured peaks to unique peptide sequences
 
-pepNames <- rownames(mappingMat)
+pepNames <- rownames(mappingMat) # the same peptide with different charge states and possible methionine oxidation
 unique_NameCorr <- sapply(pepNames, function(name){
 	unlist(strsplit(name, "\\."))[1]
 	})
-unique_pepNames <- unique(unique_NameCorr)
+
+#### Collapsing charge states #####
+
+unique_pepNames <- unique(unique_NameCorr) # unique peptides over charge states
 unique_NameCorrCol <- sapply(unique_NameCorr, function(name){
 	c(1:length(unique_pepNames))[name == unique_pepNames]
 	})
-
 pepToUniq <- matrix(0, nrow = length(pepNames), ncol = length(unique_pepNames))
 rownames(pepToUniq) <- pepNames; colnames(pepToUniq) <- unique_pepNames
 for(i in 1:length(pepNames)){
 	pepToUniq[i,unique_NameCorrCol[i]] <- 1
 	}
-pepToUniq <- Matrix(pepToUniq)
+pepToUniq <- Matrix(pepToUniq) #mapping matrix between all charge states and unique peptides
+
+
+#### Collapsing methionine oxidations ####
+
+oxPeptides <- pepNames[grep('m', pepNames)] #peptides where methionine was oxidized
+oxPeptides <- oxPeptides[gsub('m', 'M', oxPeptides) %in% pepNames] #peptides which have a non-oxidized parent peptide
+unique_pepNamesM <- pepNames[!(pepNames %in% oxPeptides)]
+
+pepToUniqM <- Matrix(diag(length(pepNames))[,!(pepNames %in% oxPeptides)])
+rownames(pepToUniqM) <- pepNames; colnames(pepToUniqM) <- unique_pepNamesM
+
+for(oxPeptide in oxPeptides){
+  pepToUniqM[pepNames == oxPeptide, unique_pepNamesM == gsub('m', 'M', oxPeptide)] <- 1
+  }
+
+
+######## how similar are relative abundances from the same peptide with different charge states or methionine oxidation ######
+
+chargeComp <- pepToUniq[,colSums(pepToUniq) > 1]
+chargeCompStack <- sapply(1:length(chargeComp[1,]), function(x){
+    charge_matches <- cor(t(abundMat[chargeComp[,x] == 1,]), use = "pairwise.complete.obs")
+    charge_matches[lower.tri(charge_matches, diag = FALSE)]
+    })
+
+oxCompStack <- sapply(1:length(oxComp[1,]), function(x){
+    ox_matches <- cor(t(abundMat[oxComp[,x] == 1,]), use = "pairwise.complete.obs")
+    ox_matches[lower.tri(ox_matches, diag = FALSE)]
+    })  
+  
+combined_charge_ox <- rbind(data.frame(comparison = "chargeStates", correlation = unlist(chargeCompStack)), data.frame(comparison = "methionineOxidation", correlation = unlist(oxCompStack)))
+
+#hist(apply(log2(lightIC[grep('m', rownames(lightIC)),]), 1, mean, na.rm = TRUE))
+#hist(apply(log2(lightIC[grep('m', rownames(lightIC), invert = TRUE),]), 1, mean, na.rm = TRUE))
+
+### generate an SD(IC) function for each set
+
+
+
+
+
+
+
+
+#### Collapsing methionine oxidations after charge collapse ####
+
+oxPeptides <- unique_pepNames[grep('m', unique_pepNames)] #peptides where methionine was oxidized
+oxPeptides <- oxPeptides[gsub('m', 'M', oxPeptides) %in% unique_pepNames] #peptides which have a non-oxidized parent peptide
+unique_pepNamesM <- unique_pepNames[!(unique_pepNames %in% oxPeptides)]
+
+pepToUniqM <- Matrix(diag(length(unique_pepNames))[,!(unique_pepNames %in% oxPeptides)])
+rownames(pepToUniqM) <- unique_pepNames; colnames(pepToUniqM) <- unique_pepNamesM
+
+for(oxPeptide in oxPeptides){
+  pepToUniqM[unique_pepNames == oxPeptide, unique_pepNamesM == gsub('m', 'M', oxPeptide)] <- 1
+  }
+
+
+
 
 #determine the expectation of the standard deviation as a heteroschedastic fxn of IC using p0.05 light v. p0.05 heavy
 
@@ -191,6 +251,17 @@ gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rai
 \label{repFitSD1}
 \caption{$\epsilon^{2}$ versus average log$_{2}$ ion counts of the heavy and light peak}
 \end{figure}
+
+<<chargeOxPlot>>=
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "none", 
+  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.line = element_line()) 
+
+combined_charge_ox_plot <- ggplot(combined_charge_ox, aes(x = correlation, fill = 'chartreuse3')) + facet_grid(~ comparison) + barplot_theme
+combined_charge_ox_plot + geom_bar() + scale_x_continuous(name = "Pearson Correlation", expand = c(0.01,0.01), limits = c(-1,1)) + scale_y_continuous(name = "Counts", expand = c(0.01, 0.01)) + scale_fill_identity()
+@
+
+
+
 
 <<pooled_variance, dependson = "dataImp", cache = TRUE>>=
 
