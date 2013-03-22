@@ -465,13 +465,16 @@ dry_weight_perCell_plot + geom_bar(stat = "identity", position = "stack")
 #save(abundMat, good_heavy, good_light, var_spline_inst, file = "tmp.Rdata")
 
 library(reshape2)
+library(nlme)
 
 n_e <- length(proteomicsBlocking[,1])
 conditions <- unique(proteomicsBlocking$Condition)
 n_c <- length(conditions)
 n_p <- sum(good_samples)
-  
-  
+n_prot <- length(mappingMat[1,])  
+
+euclidean_threshold <- 1
+
 average_log2_ic <- (log2(good_light) + log2(good_heavy))/2
 fitted_var_byIC <- good_light; fitted_var_byIC[!is.na(fitted_var_byIC)] <- NA
   
@@ -482,22 +485,26 @@ for(j in 1:length(fitted_var_byIC[1,])){
 
 ###########
 
+inst_set_level_joined <- apply(proteomicsBlocking, 1, function(x){
+    paste(x[names(x) %in% c("Instrument", "Set")], collapse = "_")
+    })
+
 inst_block_level_joined <- apply(proteomicsBlocking, 1, function(x){
     paste(x[names(x) %in% c("Instrument", "Set", "Block")], collapse = "_")
-    }); inst_block_levels <- unique(inst_block_level_joined)
-
+    })
 
 ### fit relative abundance with condition and blocking main effects to generate LS fit ###
+filtered_peps <- abundMat; filtered_peps[is.na(filtered_peps) | !is.na(filtered_peps)] <- 0
 
 for(a_pep_n in 1:n_p){
   
-  peptide_model <- data.frame(RA = abundMat[a_pep_n,], proteomicsBlocking, totalBlocking = inst_block_level_joined)
+  peptide_model <- data.frame(RA = abundMat[a_pep_n,], proteomicsBlocking, totalBlocking = inst_block_level_joined, setBlocking = inst_set_level_joined, is_outlier = FALSE, outlier_type = NA)
   peptide_model <- peptide_model[!is.na(peptide_model$RA),]
-  peptide_model$Condition <- as.factor(peptide_model$Condition)
-  peptide_model$totalBlocking <- as.factor(peptide_model$totalBlocking)
-  peptide_model$is_outlier <- FALSE
-  peptide_model$outlier_type <- NA
-    
+  #peptide_model$Condition <- as.factor(peptide_model$Condition)
+  #peptide_model$totalBlocking <- as.factor(peptide_model$totalBlocking)
+  
+  peptide_model$index <- 1:length(peptide_model[,1])
+  
   ### Prune individual points if they are strong outliers based upon a bonferroni-corrected wald test
   wald_p <- 1 - abs(pnorm((peptide_model$RA - mean(peptide_model$RA))/sd(peptide_model$RA)) - 0.5)*2
   peptide_model$is_outlier[wald_p < 0.05/length(wald_p)] <- TRUE
@@ -505,65 +512,74 @@ for(a_pep_n in 1:n_p){
   
   ### Prune blocks if they are highly inconsistent with the average of other replicates (more extreme and high variance) ###
   
-  RA_blocks <- acast(peptide_model, Condition ~  Instrument + Set + Block, value.var = "RA")
-  mean_euclid_dist <- data.frame(average_euclid_d = rep(NA, length(RA_blocks[1,])), mean_val = NA)
-  for(j in 1:length(euclid_dist)){
-    primary_set <- RA_blocks[!is.na(RA_blocks[,j]),j]
-    compare_set <- apply(RA_blocks[!is.na(RA_blocks[,j]),-j], 1, mean, na.rm = TRUE)
-    mean_euclid_dist[j,] <- c(mean((primary_set[!is.nan(compare_set)] - compare_set[!is.nan(compare_set)])^2), mean(primary_set))
-    }
-    
   block_prune <- TRUE
   RA_blocks <- acast(peptide_model, Condition ~  Instrument + Set + Block, value.var = "RA")
-  mean_euclid_dist <- data.frame(average_euclid_d = rep(NA, length(RA_blocks[1,])), mean_val = NA, pruned = FALSE, index = 1:length(RA_blocks[1,]))
-
+  index_blocks <- acast(peptide_model, Condition ~  Instrument + Set + Block, value.var = "index")
+  mean_euclid_dist <- data.frame(average_euclid_d = rep(NA, length(RA_blocks[1,])), mean_val = NA, index = 1:length(RA_blocks[1,]))
+  isolated_indeces <- NULL
+  totally_inconsistent <- FALSE #if all condition pairs are inconsistent then the peptide will be discarded
+  
+  if(length(unique(peptide_model$setBlocking)) != 1){
+  
   while(block_prune == TRUE){
     
-    for(j in c(1:length(mean_euclid_dist[,1]))[!mean_euclid_dist$pruned]){
+    for(j in c(1:length(mean_euclid_dist[,1]))){
       primary_set <- RA_blocks[!is.na(RA_blocks[,j]),j]
+      if(length(primary_set) == 1){next}
       compare_set <- apply(RA_blocks[!is.na(RA_blocks[,j]),-j], 1, mean, na.rm = TRUE)
+      if(sum(!is.nan(compare_set)) == 0){next}
       mean_euclid_dist[j,1:2] <- c(mean((primary_set[!is.nan(compare_set)] - compare_set[!is.nan(compare_set)])^2), mean(primary_set))
       }
-    if(max(mean_euclid_dist$average_euclid_d) > 4){
-      #Remove one block with high euclidean distance and extreme mean value
-      index_reorder <- mean_euclid_dist[order(mean_euclid_dist$average_euclid_d, decreasing = TRUE),]
-      index_reorder <- index_reorder[index_reorder$average_euclid_d > 4 & index_reorder$average_euclid_d > max(index_reorder$average_euclid_d) - 2,]
-     # mean_euclid_dist$pruned[index_reorder$index[which.max(abs(index_reorder$mean_val))]] <- TRUE
-      RA_blocks <- RA_blocks[,!(mean_euclid_dist$index == index_reorder$index[which.max(abs(index_reorder$mean_val))])]
-      mean_euclid_dist <- mean_euclid_dist[!(mean_euclid_dist$index == index_reorder$index[which.max(abs(index_reorder$mean_val))]),]
-      
-      }else{
-        block_prune = FALSE
+    
+    isolated_indeces <- c(isolated_indeces, mean_euclid_dist$index[is.na(mean_euclid_dist$average_euclid_d)])
+    RA_blocks <- RA_blocks[,!is.na(mean_euclid_dist$average_euclid_d)]
+    mean_euclid_dist <- mean_euclid_dist[!is.na(mean_euclid_dist$average_euclid_d),]
+    
+    if(length(mean_euclid_dist[,1]) >= 2){
+    
+      if(max(mean_euclid_dist$average_euclid_d) > euclidean_threshold){
+        #Remove one block with high euclidean distance and extreme mean value
+        index_reorder <- mean_euclid_dist[order(mean_euclid_dist$average_euclid_d, decreasing = TRUE),]
+        index_reorder <- index_reorder[index_reorder$average_euclid_d > euclidean_threshold & index_reorder$average_euclid_d > max(index_reorder$average_euclid_d)/2,]
+        RA_blocks <- RA_blocks[,!(mean_euclid_dist$index == index_reorder$index[which.max(abs(index_reorder$mean_val))])]
+        mean_euclid_dist <- mean_euclid_dist[!(mean_euclid_dist$index == index_reorder$index[which.max(abs(index_reorder$mean_val))]),]
+        }else{
+          block_prune = FALSE
+          }
         }
     
-    }
-    
-  
-  
-    
-      
-      
+     if(length(mean_euclid_dist[,1]) <= 2){
+      totally_inconsistent <- TRUE
+      block_prune <- FALSE
       }
-    
-    
-    
+  
     }
+   
+  bad_block_samples <- index_blocks[,!(c(1:length(index_blocks[1,])) %in% mean_euclid_dist$index)]
+  bad_block_samples <- bad_block_samples[!is.na(bad_block_samples)]
   
+  peptide_model$is_outlier[bad_block_samples] <- TRUE
+  peptide_model$outlier_type[bad_block_samples] <- "block"
   
+  if(totally_inconsistent){peptide_model$is_outlier <- TRUE; totally_inconsistent <- FALSE}
+  }
   
-  ### Prune whole sets if they are highly inconsistent with other sets (and more extreme / high variance) ###
-  plot(peptide_model$RA)
-  
+  filtered_peps[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$is_outlier
+
 }
+  ### Prune whole sets if they are highly inconsistent with other sets (and more extreme / high variance) ### Not currently implemented due to the effectiveness of block-level filtering
+  
+  ### Fit a mixed effects model treating each condition as a fixed effect and all blocking factors as random effects to estimate fixed effects ####
+  mixed_effects_model <- lme(RA ~ Condition, data = peptide_model[!peptide_model$is_outlier,], random = ~ 1 | totalBlocking)
+  
+  mixed_effects_model$resid
+  
+  plot(peptide_model$RA, col = factor(peptide_model$Instrument)
+ 
+  
 
 
-x <- 1
 
-peptide_model <- data.frame(RA = abundMat[x,], proteomicsBlocking, totalBlocking = inst_block_level_joined)
-peptide_model <- peptide_model[!is.na(peptide_model$RA),]
-peptide_model$Condition <- as.factor(peptide_model$Condition)
-peptide_model$totalBlocking <- as.factor(peptide_model$totalBlocking)
-peptide_model$is_outlier <- FALSE
 
 LS_fit <- lm(RA ~ Condition + totalBlocking, data = peptide_model)
 
@@ -580,47 +596,6 @@ z <- lmer(RA ~ Condition + (1 | totalBlocking), peptide_model, REML = TRUE)
 
 
 
-anova(lm(abundMat[x,] ~ peptide_collapse_full), lm(abundMat[x,] ~ peptide_collapse_bio))
-
-
-
-
-########
-  
-  proteomicsBlocking[,colnames(
-
-
-model.matrix(~ factor(inst_set_level_joined) + 0, data = proteomicsBlocking)
-
-
-
-
-
-anova(lm(abundMat[x,] ~ peptide_collapse_bio), lm(abundMat[x,] ~ peptide_collapse_bio2))
-lm(peptide_collapse_bio2 ~ 
-
-
-
-
-
-contr.treatment(10, 1, contrasts = FALSE)
-
-
-
-fewMV <- c(1:length(abundMat[,1]))[rowSums(is.na(abundMat)) <= 25]
-
-pblockSig <- sapply(fewMV, function(x){
-  anova(lm(abundMat[x,] ~ peptide_collapse_bio), lm(abundMat[x,] ~ peptide_collapse_full))[2,6]
-  })
-predict(lm(abundMat[x,] ~ peptide_collapse_full), diag(25))
-
-
-sig_block_effect <- fewMV[order(pblockSig)[1:50]]
-for(i in 1:length(sig_block_effect)){
-  print(plot(abundMat[sig_block_effect[i],], col = factor(proteomicsBlocking$Instrument)))
-  }
-
-#determine the significance of 
 
 
 #calling single outlier points
@@ -672,10 +647,6 @@ fittedPrec[t(is.na(abundMat))] <- 0
 fittedPrec[is.na(fittedPrec)] <- 0
 abundMat[t(fittedPrec) == 0] <- 0
 
-n_p = length(unique_pepNames) #4042
-n_prot <- length(mappingMat[1,])
-n_pp = n_p + n_prot #4964
-n_c = length(abundMat[1,]) #25
 
 uniquePepMean <- matrix((((t(abundMat) * fittedPrec) %*% pepToUniq)/(fittedPrec %*% pepToUniq)), ncol = n_p, nrow = n_c)
 uniquePepPrecision <- Matrix(fittedPrec %*% pepToUniq)
