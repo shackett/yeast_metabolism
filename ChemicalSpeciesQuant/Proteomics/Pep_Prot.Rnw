@@ -77,8 +77,15 @@ ICthreshold <- 2^15
 #only consider peptides that match unambiguously to a single protein
 unq_matches_only <- FALSE
 
+
 lightIC[lightIC < ICthreshold] <- NA; heavyIC[heavyIC < ICthreshold] <- NA
 
+#filter experimental column from instruments without an biological replicates
+good_experimental_samples <- colnames(lightIC) %in% proteomicsBlocking$SampleName[proteomicsBlocking$Instrument %in% c("QTOF6538", "QTOF6550")]
+lightIC <- lightIC[,good_experimental_samples]; heavyIC <- heavyIC[,good_experimental_samples]; PepMatrix <- PepMatrix[,good_experimental_samples]
+proteomicsBlocking <- proteomicsBlocking[good_experimental_samples,]
+
+#filter samples with too many missing values (below threshold)
 good_samples <- rowSums(is.finite(PepMatrix) & !is.na(lightIC) & !is.na(heavyIC)) >= (length(PepMatrix[1,])*quality_frac)
 
 #possible mappings between a protein and all matching peptides
@@ -160,27 +167,21 @@ for(oxPeptide in oxPeptides){
 chargeComp <- pepToUniq[,colSums(pepToUniq) > 1]
 chargeCompStack <- sapply(1:length(chargeComp[1,]), function(x){
     charge_matches <- cor(t(abundMat[chargeComp[,x] == 1,]), use = "pairwise.complete.obs")
-    charge_matches[lower.tri(charge_matches, diag = FALSE)]
+    present_data = 1 * !is.na(abundMat[chargeComp[,x] == 1,])
+    charge_matches[lower.tri(charge_matches, diag = FALSE) & (present_data %*% t(present_data)) > 20]
     })
 
+oxComp <- pepToUniqM[,colSums(pepToUniqM) > 1]
 oxCompStack <- sapply(1:length(oxComp[1,]), function(x){
     ox_matches <- cor(t(abundMat[oxComp[,x] == 1,]), use = "pairwise.complete.obs")
-    ox_matches[lower.tri(ox_matches, diag = FALSE)]
+    present_data = 1 * !is.na(abundMat[oxComp[,x] == 1,])
+    ox_matches[lower.tri(ox_matches, diag = FALSE) & (present_data %*% t(present_data)) > 20]
     })  
   
 combined_charge_ox <- rbind(data.frame(comparison = "chargeStates", correlation = unlist(chargeCompStack)), data.frame(comparison = "methionineOxidation", correlation = unlist(oxCompStack)))
 
 #hist(apply(log2(lightIC[grep('m', rownames(lightIC)),]), 1, mean, na.rm = TRUE))
 #hist(apply(log2(lightIC[grep('m', rownames(lightIC), invert = TRUE),]), 1, mean, na.rm = TRUE))
-
-### generate an SD(IC) function for each set
-
-
-
-
-
-
-
 
 #### Collapsing methionine oxidations after charge collapse ####
 
@@ -196,20 +197,26 @@ for(oxPeptide in oxPeptides){
   }
 
 
-
-
 #determine the expectation of the standard deviation as a heteroschedastic fxn of IC using p0.05 light v. p0.05 heavy
 
-avgSignalSTD <- apply(cbind(heavyIC[,colnames(heavyIC) == "P0.05"], lightIC[,colnames(lightIC) == "P0.05"]), 1, mean)
-logLight <- log2(lightIC[is.finite(avgSignalSTD),colnames(lightIC) == "P0.05"])
-logHeavy <- log2(heavyIC[is.finite(avgSignalSTD),colnames(heavyIC) == "P0.05"])
-avgSignalSTD <- avgSignalSTD[is.finite(avgSignalSTD)]
-#remove this step to increase variance, since this factor isnt known in principle
-logLight <- logLight + optimize(normFactor, c(-1, 1), logLight = logLight, logHeavy = logHeavy)$minimum
-
-#variance of the replicate differences accounting for small sample (scaling factor of 2)
-STDvar <- (logLight - logHeavy)^2*2
-STDvar_fit <- lm(log2(STDvar) ~ log2(avgSignalSTD))$coef
+refSamples <- proteomicsBlocking[proteomicsBlocking$Condition == "p0.05",]
+# generate an instrument-specific function
+bioRepPlot <- NULL
+for(inst in unique(refSamples$Instrument)){
+  logLight = data.frame(log2(lightIC[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]]))
+  logHeavy = data.frame(log2(heavyIC[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]]))
+  avgSignalSTD <- data.frame((logLight + logHeavy)/2)
+  
+  for(a_sample in 1:length(refSamples$SampleName[refSamples$Instrument == inst])){
+    logLight_redvec = logLight[,a_sample][is.finite(avgSignalSTD[,a_sample])]
+    logHeavy_redvec = logHeavy[,a_sample][is.finite(avgSignalSTD[,a_sample])]
+    avgSignal_redvec = avgSignalSTD[is.finite(avgSignalSTD[,a_sample]),a_sample]
+    logLight_redvec <- logLight_redvec + optimize(normFactor, c(-1, 1), logLight = logLight_redvec, logHeavy = logHeavy_redvec)$minimum
+    
+    bioRepPlot <- rbind(bioRepPlot, data.frame(experimental = logLight_redvec, reference = logHeavy_redvec, averageIC = avgSignal_redvec, variance = (logLight_redvec - avgSignal_redvec)^2*2,Instrument = inst, Set = refSamples$Set[refSamples$Instrument == inst][a_sample]))
+    
+    }
+  }
 
 @
 
@@ -223,19 +230,27 @@ Some of the proteins are totally degenerate, i.e. all of the peptides that match
 
 \begin{figure}[h!]
 <<repdiffplot1, dependson = "dataImp", echo = FALSE, cache = TRUE>>=
-gplot.hexbin(hexbin(logLight, logHeavy, xbins = 200), colramp = rainbow)
+
+hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
+
+LHscatter <- ggplot(bioRepPlot, aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
+LHscatter + geom_hex(bins = 200)
+
 @
 \label{heavylightcomp}
 \caption{Comparison of log$_{2}$p0.05$^{H}$ and log$_{2}$p0.05$^{L}$}
 \end{figure}
 
 <<ICsdreg1, dependson = "dataImp", echo = FALSE, include = FALSE, cache = TRUE>>=
-plot(log2(STDvar) ~ log2(avgSignalSTD), pch = 16, cex = 0.3)
-abline(STDvar_fit, col = "RED")
+
+LHresiduals <- ggplot(bioRepPlot, aes(x = averageIC, y = log2(sqrt(variance)))) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("average log2 H/L IC", expand = c(0.02,0.02)) + scale_y_continuous("log2 sd between log2 H/L IC ", expand = c(0.01,0.01), limits = c(-10, 5)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7)) 
+LHresiduals + geom_hex(bins = 60) + geom_smooth(method = "lm", formula = y ~ x, fill = "cornflowerblue", color = "cornsilk")
 @
 
-<<ICsdreg2, dependson = "dataImp", echo = FALSE, include = FALSE, cache = TRUE>>=
-gplot.hexbin(hexbin(log2(avgSignalSTD), log2(STDvar), xbins = 80), colramp = rainbow)
+<<MAplot, dependson = "dataImp", echo = FALSE, include = FALSE, cache = TRUE>>=
+
+MAplot <- ggplot(bioRepPlot, aes(x = averageIC, y = experimental - reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("average log2 H/L IC", expand = c(0.02,0.02)) + scale_y_continuous("log2 L - H", expand = c(0.01,0.01), limits = c(-10, 10)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7)) 
+MAplot + geom_hex(bins = 150) + geom_smooth(method = "lm", formula = y ~ x, fill = "cornflowerblue", color = "cornsilk")
 @
 
 
@@ -265,32 +280,44 @@ combined_charge_ox_plot + geom_bar() + scale_x_continuous(name = "Pearson Correl
 
 <<pooled_variance, dependson = "dataImp", cache = TRUE>>=
 
-meanCtrlIC <- mapply(mean, logHeavy, logLight)
-nbins <- 100
-binsize <- floor(length(meanCtrlIC)/nbins)
-error_bins <- data.frame(val_mean = meanCtrlIC[order(meanCtrlIC)], light_val = logLight[order(meanCtrlIC)], bin = c(rep(1:(length(meanCtrlIC) %% nbins), each = binsize + 1), rep(((length(meanCtrlIC) %% nbins) + 1):nbins, each = binsize)))
+nbins <- 50
+var_spline_inst <- list()
+var_spline_plot <- list()
 
-bin_var <- data.frame(logIC = rep(NA, times = nbins), MLE_var = rep(NA, times = nbins),  MLE_var2 = rep(NA, times = nbins))
+for(inst in unique(bioRepPlot$Instrument)){
+  # calculate a variance/precision kernal over instrument*IC
+  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst,]
+  binsize <- floor(length(instSubset[,1])/nbins)
+  error_bins <- data.frame(val_mean = instSubset$averageIC[order(instSubset$averageIC)], light_val = instSubset$experimental[order(instSubset$averageIC)], bin = c(rep(1:(length(instSubset[,1]) %% nbins), each = binsize + 1), rep(((length(instSubset[,1]) %% nbins) + 1):nbins, each = binsize)))
+
+  bin_var <- data.frame(logIC = rep(NA, times = nbins), MLE_var = rep(NA, times = nbins))
 bin_dist_plot <- NULL
 
-for(bin in 1:nbins){
-	bin_var$logIC[bin] <- mean(error_bins[error_bins$bin == bin,]$val_mean)
+  for(bin in 1:nbins){
+    bin_var$logIC[bin] <- mean(error_bins[error_bins$bin == bin,]$val_mean)
 	
-	#calculate unbiased estimate of variance
-	resid_dist <- (error_bins[error_bins$bin == bin,]$light_val - error_bins[error_bins$bin == bin,]$val_mean)*sqrt(2)
-	#get the average residual magnitude and then square for the varianace
-	bin_var$MLE_var2[bin] <- mean(abs(resid_dist[abs(resid_dist) < sd(resid_dist)*3]))^2
+	  #calculate unbiased estimate of variance
+	  resid_dist <- (error_bins[error_bins$bin == bin,]$light_val - error_bins[error_bins$bin == bin,]$val_mean)*sqrt(2)
+	  #get the average residual magnitude and then square for the varianace
+	  bin_var$MLE_var[bin] <- mean(abs(resid_dist[abs(resid_dist) < sd(resid_dist)*3]))^2
 	
 	}
+  var_spline <- smooth.spline(x = bin_var$logIC, y = bin_var$MLE_var, df = 4)
+  var_spline_inst[[inst]] <- var_spline
+  var_spline_plot$spline <- rbind(var_spline_plot$spline, data.frame(predict(var_spline, seq(min(bin_var$logIC), max(bin_var$logIC), diff(c(min(bin_var$logIC), max(bin_var$logIC)))/(nbins*10))), instrument = inst))
+  var_spline_plot$bins <- rbind(var_spline_plot$bins, data.frame(bin_var, instrument = inst))
+    
+}
 
-var_spline <- smooth.spline(x = bin_var$logIC, y = bin_var$MLE_var2, df = 5)
 
 @
 
 \begin{figure}
-<<pooled_var_plot, echo = FALSE, cache = TRUE>>=
-plot(var_spline, type = "l", lwd = 2, ylim = c(0, range(c(predict(var_spline, bin_var$logIC)$y, bin_var$MLE_var2))[2]))
-points(bin_var$logIC, bin_var$MLE_var2, pch = 16, cex = 0.8, col = "RED")
+<<pooled_var_plot, echo = FALSE, cache = TRUE, fig.width=10, fig.height=6>>=
+scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
+
+
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = logIC, y = MLE_var, color = "blue", size = 3))
 @
 \caption{pooling peptides by mean($log_{2}^{H}, log_{2}^{L}$) and within these pools looking at the average variance}
 \label{poole_var_fig}
@@ -435,6 +462,126 @@ dry_weight_perCell_plot + geom_bar(stat = "identity", position = "stack")
 
 <<EMsetup, dependson = "dataImp", cache = TRUE>>=
 
+n_e <- length(proteomicsBlocking[,1])
+n_c <- 25
+conditions <- unique(proteomicsBlocking$Condition)
+
+average_log2_ic <- (log2(good_light) + log2(good_heavy))/2
+fitted_var_byIC <- good_light; fitted_var_byIC[!is.na(fitted_var_byIC)] <- NA
+  
+for(j in 1:length(fitted_var_byIC[1,])){
+  fitted_var_byIC[!is.na(average_log2_ic[,j]),j] <- predict(var_spline_inst[[proteomicsBlocking$Instrument[j]]], x = average_log2_ic[,j][!is.na(average_log2_ic[,j])])$y
+  }
+
+peptide_collapse_bio <- model.matrix(~ factor(Condition), data = proteomicsBlocking)
+peptide_collapse_full <- model.matrix(~ factor(Condition) + factor(Instrument)*factor(Set)*factor(Block), data = proteomicsBlocking)
+
+peptide_collapse_blocking <- model.matrix(~ factor(Instrument)*factor(Set)*factor(Block) + 0, data = proteomicsBlocking)
+colnames(peptide_collapse_blocking) <- NULL
+
+###########
+
+inst_set_level_joined <- apply(proteomicsBlocking, 1, function(x){
+    paste(x[names(x) %in% c("Instrument", "Set")], collapse = "_")
+    }); inst_set_levels <- unique(inst_set_level_joined)
+inst_block_level_joined <- apply(proteomicsBlocking, 1, function(x){
+    paste(x[names(x) %in% c("Instrument", "Set", "Block")], collapse = "_")
+    }); inst_block_levels <- unique(inst_block_level_joined)
+
+
+peptide_collapse_bio <- matrix(0, ncol = n_c, nrow = n_e)
+peptide_collapse_set <- matrix(0, ncol = length(inst_set_levels), nrow = n_e)
+peptide_collapse_block <- matrix(0, ncol = length(inst_block_levels), nrow = n_e)
+for(exp in 1:n_e){
+  peptide_collapse_bio[exp, conditions == proteomicsBlocking$Condition[exp]] <- 1
+  peptide_collapse_set[exp, inst_set_levels == inst_set_level_joined[exp]] <- 1
+  peptide_collapse_block[exp, inst_block_levels == inst_block_level_joined[exp]] <- 1
+  }
+colnames(peptide_collapse_bio) <- conditions; colnames(peptide_collapse_set) <- inst_set_levels; colnames(peptide_collapse_block) <- inst_block_levels
+
+anova(lm(abundMat[x,] ~ peptide_collapse_full), lm(abundMat[x,] ~ data.frame(peptide_collapse_bio, peptide_collapse_set, peptide_collapse_block)))
+anova(lm(abundMat[x,] ~ peptide_collapse_full), lm(abundMat[x,] ~ peptide_collapse_bio + peptide_collapse_set + peptide_collapse_block + 0))
+
+z <- lm(abundMat[x,] ~ peptide_collapse_bio + peptide_collapse_set + peptide_collapse_block + 0)
+
+peptide_model <- data.frame(RA = abundMat[x,], proteomicsBlocking, totalBlocking = inst_block_level_joined)
+peptide_model <- peptide_model[!is.na(peptide_model$RA),]
+peptide_model$Condition <- as.factor(peptide_model$Condition)
+peptide_model$totalBlocking <- as.factor(peptide_model$totalBlocking)
+
+lmer(RA ~ Condition + (Condition | totalBlocking), peptide_model)
+
+lmer(RA ~ Condition + (Condition | totalBlocking) + (Condition | Set) + (Condition | Block), peptide_model)
+
+
+
+anova(lm(abundMat[x,] ~ peptide_collapse_full), lm(abundMat[x,] ~ peptide_collapse_bio))
+
+library(lme4)
+
+
+########
+  
+  proteomicsBlocking[,colnames(
+
+
+model.matrix(~ factor(inst_set_level_joined) + 0, data = proteomicsBlocking)
+
+
+
+
+
+anova(lm(abundMat[x,] ~ peptide_collapse_bio), lm(abundMat[x,] ~ peptide_collapse_bio2))
+lm(peptide_collapse_bio2 ~ 
+
+
+
+
+
+contr.treatment(10, 1, contrasts = FALSE)
+
+
+
+fewMV <- c(1:length(abundMat[,1]))[rowSums(is.na(abundMat)) <= 25]
+
+pblockSig <- sapply(fewMV, function(x){
+  anova(lm(abundMat[x,] ~ peptide_collapse_bio), lm(abundMat[x,] ~ peptide_collapse_full))[2,6]
+  })
+predict(lm(abundMat[x,] ~ peptide_collapse_full), diag(25))
+
+
+sig_block_effect <- fewMV[order(pblockSig)[1:50]]
+for(i in 1:length(sig_block_effect)){
+  print(plot(abundMat[sig_block_effect[i],], col = factor(proteomicsBlocking$Instrument)))
+  }
+
+#determine the significance of 
+
+
+#calling single outlier points
+cooks.distance(lm(abundMat[sig_block_effect[1],] ~ peptide_collapse_full))
+
+#look at euclidian distance between all sets to see if one instrument by set is seriously funky - such as row 18
+
+#within set sum of squares - flag if sd of SS is large
+subset <- data.frame(RA = abundMat[x,], cond = proteomicsBlocking$Condition, inst = proteomicsBlocking$Instrument, set = proteomicsBlocking$Set)
+subset_cast <- acast(subset, cond ~ inst + set, value.var = "RA")
+dist(t(subset_cast), diag = TRUE)
+subset_cast - apply(subset_cast, 2, mean, na.rm = TRUE)
+
+
+# possible effects
+# whole instruments * set
+# whole instrument * block * set
+# single observations - purely outliers
+
+plot(abundMat[sig_block_effect[1],], col = factor(proteomicsBlocking$Instrument))
+
+
+
+
+
+
 #calculate the expected sampling variance of the heavy-low diff for experimental measurement
 
 lightHeavyCellmean <- sapply(c(1:length(heavyIC[,1]))[good_samples], function(row){
@@ -443,9 +590,6 @@ lightHeavyCellmean <- sapply(c(1:length(heavyIC[,1]))[good_samples], function(ro
 		}, lightIC[row,], heavyIC[row,])
 	})
 
-
-
-#fittedVar <- var_calc(lightHeavyCellmean, STDvar_fit)
 
 fittedVar <- apply(log2(lightHeavyCellmean), c(1,2), function(x){
 	if(is.na(x)){NA}else{
@@ -466,7 +610,7 @@ abundMat[t(fittedPrec) == 0] <- 0
 n_p = length(unique_pepNames) #4042
 n_prot <- length(mappingMat[1,])
 n_pp = n_p + n_prot #4964
-n_c = length(abundMat[1,]) #15
+n_c = length(abundMat[1,]) #25
 
 uniquePepMean <- matrix((((t(abundMat) * fittedPrec) %*% pepToUniq)/(fittedPrec %*% pepToUniq)), ncol = n_p, nrow = n_c)
 uniquePepPrecision <- Matrix(fittedPrec %*% pepToUniq)
