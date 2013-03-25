@@ -3,33 +3,10 @@ options(stringsAsFactors = FALSE)
 setwd("~/Desktop/Rabinowitz/FBA_SRH/")
 source("Yeast_genome_scale/FBA_lib.R")
 
+run_full = FALSE
+
 #########
   
-match_correction <- function(YE_match, yeastReg, coliReg, report = FALSE){
-    
-  #remove matches in other rxns
-  for(id_match in e_coli_mets[grep(coliReg, e_coli_mets$Name),]$ID){
-    id_match <- sub("\\[", "\\\\[", id_match)
-    id_match <- sub("\\]", "\\\\]", id_match)
-    YE_match$ecoliID <- sub(paste("^", id_match, ",", sep = ""), "", YE_match$ecoliID)
-    YE_match$ecoliID <- sub(paste(",", id_match, sep = ""), "", YE_match$ecoliID)
-    YE_match$ecoliID <- sub(paste("^", id_match, "$", sep = ""), "", YE_match$ecoliID)
-  }
-  
-  
-  #add appropriate mathches
-  for(match in grep(yeastReg, metIDtoSpec(YE_match$yeastID))){
-    YE_match$ecoliID[match] <- paste(e_coli_mets[grep(coliReg, e_coli_mets$Name),]$ID, collapse = ",")
-  }
-  
-  print(paste("Replaced ", yeastReg, " ", length(grep(yeastReg, metIDtoSpec(YE_match$yeastID))), " times", sep = ""))
-  
-  if(report == TRUE){
-    YE_match[c(grep(paste("^", id_match, ",", sep = ""), YE_match$ecoliID), grep(paste(",", id_match, sep = ""), YE_match$ecoliID), grep(paste("^", id_match, "$", sep = ""), YE_match$ecoliID)),]
-  }
-  YE_match
-}
-
 
 sample_over_sds <- function(n, rxn_stoi, sds){
   quantile(matrix(rnorm(n*length(sds), 0, rep(sds, each = n)), nrow = n) %*% (-1*rxn_stoi), c(0.025, 0.975))
@@ -50,9 +27,7 @@ compFile <- read.delim(paste("Yeast_genome_scale/comp_", inputFilebase, ".tsv", 
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 
-if(file.exists("Yeast_genome_scale/yeast_stoi.R")){
-	load("Yeast_genome_scale/yeast_stoi.R")
-	} else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
+load("Yeast_genome_scale/yeast_stoi.R")
 
 
 metabolites <- rownames(stoiMat)
@@ -62,6 +37,8 @@ e_coli_mets[,1:3] <- apply(e_coli_mets[,1:3], c(1,2), function(x){
 	if(x == "''"){NA}else{
 	strsplit(x, split = "'")[[1]][2]
 	}})
+e_coli_mets$Gform[is.nan(e_coli_mets$Gform)] <- NA
+
 e_coli_rxns <- read.delim("EcoliYeastMatch/gibbs_rxns.txt", header = TRUE, sep = "\t")
 e_coli_rxns[,c(1,3)] <- apply(e_coli_rxns[,c(1,3)], c(1,2), function(x){
 	if(x == "''"){NA}else{
@@ -74,7 +51,7 @@ rownames(e_coli_S) <- e_coli_mets$ID
 colnames(e_coli_S) <- e_coli_rxns$ID
 
 
-
+#### write out KEGG IDs of ecoli metabolites and chebi IDs of 
 if(run_full == TRUE){
 	#write out the ecoli KEGG IDs 
 	
@@ -107,25 +84,13 @@ if(run_full == TRUE){
 #match based on shared stoichiometry
 
 YE_match <- read.delim("EcoliYeastMatch/correspondence.dict.csv", sep = "\t", header = TRUE)
-YE_match <- YE_match[sapply(c(1:length(YE_match[,1])), function(x){c(1:length(YE_match[,1]))[YE_match[,1] == rownames(stoiMat)[x]]}),]
-
-#correct some obvious mismatches
-
-YE_match <- match_correction(YE_match, "water", "H2O")
-YE_match <- match_correction(YE_match, "^ATP", "^ATP")
-YE_match <- match_correction(YE_match, "^ADP$", "^ADP$")
-YE_match <- match_correction(YE_match, "FAD$", "Flavin-adenine-dinucleotide-oxidized")
-YE_match <- match_correction(YE_match, "FADH2", "Flavin-adenine-dinucleotide-reduced")
-YE_match <- match_correction(YE_match, "^NAD\\(", "Nicotinamide-adenine-dinucleotide$")
-YE_match <- match_correction(YE_match, "NADH", "Nicotinamide-adenine-dinucleotide--reduced")
-YE_match <- match_correction(YE_match, "^NADP\\(", "Nicotinamide-adenine-dinucleotide-phosphate$")
-YE_match <- match_correction(YE_match, "NADPH", "Nicotinamide-adenine-dinucleotide-phosphate--reduced")
 
 YE_match_list <- list()
 for(spec in c(1:length(YE_match[,1]))){
-	YE_match_list[[YE_match[spec,1]]] <- unlist(strsplit(YE_match[spec,2], split = ","))
+	#find all of the same chemical as the optimal match
+  chem_matches <- e_coli_mets$ID[e_coli_mets$Name == e_coli_mets$Name[e_coli_mets$ID == YE_match[spec,2]]]
+  YE_match_list[[YE_match[spec,1]]] <- chem_matches[!is.na(chem_matches)]
 	}
-
 
 
 all_yeast_spec <- unique(corrFile$SpeciesType)
@@ -134,61 +99,13 @@ all_yeast_names <- sapply(all_yeast_spec, function(ID){
 	})
 
 
-yeastMet_possible_match <- data.frame(specID = all_yeast_spec, specName = unname(all_yeast_names), ecoliMatchSugg = NA, ecoliMatchSuggManual = NA, carryFlux = NA)
-
-for(i in 1:length(all_yeast_spec)){
-	matched_spec <- corrFile$SpeciesID[corrFile$SpeciesType == all_yeast_spec[i]]
-	matched_spec <- matched_spec[matched_spec %in% names(YE_match_list)]
-	ecolimatches <- unique(unlist(YE_match_list[matched_spec]))
-	if(length(ecolimatches) != 0){
-		yeastMet_possible_match$ecoliMatchSugg[i] <- paste(ecolimatches, collapse = ", ")
-		}
-	}
-
-#determine which mets are involved in rxns that carry flux
-carriedFlux <- read.delim("Yeast_genome_scale/carriedFlux.tsv", sep = "\t")
-
-flux_involved_spec <- unique(corrFile$SpeciesType[corrFile$SpeciesID %in% rownames(stoiMat)[apply(stoiMat[,colnames(stoiMat) %in% rownames(carriedFlux)] != 0, 1, sum) != 0]])
-
-yeastMet_possible_match$carryFlux <- ifelse(yeastMet_possible_match$specID %in% flux_involved_spec, 1, 0)
-yeastMet_possible_match <- yeastMet_possible_match[order(yeastMet_possible_match$carryFlux, decreasing = TRUE),]
-
-#write.table(yeastMet_possible_match, file = "yeastMet_possible_match.tsv", row.names = FALSE, col.names = TRUE, sep = "\t")
-
-yeastMet_possible_match <- read.delim("EcoliYeastMatch/yeastMet_possible_match.tsv", header = TRUE, sep = "\t")
-
-yeastMet_possible_match$ecoliMatchSuggManual <- gsub("'", "", yeastMet_possible_match$ecoliMatchSuggManual)
-yeastMet_possible_match$ecoliMatchSuggManual <- gsub(" ", "", yeastMet_possible_match$ecoliMatchSuggManual)
-yeastMet_possible_match$ecoliMatchSuggManual[is.na(yeastMet_possible_match$ecoliMatchSuggManual)] <- ""
-
-
-for(overwrite in yeastMet_possible_match$specID[yeastMet_possible_match$carryFlux == 1 | yeastMet_possible_match$ecoliMatchSuggManual != ""]){
-	
-	YE_match$ecoliID[YE_match$yeastID %in% corrFile$SpeciesID[corrFile$SpeciesType == overwrite]] <- 
-	yeastMet_possible_match$ecoliMatchSuggManual[yeastMet_possible_match$specID == overwrite]
-	}
-
-YE_match_list <- list()
-for(spec in c(1:length(YE_match[,1]))){
-	YE_match_list[[YE_match[spec,1]]] <- unlist(strsplit(YE_match[spec,2], split = ","))
-	}
-
-#add in all ecoli species with the same name as the possible matches
-for(i in c(1:length(YE_match_list))){
-	YE_match_list[[i]] <- e_coli_mets$ID[e_coli_mets$Name %in% e_coli_mets$Name[e_coli_mets$ID %in% YE_match_list[[i]]]]
-	}
-
-
-
-
-
 
 #for each yeast rxn: read the rows of the ecoli stoichiometry matrix corresponding to the species matched with yeast.  Look for matching stoichiometry
 
 perfect_matches <- list()
 near_matches <- list()
 is_perfect <- rep(NA, times = length(stoiMat[1,]))
-deltaGf <- data.frame(deltaGlb = rep(NA, times = length(stoiMat[1,])), deltaGub = rep(NA, times = length(stoiMat[1,])))
+deltaGf <- data.frame(deltaGexp = rep(NA, times = length(stoiMat[1,])), deltaGlb = NA, deltaGub = NA)
 
 for(yRx in 1:length(stoiMat[1,])){
 	
@@ -227,13 +144,14 @@ for(yRx in 1:length(stoiMat[1,])){
 				}else{
 					if(!is.na(sd(Gf$Gform)) & (sd(Gf$Gform) < 5)){
 						Gpart[spec,] <- c(mean(Gf$Gform), max(Gf$G_sd))
-						}else{
-							print(paste(paste(Gf$ID, collapse = ", "), " not similar"))
+						} else if(!is.na(sd(Gf$Gform))){
+              print(paste(paste(Gf$ID, collapse = ", "), " not similar"))
 							}
 					}
 			}
+    #numerical propogation of SDs to total reaction free energy
 		if(all(!is.na(Gpart$mean))){
-			deltaGf[yRx,] <- sum(rxn_stoi*-1*Gpart[,1]) + sample_over_sds(10000, rxn_stoi, Gpart[,2])
+			deltaGf[yRx,] <- c(sum(rxn_stoi*-1*Gpart[,1]), sum(rxn_stoi*-1*Gpart[,1]) + sample_over_sds(10000, rxn_stoi, Gpart[,2]))
 		 	}
 		}
 			
@@ -386,15 +304,6 @@ for(match in perfect){
 	
 table(!is.na(SM_gibbs$delta_G_Kj_mol))
 table(SM_gibbs[!is.na(SM_gibbs$direction),]$direction)
-
-#look at coverage of reactions that actually carry flux
-
-#matched rxns
-table(!is.na(SM_gibbs$delta_G_Kj_mol[rownames(SM_gibbs) %in% rownames(carriedFlux)]))
-
-unmatchedRx <- SM_gibbs[rownames(SM_gibbs) %in% rownames(carriedFlux),][is.na(SM_gibbs$delta_G_Kj_mol[rownames(SM_gibbs) %in% rownames(carriedFlux)]), c(1:2)]
-
-
 
 
 	
@@ -575,6 +484,23 @@ reversible <- unlist(sapply(c(1:length(gibbsFused[,1])), function(x){
 
 revRxns <- data.frame(rx = gibbsFused[,1], reversible = reversible, ECfreeE = EC_gibbs$delta_G_Kj_mol, ECfreeEsd = EC_gibbs$G_form_sd, ECdir = EC_gibbs$direction, 
                       SMfreeE = SM_gibbs$delta_G_Kj_mol, SMfreeEsd = SM_gibbs$G_form_sd, SMdir = SM_gibbs$direction)
+
+
+allPairs <- rbind(data.frame(xval = EC_gibbs$delta_G_Kj_mol, yval = SM_gibbs$delta_G_Kj_mol, label = "x:EC matching vs. y:stoichiometry matching"),
+data.frame(xval = EC_gibbs$delta_G_Kj_mol, yval = deltaGf$deltaGexp*-1, label = "x:EC matching vs. y:free energy of formation"),
+data.frame(xval = SM_gibbs$delta_G_Kj_mol, yval = deltaGf$deltaGexp*-1, label = "x:stoichiometry matching vs. y:free energy of formation"))
+allPairs <- allPairs[rowSums(is.na(allPairs[,c(1:2)])) == 0,]
+
+
+library(ggplot2)
+scatterPlotTheme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+  panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
+
+free_energyPlot <- ggplot(allPairs, aes(x = xval, y = yval, color = "chocolate", size = 4, alpha = 0.4)) + facet_grid(. ~ label, scale = "free") + scatterPlotTheme
+free_energyPlot + geom_point() + scale_color_identity() + scale_alpha_identity() + scale_size_identity() + geom_abline(intercept = 0, slope = 1, color = "blue") + 
+  scale_x_continuous("predicted free energy (x)", limits = c(-100, 100)) + scale_y_continuous("predicted free energy (y)", limits = c(-100, 100))
+
+ggsave(file = "EcoliYeastMatch/freeEcomparison.pdf", height = 10, width = 27)
 
 write.table(revRxns, file = "EcoliYeastMatch/revRxns.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = F)
 
