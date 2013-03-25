@@ -14,7 +14,7 @@ inputFilebase = "yeast"
 
 # Specify whether growth optimization should be through linear programming (LP) - maximizing biomass given nutrients or 
 # through quadratic programming (QP) - optimally matching experimental boundary fluxes to optimized ones.
-QPorLP <- "LP"
+QPorLP <- "QP"
 
 #calculate shadow prices to perform phenotypic phase plane analysis
 shadow_prices = FALSE
@@ -495,9 +495,9 @@ sinkSplit <- data.frame(rxDesignation = c(paste(excreted_met$SpeciesName, "bound
 
 S <- cbind(S_rxns_split, influxS_split, sinkStoi)
 
-S <- S * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #invert stoichiometry for backwards flux
-
 Sinfo <- rbind(stoiRxSplit, influxSplit, sinkSplit)
+
+S <- S * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #invert stoichiometry for backwards flux
 
 
 ################ F - flux balance ############
@@ -577,7 +577,47 @@ if(QPorLP == "LP"){
     
     flux_vectors[[names(treatment_par)[treatment]]]$"shadowPrices" <- get.dual.solution(lpObj)[2:(length(S[,1])+1)] 
     }  
-  }  
+  
+  if(generatePhPP & (PhPPgenerated == FALSE) & is.na(treatment_par[[treatment]]$auxotrophies)){ #this code needs to be fixed - should be straightforward to modify lpObj
+    
+    for(nutComp in 1:length(PhPPcond$nutrients)){
+      nutrientConditions <- PhPPcond$gradient[[nutComp]]
+      
+      nutIndices <- sapply(colnames(nutrientConditions), function(rxmatch){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == paste(paste(rxmatch, "boundary"), "F", sep = "_")]})
+      
+      nutShadow <- matrix(NA, nrow = length(nutrientConditions[,1]), ncol = length(S[,1]))
+      nutGR <- rep(NA, times = length(nutrientConditions[,1]))
+            
+      for(nutCompConc in 1:length(nutrientConditions[,1])){
+        set.bounds(lpObj, upper = nutrientConditions[nutCompConc,], columns = nutIndices)
+        solve(lpObj)  
+        nutShadow[nutCompConc,] <- get.dual.solution(lpObj)[1:length(S[,1])]
+        nutGR[nutCompConc] <- get.objective(lpObj)
+        }
+      
+      xlattice <- sort(unique(nutrientConditions[,1]))
+      ylattice <- sort(unique(nutrientConditions[,2]))
+      zlattice <- matrix(nutGR, conc_samples + 1, conc_samples + 1, byrow = TRUE)[(conc_samples + 1):1,(conc_samples + 1):1]
+        
+        
+      PhPPcond$nutShadow[[nutComp]] <- nutShadow
+      PhPPcond$nutGR[[nutComp]] <- nutGR
+      
+      #determine how to color different regions by shadow price clustering
+      #heatmap.2(t(nutShadow), trace = "none")
+      
+      gradColor <- colorRampPalette(c("aliceblue", "firebrick1"))(1000)
+      nutDF <- cbind(nutrientConditions, GR = abs(nutGR), color = gradColor[ceiling(nutDF$GR/max(nutDF$GR)*1000)])
+      
+      PhPPcond$plotDF[[nutComp]] <- nutDF
+      
+      #plot3d(x = nutDF[,colnames(nutDF) == PhPPcond$nutrient[[nutComp]][1]], y = nutDF[,colnames(nutDF) == PhPPcond$nutrient[[nutComp]][2]], z = nutDF$GR, col = nutDF$color, xlab = paste(PhPPcond$nutrient[[nutComp]][1], "M/hr"), ylab = paste(PhPPcond$nutrient[[nutComp]][2], "M/hr"), zlab = "Biomass")
+      #nutDFtmp <- nutDF; colnames(nutDFtmp)[1:2] <- c("x", "y")
+      #wireframe(GR ~ x*y, data = nutDFtmp, xlab = paste(PhPPcond$nutrient[[nutComp]][1], "M/hr"), ylab = paste(PhPPcond$nutrient[[nutComp]][2], "M/hr"), zlab = "Biomass", drape = TRUE)
+      }
+    PhPPgenerated <- TRUE #only do this part once
+    }  
+  }    
 
 rxNames <- unique(Sinfo$reaction); rxNames[grep('r_[0-9]+', rxNames)] <- unname(rxnIDtoEnz(rxNames[grep('r_[0-9]+', rxNames)]))
 fluxMat <- matrix(NA, ncol = n_c, nrow = length(flux_vectors[[1]]$flux)); colnames(fluxMat) <- names(flux_vectors); rownames(fluxMat) <- rxNames
@@ -589,9 +629,95 @@ for(i in 1:n_c){
   fluxMat[,i] <- flux_vectors[[i]]$flux
   }
 
-#shadowMat[abs(rowSums(shadowMat[,16:25])) > 10^-5,]
+###########
+
+if(QPorLP == "QP"){
+
+  library(gurobi) #interface for gurobi solver
+  #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so #a symbolic link was necessary to get gurobi to find its C++ code
+
+  qpModel <- list()
+  qpparams <- list(Presolve=2)
+
+  flux_elevation_factor <- 1000 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
+  
+  qpModel$A <- S
+  qpModel$rhs <- Fzero #flux balance
+  qpModel$sense <- rep("=", times = length(S[,1])) #flux balance
+  qpModel$lb <- c(rep(0, times = length(S[1,])-1), 1) # all fluxes greater than zero - previous splitting of reversible reactions is consistent with this
+  qpModel$lb <- flux_elevation_factor*qpModel$lb
+  
+  flux_penalty <- 1
+  #qpModel$Q <- diag(c(rep(flux_penalty, length(S[1,]) - 1), 1))
+  qpModel$obj <- rep(1, length(S[1,]))
+  qpModel$objcon <- c(rep(0, length(S[1,])))
+  #qpModel$objcon <- c(rep(0, length(S[1,]) - 1), -1) # all fluxes besides composition should be minimized to reduce feutality
+  
+  for(treatment in 1:n_c){
+    
+    cond_bound <- rep(Inf, times = length(S[1,]))
+    cond_bound[Sinfo$reaction %in% treatment_par[[treatment]]$auxotrophies] <- 0 #auxotrophies have a maximum flux of zero
+    
+    nutrientUptake <- data.frame(index = sapply(paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'), function(x){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == x]}), treatment_par[[treatment]]$nutrients)
+    cond_bound[nutrientUptake$index] <- nutrientUptake$conc_per_t #maximal nutrient fluxes set as [nutrient]*DR
+    
+    qpModel$ub <- cond_bound
+    qpModel$ub <- flux_elevation_factor*qpModel$ub
+    
+    compVec <- rep(0, times = length(metabolites))
+    for(i in 1:length(comp_met$SpeciesID)){
+      compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- treatment_par[[treatment]]$"boundaryFlux"[i] 
+    }  
+    qpModel$A[,length(S[1,])] <- compVec # rates of anabolic fluxes are overwritten by condition-specific ones
+    
+    #test increase in bounds
+    
+    
+    
+    solvedModel <- gurobi(qpModel, qpparams)
+    
+    collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
+      frindices <- c(1:length(Sinfo[,1]))[Sinfo$reaction == frcombo]
+      sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * solvedModel$x[frindices]/flux_elevation_factor)
+    })
+    
+    flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
+    
+    }  
+  }  
+
+rxNames <- data.frame(reactionID = unique(Sinfo$reaction), Name = unique(Sinfo$reaction))
+rxNames$Name[grep('r_[0-9]+', rxNames$Name)] = unname(rxnIDtoEnz(rxNames$Name[grep('r_[0-9]+', rxNames$Name)]))
+
+#rxNames <- unique(Sinfo$reaction); rxNames[grep('r_[0-9]+', rxNames)] <- unname(rxnIDtoEnz(rxNames[grep('r_[0-9]+', rxNames)]))
+fluxMat <- matrix(NA, ncol = n_c, nrow = length(flux_vectors[[1]]$flux)); colnames(fluxMat) <- names(flux_vectors); rownames(fluxMat) <- rxNames$Name
+
+for(i in 1:n_c){
+  fluxMat[,i] <- flux_vectors[[i]]$flux
+  }
+rxNames <- rxNames[rowSums(fluxMat) != 0,]
+fluxMat <- fluxMat[rowSums(fluxMat) != 0,]
+
+fluxMat_per_cellVol <- fluxMat / t(t(rep(1, length(fluxMat[,1])))) %*% chemostatInfo$VolFrac_mean[1:n_c] # moles per h*mL cell volume
+
+flux_summary <- list()
+flux_summary$IDs = rxNames
+flux_summary$ceulluarFluxes = fluxMat_per_cellVol
+
+save(flux_summary, file = "fluxSummaryQP.Rdata")
 
 
+heatmap.2(fluxMat_per_cellVol / (t(t(apply(abs(fluxMat[rowSums(fluxMat_per_cellVol) != 0,]), 1, mean))) %*% rep(1, n_c)), trace = "none")
+
+row_check <- 100
+for(row_check in 1:100){
+if(sum(fluxMat_per_cellVol[row_check,] <= 0) == 0){
+  plot_bounds <- c(0, max(fluxMat_per_cellVol[row_check,]))
+  } else if(sum(fluxMat_per_cellVol[row_check,] <= 0) == n_c){
+    plot_bounds <- c(min(fluxMat_per_cellVol[row_check,]), 0)
+} else{plot_bounds <- c(min(fluxMat_per_cellVol[row_check,]), max(fluxMat_per_cellVol[row_check,]))}
+print(plot(fluxMat_per_cellVol[row_check,] ~ chemostatInfo$actualDR[1:n_c], pch = 16, cex = 2, col = factor(chemostatInfo$limitation[1:n_c]), xlim = c(0, 0.3), ylim = plot_bounds, xlab = "DR", ylab = "flux per cell volume (moles/mL cell volume per hr)"))
+}
 
   
 
@@ -600,97 +726,6 @@ for(i in 1:n_c){
 
 
 
-for(treatment in 1:n_c){
-
-#remove reactions which are defective 
-S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(treatment_par[[treatment]]$auxotrophies, rem.unbalanced, rem.aggregate))]
-
-#split reactions which can carry forward and reverse flux into two identical reactions
-validrxns <- reversibleRx[reversibleRx$rx %in% colnames(S_rxns),]
-validrxnsFluxdir <- sapply(colnames(S_rxns), function(rxdir){
-  validrxns$reversible[validrxns$rx == rxdir]
-  })
-
-stoiRxSplit <- NULL
-for(rxsplit in 1:length(validrxnsFluxdir)){
-  if(unname(validrxnsFluxdir[rxsplit]) == 0){out <- rbind(c(paste(c(names(validrxnsFluxdir)[rxsplit], "F"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "F"), c(paste(c(names(validrxnsFluxdir)[rxsplit], "R"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "R"))}
-  if(unname(validrxnsFluxdir[rxsplit]) == 1){out <- c(paste(c(names(validrxnsFluxdir)[rxsplit], "F"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "F")}  
-  if(unname(validrxnsFluxdir[rxsplit]) == -1){out <- c(paste(c(names(validrxnsFluxdir)[rxsplit], "R"), collapse = '_'), names(validrxnsFluxdir)[rxsplit], "R")}  
-  stoiRxSplit <- rbind(stoiRxSplit, out)
-  }
-stoiRxSplit <- as.data.frame(cbind(stoiRxSplit, 0)); colnames(stoiRxSplit) <- c("rxDesignation", "reaction", "direction", "bound")
-
-S_rxns_split <- sapply(stoiRxSplit$reaction, function(rx){
-  S_rxns[,colnames(S_rxns) == rx]
-  })
-colnames(S_rxns_split) <- stoiRxSplit$rxDesignation
-
-##### Stoichiometry and bounds of boundary fluxes #######
-
-## Nutrient Influx & Unconstrained Chemical Influx ##
-
-influx_rxns <- sapply(c(boundary_met$SpeciesID, freeExchange_met$SpeciesID), function(id){c(1:length(metabolites))[metabolites == id]})
-
-influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
-for(i in 1:length(influx_rxns)){
-	influxS[influx_rxns[i],i] <- 1
-	}
-
-influxSplit <- data.frame(rxDesignation = c(paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
-   reaction = paste(c(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)), "boundary"), direction = rep(c("F", "R"), each = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName))), 
-  bound = c(sapply(boundary_met$SpeciesName, function(bmet){treatment_par[[treatment]]$nutrients$conc_per_t[treatment_par[[treatment]]$nutrients$nutrient %in% bmet]}), rep(0, times = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)) + length(freeExchange_met$SpeciesName)))
-  )
-                                                     
-influxS_split <- cbind(influxS, influxS)
-colnames(influxS_split) <- influxSplit$rxDesignation
-
-## Excreted Metabolite Efflux - non-negative ##
-
-efflux_rxns <- sapply(excreted_met$SpeciesID, function(id){c(1:length(metabolites))[metabolites == id]})
-
-effluxS <- matrix(0, ncol = length(efflux_rxns), nrow = length(metabolites))
-for(i in 1:length(efflux_rxns)){
-	effluxS[efflux_rxns[i],i] <- -1
-	}
-
-## Composition fxn ##
-
-compVec <- rep(0, times = length(metabolites))
-#construct a composition function accounting for only anabolism (no energy balance) 
-
-for(i in 1:length(comp_met$SpeciesID)){
-  #compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- as.numeric(compositionFile$StoiCoef)[i]
-  compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- treatment_par[[treatment]]$"boundaryFlux"[i] 
-}
-
-sinkStoi <- cbind(effluxS, compVec); colnames(sinkStoi) <- c(paste(excreted_met$SpeciesName, "boundary"), "composition")
-sinkSplit <- data.frame(rxDesignation = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), reaction = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), direction = "F", bound = 0)
-
-S <- cbind(S_rxns_split, influxS_split, sinkStoi)
-Sinfo <- rbind(stoiRxSplit, influxSplit, sinkSplit)
-
-
-################ F - flux balance ############
-
-Fzero <- rep(0, times = length(S[,1]))
-
-############ Gv >= h - bounds ########
-
-## previous splitting of reversible reactions, allows restriction of each reaction's flux to be either non-negative or non-positive (depending on constrained direction) ##
-
-directG <- diag(ifelse(Sinfo$direction == "F", 1, -1))
-directh <- rep(0, length(Sinfo[,1]))
-
-## bounding maximum nutrient uptake rates ##
-
-
-influxG <- t(sapply(c(1:length(Sinfo[,1]))[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_')], function(rxchoose){
-  foo <- rep(0, length(Sinfo[,1])); foo[rxchoose] <- -1; foo
-  }))
-influxh <- -1 * as.numeric(Sinfo[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'),]$bound)
-
-Gtot <- rbind(directG, influxG)
-htot <- c(directh, influxh) 	
 
 
 ############### costFxn - indicates the final rxn in S ######
@@ -731,86 +766,9 @@ growth_rate$growth[treatment] <- optimSol$X[names(optimSol$X) == "composition"]
 
 
 
-if(shadow_prices){
-  #if the dual solution (shadow prices) are desired use an alternative solver which reports these values
-  #these shadow prices indicate how much the addition of a metabolite change growth rate.
-  
-  costFxn = c(rep(0, times = length(S[1,]) -1), -1) #+ rep(1, times = length(S[1,])) * flux_penalty #removed flux penalty so that partials growth / 
-  #partial metabolite change is the dual solution rather than this combined with flux resistance.
-  
-  #solve with lpSolveAPI
-  pS <- S; pS <- pS * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #all v must be greater than zero
-  lpObj <- make.lp(nrow = 0, ncol = length(S[1,]))
-  for(i in 1:length(S[,1])){
-    add.constraint(lpObj, pS[i,], "=", 0)
-  }
-  for(i in 1:length(influxh)){
-    set.bounds(lpObj, upper = influxh*-1, columns = apply(influxG, 1, function(x){c(1:length(x))[x == -1]}))
-  }
-  set.objfn(lpObj, costFxn)
-  
-  #solve LP problem
-  solve(lpObj)
-  
-  dual_solution <- get.dual.solution(lpObj)[1:length(S[,1])] 
-  names(dual_solution) <- rownames(S)
-  
-  treatmentPartials[[names(treatment_par)[treatment]]] <- dual_solution
-  
-  #generate a phenotypic phase plane if one hasn't previously been generated
-  if(generatePhPP & (PhPPgenerated == FALSE) & is.na(treatment_par[[treatment]]$auxotrophies)){
-    
-    for(nutComp in 1:length(PhPPcond$nutrients)){
-      nutrientConditions <- PhPPcond$gradient[[nutComp]]
-      
-      nutIndices <- sapply(colnames(nutrientConditions), function(rxmatch){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == paste(paste(rxmatch, "boundary"), "F", sep = "_")]})
-      
-      nutShadow <- matrix(NA, nrow = length(nutrientConditions[,1]), ncol = length(S[,1]))
-      nutGR <- rep(NA, times = length(nutrientConditions[,1]))
-            
-      for(nutCompConc in 1:length(nutrientConditions[,1])){
-        set.bounds(lpObj, upper = nutrientConditions[nutCompConc,], columns = nutIndices)
-        solve(lpObj)  
-        nutShadow[nutCompConc,] <- get.dual.solution(lpObj)[1:length(S[,1])]
-        nutGR[nutCompConc] <- get.objective(lpObj)
-        }
-      
-      xlattice <- sort(unique(nutrientConditions[,1]))
-      ylattice <- sort(unique(nutrientConditions[,2]))
-      zlattice <- matrix(nutGR, conc_samples + 1, conc_samples + 1, byrow = TRUE)[(conc_samples + 1):1,(conc_samples + 1):1]
-        
-        
-      PhPPcond$nutShadow[[nutComp]] <- nutShadow
-      PhPPcond$nutGR[[nutComp]] <- nutGR
-      
-      #determine how to color different regions by shadow price clustering
-      #heatmap.2(t(nutShadow), trace = "none")
-      
-      gradColor <- colorRampPalette(c("aliceblue", "firebrick1"))(1000)
-      nutDF <- cbind(nutrientConditions, GR = abs(nutGR), color = gradColor[ceiling(nutDF$GR/max(nutDF$GR)*1000)])
-      
-      PhPPcond$plotDF[[nutComp]] <- nutDF
-      
-      #plot3d(x = nutDF[,colnames(nutDF) == PhPPcond$nutrient[[nutComp]][1]], y = nutDF[,colnames(nutDF) == PhPPcond$nutrient[[nutComp]][2]], z = nutDF$GR, col = nutDF$color, xlab = paste(PhPPcond$nutrient[[nutComp]][1], "M/hr"), ylab = paste(PhPPcond$nutrient[[nutComp]][2], "M/hr"), zlab = "Biomass")
-      #nutDFtmp <- nutDF; colnames(nutDFtmp)[1:2] <- c("x", "y")
-      #wireframe(GR ~ x*y, data = nutDFtmp, xlab = paste(PhPPcond$nutrient[[nutComp]][1], "M/hr"), ylab = paste(PhPPcond$nutrient[[nutComp]][2], "M/hr"), zlab = "Biomass", drape = TRUE)
-      }
-    PhPPgenerated <- TRUE #only do this part once
-    }  
-  }    
-} 
 
-#generate a PhPP with experimental conditoins projected onto it
-#wireframe(z ~ x * y, data=dem, aspect = c(1, .5),
-#          scales = list(arrows = FALSE),
-#          panel.3d.wireframe = function(x, y, z,...) {
-#            panel.3dwire(x = x, y = y, z = z, ...)
-#            panel.3dscatter(x = x[1],
-#                            y = y[1],
-#                            z = z[1],
-#                            data=ramm,
-#                            ...)
-#          })
+  
+
 
 
 

@@ -1,17 +1,42 @@
 #### Determining the extent to which flux predicted based on metabolomics and proteomics can be 
 ## aligned to experimentally measured flux ###
 
-
-
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
-library(reshape2)
+options(stringsAsFactors = FALSE)
+
+load("flux
+
+
+#import list of metabolite abundances and rxn forms
+
+#import fluxes
+
+#import enzyme abundances
+
+
+
+
+
+
+
+library(reshape2) #for visualization at the end
+
 
 # form a Km hyperparameter using the distribution of [met]/km estimates
 
 
 
 
+
+
+
+
+
+
+
+
+########## TOY ##############
 
 # species involved in reaction
 n_c <- 100
@@ -191,26 +216,6 @@ indFitnessFxn <- function(i, splitFit = FALSE){
       c(sum(dnorm(lpredFluxcent, log(measuredFlux), sqrt(var_fit), log = TRUE)), log(indPrior[i]))
       }
   }
-
-
-
-
-
-fullFitness <- function(gaConstants){
-  
-  
-  
-  
-  
-  
-  
-  }
-
-
-
-
-
-
 
 
 
