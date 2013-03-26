@@ -334,7 +334,7 @@ From the results above, the variance of peptide abundances is clearly a decreasi
 
 \begin{figure}[h!]
 <<nshare, dependson = "dataImp", echo = FALSE>>=
-barplot(nsharedpep)
+barplot(nsharedpep, col = "burlywood2")
 @
 \caption{Number of proteins that a measured peptide matches}
 \end{figure}
@@ -473,7 +473,7 @@ n_c <- length(conditions)
 n_p <- sum(good_samples)
 n_prot <- length(mappingMat[1,])  
 
-euclidean_threshold <- 1
+euclidean_threshold <- 5
 
 average_log2_ic <- (log2(good_light) + log2(good_heavy))/2
 fitted_var_byIC <- good_light; fitted_var_byIC[!is.na(fitted_var_byIC)] <- NA
@@ -500,8 +500,8 @@ for(a_pep_n in 1:n_p){
   
   peptide_model <- data.frame(RA = abundMat[a_pep_n,], proteomicsBlocking, totalBlocking = inst_block_level_joined, setBlocking = inst_set_level_joined, is_outlier = FALSE, outlier_type = NA)
   peptide_model <- peptide_model[!is.na(peptide_model$RA),]
-  #peptide_model$Condition <- as.factor(peptide_model$Condition)
-  #peptide_model$totalBlocking <- as.factor(peptide_model$totalBlocking)
+  
+  #plot(peptide_model$RA, col = factor(peptide_model$setBlocking), pch = peptide_model$Block)
   
   peptide_model$index <- 1:length(peptide_model[,1])
   
@@ -513,8 +513,8 @@ for(a_pep_n in 1:n_p){
   ### Prune blocks if they are highly inconsistent with the average of other replicates (more extreme and high variance) ###
   
   block_prune <- TRUE
-  RA_blocks <- acast(peptide_model, Condition ~  Instrument + Set + Block, value.var = "RA")
-  index_blocks <- acast(peptide_model, Condition ~  Instrument + Set + Block, value.var = "index")
+  RA_blocks <- acast(peptide_model[!peptide_model$is_outlier,], Condition ~  Instrument + Set + Block, value.var = "RA")
+  index_blocks <- acast(peptide_model[!peptide_model$is_outlier,], Condition ~  Instrument + Set + Block, value.var = "index")
   mean_euclid_dist <- data.frame(average_euclid_d = rep(NA, length(RA_blocks[1,])), mean_val = NA, index = 1:length(RA_blocks[1,]))
   isolated_indeces <- NULL
   totally_inconsistent <- FALSE #if all condition pairs are inconsistent then the peptide will be discarded
@@ -525,9 +525,11 @@ for(a_pep_n in 1:n_p){
     
     for(j in c(1:length(mean_euclid_dist[,1]))){
       primary_set <- RA_blocks[!is.na(RA_blocks[,j]),j]
-      if(length(primary_set) == 1){next}
+      if(length(primary_set) == 1 | length(RA_blocks[1,]) == 2){next}
+      
       compare_set <- apply(RA_blocks[!is.na(RA_blocks[,j]),-j], 1, mean, na.rm = TRUE)
       if(sum(!is.nan(compare_set)) == 0){next}
+      
       mean_euclid_dist[j,1:2] <- c(mean((primary_set[!is.nan(compare_set)] - compare_set[!is.nan(compare_set)])^2), mean(primary_set))
       }
     
@@ -567,6 +569,84 @@ for(a_pep_n in 1:n_p){
   filtered_peps[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$is_outlier
 
 }
+
+
+@
+
+<<pooled_variance, dependson = "dataImp", cache = TRUE>>=
+
+refSamples <- proteomicsBlocking[proteomicsBlocking$Condition == "p0.05",]
+# generate an instrument-specific function
+bioRepPlot <- NULL
+for(inst in unique(refSamples$Instrument)){
+  logLight = data.frame(log2(good_light[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]]))
+  logHeavy = data.frame(log2(good_heavy[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]]))
+  
+  if(length(logLight[1,]) == 1){
+    logLight[filtered_peps[proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]] == 1,1] <- NA
+    logHeavy[filtered_peps[proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]] == 1,1] <- NA
+    }else{
+      logLight[filtered_peps[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]] == 1] <- NA
+      logHeavy[filtered_peps[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]] == 1] <- NA
+      }
+  
+  avgSignalSTD <- data.frame((logLight + logHeavy)/2)
+  
+  for(a_sample in 1:length(refSamples$SampleName[refSamples$Instrument == inst])){
+    logLight_redvec = logLight[,a_sample][is.finite(avgSignalSTD[,a_sample])]
+    logHeavy_redvec = logHeavy[,a_sample][is.finite(avgSignalSTD[,a_sample])]
+    avgSignal_redvec = avgSignalSTD[is.finite(avgSignalSTD[,a_sample]),a_sample]
+    logLight_redvec <- logLight_redvec + optimize(normFactor, c(-1, 1), logLight = logLight_redvec, logHeavy = logHeavy_redvec)$minimum
+    
+    bioRepPlot <- rbind(bioRepPlot, data.frame(experimental = logLight_redvec, reference = logHeavy_redvec, averageIC = avgSignal_redvec, variance = (logLight_redvec - avgSignal_redvec)^2*2,Instrument = inst, Set = refSamples$Set[refSamples$Instrument == inst][a_sample]))
+    
+    }
+  }
+
+LHscatter <- ggplot(bioRepPlot, aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
+LHscatter + geom_hex(bins = 200)
+
+
+nbins <- 50
+var_spline_inst <- list()
+var_spline_plot <- list()
+
+for(inst in unique(bioRepPlot$Instrument)){
+  # calculate a variance/precision kernal over instrument*IC
+  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst,]
+  binsize <- floor(length(instSubset[,1])/nbins)
+  error_bins <- data.frame(val_mean = instSubset$averageIC[order(instSubset$averageIC)], light_val = instSubset$experimental[order(instSubset$averageIC)], bin = c(rep(1:(length(instSubset[,1]) %% nbins), each = binsize + 1), rep(((length(instSubset[,1]) %% nbins) + 1):nbins, each = binsize)))
+
+  bin_var <- data.frame(logIC = rep(NA, times = nbins), MLE_var = rep(NA, times = nbins))
+bin_dist_plot <- NULL
+
+  for(bin in 1:nbins){
+    bin_var$logIC[bin] <- mean(error_bins[error_bins$bin == bin,]$val_mean)
+  
+	  #calculate unbiased estimate of variance
+	  resid_dist <- (error_bins[error_bins$bin == bin,]$light_val - error_bins[error_bins$bin == bin,]$val_mean)*sqrt(2)
+	  #get the average residual magnitude and then square for the varianace
+	  bin_var$MLE_var[bin] <- mean(abs(resid_dist[abs(resid_dist) < sd(resid_dist)*3]))^2
+	
+	}
+  var_spline <- smooth.spline(x = bin_var$logIC, y = bin_var$MLE_var, df = 4)
+  var_spline_inst[[inst]] <- var_spline
+  var_spline_plot$spline <- rbind(var_spline_plot$spline, data.frame(predict(var_spline, seq(min(bin_var$logIC), max(bin_var$logIC), diff(c(min(bin_var$logIC), max(bin_var$logIC)))/(nbins*10))), instrument = inst))
+  var_spline_plot$bins <- rbind(var_spline_plot$bins, data.frame(bin_var, instrument = inst))
+    
+}
+
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = logIC, y = MLE_var, color = "blue", size = 3))
+
+
+@
+
+
+
+
+<<>>=
+
+
   ### Prune whole sets if they are highly inconsistent with other sets (and more extreme / high variance) ### Not currently implemented due to the effectiveness of block-level filtering
   
   ### Fit a mixed effects model treating each condition as a fixed effect and all blocking factors as random effects to estimate fixed effects ####
