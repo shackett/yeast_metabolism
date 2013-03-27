@@ -1,9 +1,9 @@
 ## Current objectives ##
 
 2013-03-13 posted:  
-[ ] Determine correspondence between metabolite binding sites for each enzyme with largely measured species  
-[ ] Use Jun's C script to generate reaction forms for each enzyme  
-[ ] Predict fluxes across experimental conditions  
+[x] Determine correspondence between metabolite binding sites for each enzyme with largely measured species  
+[x] Use Jun's C script to generate reaction forms for each enzyme  
+[-] Predict fluxes across experimental conditions  
 [ ] Associate relative metabolite/enzyme abundance with flux using unconstrained affinity parameters  
 [ ] Determine the absolute concentration of metabolites across our 25 chemostat conditions  
 [ ] Associate BRENDA metabolite IDs with metabolic model species ID (t IDs)  
