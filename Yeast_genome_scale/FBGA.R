@@ -5,19 +5,139 @@ setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 options(stringsAsFactors = FALSE)
 
-load("flux
-
+n_c <- 25
 
 #import list of metabolite abundances and rxn forms
 
+load("rxnf_formulametab.rdata")
+
 #import fluxes
+load("fluxSummaryQP.Rdata") #load flux through each reaction
 
 #import enzyme abundances
+enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/run_Deg/relAbundMatrix.tsv")
+#### load protLMfile.Rdata when rerun in order to get all of the genes that a non-unique peptide-set could correspond to
+#measured_genes <- unlist(sapply(colnames(prot_abund_final), function(x){strsplit(x, "/")}))
+
+kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
+if(is.null(kegg_enzyme_dict$PATHWAY)){
+  genes_to_pathways = read.delim("http://rest.kegg.jp/link/pathway/sce", header = FALSE); colnames(genes_to_pathways) <- c("gene", "pathwayCode")
+  pathway_names = read.delim("http://rest.kegg.jp/list/pathway/sce", header = FALSE); colnames(pathway_names) <- c("pathwayCode", "pathway")
+  genes_to_pathways$gene <- gsub('sce:', '', genes_to_pathways$gene)
+  pathway_names$pathway <- sapply(pathway_names$pathway, function(x){strsplit(x, split = " - Sacc")[[1]][1]})
+  pathway_names$pathway <- sapply(pathway_names$pathway, function(x){strsplit(x, split = " - yeast")[[1]][1]})
+  pathway_match <- merge(genes_to_pathways, pathway_names)
+  kegg_enzyme_dict$PATHWAY <- sapply(kegg_enzyme_dict$SYST, function(x){
+      paste(pathway_match$pathway[pathway_match$gene == x], collapse = "__")
+    })
+  write.table(kegg_enzyme_dict, "../KEGGrxns/yeastNameDict.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
+  }#generate a per-gene pathway annotation if one is not already generated
+
+
+
+rxnFile <- read.delim('rxn_yeast.tsv', stringsAsFactors = FALSE)
+met_genes <- data.frame(reaction = unique(rxnFile$ReactionID), genes = NA, pathway = NA)
+
+for(rxN in 1:length(met_genes[,1])){
+  rxSubset <- rxnFile[rxnFile$ReactionID == met_genes$reaction[rxN],]
+  met_genes$genes[rxN] <- paste(rxSubset$MetName[is.na(rxSubset$StoiCoef)], collapse = "/")
+  gene_subset <- strsplit(paste(rxSubset$MetName[is.na(rxSubset$StoiCoef)], collapse = ":"), split = ":")[[1]]
+  met_genes$pathway[rxN] <- paste(unique(strsplit(paste(kegg_enzyme_dict[kegg_enzyme_dict$SYST %in% gene_subset,]$PATHWAY, collapse = "__"), "__")[[1]]), collapse = "__")
+  }
+
+###### all reactions #####
+
+rxnList_all <- rxnf
+
+for(rxN in c(1:length(rxnList_all))){
+  kegg_subset <- met_genes[met_genes$reaction == names(rxnList_all)[rxN],]
+  if(length(kegg_subset[,1]) == 0){next}
+  
+  rxnList_all[[names(rxnList_all)[rxN]]]$pathway = kegg_subset$pathway
+  rxnList_all[[names(rxnList_all)[rxN]]]$genes = kegg_subset$genes
+  rxnList_all[[names(rxnList_all)[rxN]]]$enzymeAbund = enzyme_abund[enzyme_abund$Gene %in% strsplit(kegg_subset$genes, split = '[/:]')[[1]],]
+  }
+save(rxnList_all, file = "all_rxnList.Rdata")
 
 
 
 
 
+####### rxns which carry flux #####
+
+rxnList <- rxnf[names(rxnf) %in% flux_summary$IDs$reactionID]
+
+for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactionID)]){
+  kegg_subset <- met_genes[met_genes$reaction == flux_summary$IDs$reactionID[rxN],]
+  if(length(kegg_subset[,1]) == 0){next}
+  
+  rxnList[[flux_summary$IDs$reactionID[rxN]]]$reaction = flux_summary$IDs$Name[rxN]
+  rxnList[[flux_summary$IDs$reactionID[rxN]]]$pathway = kegg_subset$pathway
+  rxnList[[flux_summary$IDs$reactionID[rxN]]]$genes = kegg_subset$genes
+  rxnList[[flux_summary$IDs$reactionID[rxN]]]$enzymeAbund = enzyme_abund[enzyme_abund$Gene %in% strsplit(kegg_subset$genes, split = '[/:]')[[1]],]
+  rxnList[[flux_summary$IDs$reactionID[rxN]]]$flux = flux_summary$ceulluarFluxes[rxN,]
+}
+
+
+##### predict flux ####
+reaction_summary <- data.frame(
+reaction_pred_log <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, Fmetab = NA, Fenz = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varianceExplained = NA)
+reaction_pred_linear <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, Fmetab = NA, Fenz = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varianceExplained = NA)
+
+data.frame(enz_cond = names(rxnList[[1]]$flux), met_cond = rownames(rxnList[[1]]$rxnMet)[c(6:10, 11:15, 1:5, 16:20, 21:25)])
+rownames(rxnList[[1]]$rxnMet)[c(6:10, 11:15, 1:5, 16:20, 21:25)]
+
+for(rxN in length(rxnList)){
+  reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeAbund[,1])
+  reaction_pred_linear$nmetab[rxN] <- reaction_pred_log$nmetab[rxN] <- sum(!is.na(rxnList[[rxN]]$rxnMet))/25
+  
+  if(all(rxnList[[rxN]]$flux >= 0)){
+    rxFlux <- log2(rxnList[[rxN]]$flux)
+    } else if(all(rxnList[[rxN]]$flux <= 0)){
+      rxFlux <- log2(-1*rxnList[[rxN]]$flux)
+    } else{
+      rxFlux <- rep(NA, n_c)
+      } #if only forward flux consider its log, if only backwards flux consider the log of -1*flux, if the directionality changes then skip this rxn.
+  
+  if(reaction_pred$nenz[rxN] == 0 & reaction_pred$nmetab[rxN] == 0){
+    next
+    } else if(reaction_pred$nenz[rxN] != 0 & reaction_pred$nmetab[rxN] == 0){
+    ### only enzymes ###
+      
+      
+    } else if(reaction_pred$nenz[rxN] == 0 & reaction_pred$nmetab[rxN] != 0){
+    ### only metabolites ###
+      ### prediction using log measures ###
+      
+      
+      ### prediction using linear measures ###
+      anova(
+      
+        anova(lm(rxnList[[rxN]]$flux ~ rxnList[[rxN]]$rxnMet[,colSums(!is.na(rxnList[[rxN]]$rxnMet) != 0) != 0]))
+        
+      rxnList[[rxN]]$rxnMet
+      
+      
+      
+      
+      
+    } else{
+    ### both metabolites and enzymes ###
+      
+      
+    }
+    
+  
+  rxnList[[rxN]]$rxnMet
+  
+  
+  
+  }
+
+
+
+flux_summary$IDs
+flux_summary$ceulluarFluxes
 
 
 library(reshape2) #for visualization at the end
@@ -28,8 +148,8 @@ library(reshape2) #for visualization at the end
 
 
 
-
-
+# look at subset of reactions which carry flux
+# using 
 
 
 
