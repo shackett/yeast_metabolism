@@ -3,21 +3,27 @@
 
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
+library(reshape2) #for visualization at the end
+
 options(stringsAsFactors = FALSE)
 
 n_c <- 25
 
-#import list of metabolite abundances and rxn forms
+######## Import all of the species involved in a reaction and other reaction information ###########
+
+##### import list of metabolite abundances and rxn forms
 
 load("rxnf_formulametab.rdata")
 
-#import fluxes
+##### Import fluxes
 load("fluxSummaryQP.Rdata") #load flux through each reaction
 
-#import enzyme abundances
+##### Import enzyme abundances
 enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/run_Deg/relAbundMatrix.tsv")
 #### load protLMfile.Rdata when rerun in order to get all of the genes that a non-unique peptide-set could correspond to
 #measured_genes <- unlist(sapply(colnames(prot_abund_final), function(x){strsplit(x, "/")}))
+
+##### Associate enzymes with pathways ######
 
 kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
 if(is.null(kegg_enzyme_dict$PATHWAY)){
@@ -34,6 +40,7 @@ if(is.null(kegg_enzyme_dict$PATHWAY)){
   }#generate a per-gene pathway annotation if one is not already generated
 
 
+##### For each reaction in the consensus reconstruction, determine which pathways are associated with its enzymes ######
 
 rxnFile <- read.delim('rxn_yeast.tsv', stringsAsFactors = FALSE)
 met_genes <- data.frame(reaction = unique(rxnFile$ReactionID), genes = NA, pathway = NA)
@@ -45,7 +52,7 @@ for(rxN in 1:length(met_genes[,1])){
   met_genes$pathway[rxN] <- paste(unique(strsplit(paste(kegg_enzyme_dict[kegg_enzyme_dict$SYST %in% gene_subset,]$PATHWAY, collapse = "__"), "__")[[1]]), collapse = "__")
   }
 
-###### all reactions #####
+###### Create a list containing model and experimental information for all reactions in the consensus reconstruction #####
 
 rxnList_all <- rxnf
 
@@ -60,7 +67,7 @@ for(rxN in c(1:length(rxnList_all))){
 
 
 
-####### rxns which carry flux #####
+####### Narrow the previous list to only rxns which carry flux #####
 
 rxnList <- rxnf[names(rxnf) %in% flux_summary$IDs$reactionID]
 
@@ -157,11 +164,14 @@ for(rxN in 1:length(rxnList)){
     }
   }
 
+
 qplot(reaction_pred_linear$Fmetab)
 qplot(reaction_pred_linear$Fenz)
 
 reaction_pred_summary_log <- data.frame(N = reaction_pred_log$nCond, metaboliteVarianceExplained = reaction_pred_log$varExplainedMetab/reaction_pred_log$TSS, enzymeVarianceExplained = reaction_pred_log$varExplainedEnzy/reaction_pred_log$TSS)
 reaction_pred_summary_linear <- data.frame(N = reaction_pred_linear$nCond, metaboliteVarianceExplained = reaction_pred_linear$varExplainedMetab/reaction_pred_linear$TSS, enzymeVarianceExplained = reaction_pred_linear$varExplainedEnzy/reaction_pred_linear$TSS)
+rownames(reaction_pred_summary_log) <- rownames(reaction_pred_summary_linear) <- names(rxnList)
+
 
 residualDF <- reaction_pred_log$nCond - reaction_pred_log$nmetab - reaction_pred_log$nenz
 residualDF <- residualDF[reaction_pred_summary_log$N >= 15]
@@ -188,11 +198,36 @@ rxnPredictionPlot + geom_bar(binwidth = 1) + barplot_theme + geom_vline(aes(xint
 
 ggsave("varianceExplained.pdf", width = 20, height = 12)
         
-library(reshape2) #for visualization at the end
+##### looking at subset of reactions where a kinetic form was produced because most/all substrates were ascertained ####
 
+reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$rxnID, NA)})
+  
+rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
+
+for(rxN in 1:length(rxnList_form)){
+  rxnForm <- rxnList_form[[rxN]]$rxnForm
+  
+  kineticPars
+  data.frame(rel_spec = c(rxnList_form[[rxN]]$enzymeAbund[,1], colnames(rxnList_form[[rxN]]$rxnMet)), 
+             SpeciesType = c(rep("Enzyme", times = length(rxnList_form[[rxN]]$enzymeAbund[,1])), rep("Metabolite", times = length(colnames(rxnList_form[[rxN]]$rxnMet))))
+  length(rxnList_form[[rxN]]$enzymeAbund[,1]) + length(rxnList_form[[rxN]]$rxnMet[1,])
+  
+  
+  
+  gsub(rxnForm, 
+  
+  #for enzyme mixtures, draw from a dirichlet 
+  
+  
+  
+  }
 
 # form a Km hyperparameter using the distribution of [met]/km estimates
 
+
+### Km values drawn from a uniform from mean(log) +/- 10
+### vector of mixing proportions drawn from Dirichlet(alpha)
+### alpha pseudo-counts mutate by adding a rounded random normal number to each class - keep track of each individuals pseudocounts (alpha) and the actual corresponding parameter - Dir(alpha)
 
 
 
@@ -323,8 +358,10 @@ hist_theme <- theme(text = element_text(size = 23, face = "bold"), title = eleme
   panel.grid.minor = element_blank(), legend.key.width = unit(6, "line"), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
 
 dist_plotter <- ggplot() + facet_grid(name ~ ., scales = "free_y") + hist_theme
-dist_plotter + geom_histogram(data = par_fit_stack, aes(x = lnValue), binwidth = 0.01) + geom_vline(data = assocConst, aes(xintercept = log(priorMean), colour = "RED", size = 2)) +
-  geom_errorbarh(data = assocConst, aes(x = log(priorMean), xmin = CImin, xmax = CImax, y = maxCatVal/2, height = maxCatVal/10, size = 2, colour = "RED"))
+dist_plotter + geom_histogram(data = par_fit_stack, aes(x = lnValue), binwidth = 0.1) + geom_vline(data = assocConst, aes(xintercept = log(priorMean), colour = "RED", size = 2)) +
+  geom_errorbarh(data = assocConst, aes(x = log(priorMean), xmin = CImin, xmax = CImax, y = maxCatVal/2, height = maxBinCount/10, size = 2, colour = "RED"))
+
+ggsave("gatoy.pdf", height = 10, width = 10)
 
 
 
