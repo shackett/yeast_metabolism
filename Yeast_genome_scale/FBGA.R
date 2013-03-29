@@ -57,9 +57,6 @@ for(rxN in c(1:length(rxnList_all))){
   rxnList_all[[names(rxnList_all)[rxN]]]$genes = kegg_subset$genes
   rxnList_all[[names(rxnList_all)[rxN]]]$enzymeAbund = enzyme_abund[enzyme_abund$Gene %in% strsplit(kegg_subset$genes, split = '[/:]')[[1]],]
   }
-save(rxnList_all, file = "all_rxnList.Rdata")
-
-
 
 
 
@@ -75,19 +72,21 @@ for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactio
   rxnList[[flux_summary$IDs$reactionID[rxN]]]$pathway = kegg_subset$pathway
   rxnList[[flux_summary$IDs$reactionID[rxN]]]$genes = kegg_subset$genes
   rxnList[[flux_summary$IDs$reactionID[rxN]]]$enzymeAbund = enzyme_abund[enzyme_abund$Gene %in% strsplit(kegg_subset$genes, split = '[/:]')[[1]],]
-  rxnList[[flux_summary$IDs$reactionID[rxN]]]$flux = flux_summary$ceulluarFluxes[rxN,]
+  rxnList_all[[flux_summary$IDs$reactionID[rxN]]]$flux <- rxnList[[flux_summary$IDs$reactionID[rxN]]]$flux <- flux_summary$ceulluarFluxes[rxN,]
 }
+#save(rxnList_all, file = "all_rxnList.Rdata")
 
 
 ##### predict flux ####
-reaction_summary <- data.frame(
-reaction_pred_log <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, Fmetab = NA, Fenz = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varianceExplained = NA)
-reaction_pred_linear <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, Fmetab = NA, Fenz = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varianceExplained = NA)
 
-data.frame(enz_cond = names(rxnList[[1]]$flux), met_cond = rownames(rxnList[[1]]$rxnMet)[c(6:10, 11:15, 1:5, 16:20, 21:25)])
-rownames(rxnList[[1]]$rxnMet)[c(6:10, 11:15, 1:5, 16:20, 21:25)]
+reaction_pred_log <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedMetab = NA, varExplainedEnzy = NA, TSS = NA)
+reaction_pred_linear <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedMetab = NA, varExplainedEnzy = NA, TSS = NA)
 
-for(rxN in length(rxnList)){
+cond_mapping <- data.frame(flux_cond = names(rxnList[[1]]$flux), met_reordering = c(11:15, 1:5, 6:10, 16:20, 21:25), enzyme_reordering = c(17:21, 2:6, 12:16, 7:11, 23:27)) #remove this when metabolite conditions are remapped onto flux/protein ones prior to this script
+cond_mapping$met_cond = rownames(rxnList[[1]]$rxnMet)[cond_mapping$met_reordering]
+cond_mapping$enzyme_cond = colnames(rxnList[[1]]$enzymeAbund)[cond_mapping$enzyme_reordering]
+
+for(rxN in 1:length(rxnList)){
   reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeAbund[,1])
   reaction_pred_linear$nmetab[rxN] <- reaction_pred_log$nmetab[rxN] <- sum(!is.na(rxnList[[rxN]]$rxnMet))/25
   
@@ -96,50 +95,99 @@ for(rxN in length(rxnList)){
     } else if(all(rxnList[[rxN]]$flux <= 0)){
       rxFlux <- log2(-1*rxnList[[rxN]]$flux)
     } else{
-      rxFlux <- rep(NA, n_c)
+      next
       } #if only forward flux consider its log, if only backwards flux consider the log of -1*flux, if the directionality changes then skip this rxn.
+  rxFlux[!is.finite(rxFlux)] <- NA
   
-  if(reaction_pred$nenz[rxN] == 0 & reaction_pred$nmetab[rxN] == 0){
+  reaction_pred_log$nCond[rxN] <- reaction_pred_linear$nCond[rxN] <- sum(!is.na(rxFlux))
+  
+  if(reaction_pred_linear$nenz[rxN] != 0){
+    enzyme_df = rxnList[[rxN]]$enzymeAbund[,cond_mapping$enzyme_reordering]
+    
+    lenzymes <- as.matrix(data.frame(t(enzyme_df))); colnames(lenzymes) <- rxnList[[rxN]]$enzymeAbund$Gene
+    enzymes <- 2^lenzymes
+    }else{lenzymes <- enzymes <- NULL}
+  if(reaction_pred_linear$nmetab[rxN] != 0){
+    metab_df = rxnList[[rxN]]$rxnMet[cond_mapping$met_reordering,]
+    
+    lmetabs <- as.matrix(data.frame(metab_df[,colSums(!is.na(metab_df) != 0) != 0])); colnames(lmetabs) <- colnames(rxnList[[rxN]]$rxnMet)[colSums(!is.na(rxnList[[rxN]]$rxnMet) != 0) != 0]
+    metabs <- 2^lmetabs
+    }else{lmetabs <- metabs <- NULL}
+  
+  if(reaction_pred_linear$nenz[rxN] == 0 & reaction_pred_linear$nmetab[rxN] == 0){
     next
-    } else if(reaction_pred$nenz[rxN] != 0 & reaction_pred$nmetab[rxN] == 0){
+    } else if(reaction_pred_linear$nenz[rxN] != 0 & reaction_pred_linear$nmetab[rxN] == 0){
     ### only enzymes ###
-      
-      
-    } else if(reaction_pred$nenz[rxN] == 0 & reaction_pred$nmetab[rxN] != 0){
-    ### only metabolites ###
       ### prediction using log measures ###
-      
+      reaction_pred_log$Fenz[rxN] <- anova(lm(rxFlux ~ lenzymes))$F[1]
+      reaction_pred_log$varExplainedEnzy[rxN] <- anova(lm(rxFlux ~ lenzymes))$Sum[1]
+      reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lenzymes))$Sum)
       
       ### prediction using linear measures ###
-      anova(
+      reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes))$F[1]
+      reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes))$Sum[1]
+      reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes))$Sum)  
       
-        anova(lm(rxnList[[rxN]]$flux ~ rxnList[[rxN]]$rxnMet[,colSums(!is.na(rxnList[[rxN]]$rxnMet) != 0) != 0]))
-        
-      rxnList[[rxN]]$rxnMet
+    } else if(reaction_pred_linear$nenz[rxN] == 0 & reaction_pred_linear$nmetab[rxN] != 0){
+    ### only metabolites ###
+      ### prediction using log measures ###
+      reaction_pred_log$Fmetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$F[1]
+      reaction_pred_log$varExplainedMetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$Sum[1]
+      reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lmetabs))$Sum)
       
-      
-      
-      
+      ### prediction using linear measures ###
+      reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ metabs))$F[1]
+      reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ metabs))$Sum[1]
+      reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ metabs))$Sum)
       
     } else{
     ### both metabolites and enzymes ###
+      reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$F[2]
+      reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$F[1]
+      reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum[2]
+      reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum[1]
+      reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum)
       
+      reaction_pred_log$Fmetab[rxN] <- anova(lm(rxFlux ~ lenzymes + lmetabs))$F[2]
+      reaction_pred_log$Fenz[rxN] <- anova(lm(rxFlux ~ lenzymes + lmetabs))$F[1]
+      reaction_pred_log$varExplainedMetab[rxN] <- anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum[2]
+      reaction_pred_log$varExplainedEnzy[rxN] <- anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum[1]
+      reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum)
       
     }
-    
-  
-  rxnList[[rxN]]$rxnMet
-  
-  
-  
   }
 
+qplot(reaction_pred_linear$Fmetab)
+qplot(reaction_pred_linear$Fenz)
 
+reaction_pred_summary_log <- data.frame(N = reaction_pred_log$nCond, metaboliteVarianceExplained = reaction_pred_log$varExplainedMetab/reaction_pred_log$TSS, enzymeVarianceExplained = reaction_pred_log$varExplainedEnzy/reaction_pred_log$TSS)
+reaction_pred_summary_linear <- data.frame(N = reaction_pred_linear$nCond, metaboliteVarianceExplained = reaction_pred_linear$varExplainedMetab/reaction_pred_linear$TSS, enzymeVarianceExplained = reaction_pred_linear$varExplainedEnzy/reaction_pred_linear$TSS)
 
-flux_summary$IDs
-flux_summary$ceulluarFluxes
+residualDF <- reaction_pred_log$nCond - reaction_pred_log$nmetab - reaction_pred_log$nenz
+residualDF <- residualDF[reaction_pred_summary_log$N >= 15]
 
+reaction_pred_summary_log <- reaction_pred_summary_log[reaction_pred_summary_log$N >= 15,-1]
+reaction_pred_summary_linear <- reaction_pred_summary_linear[reaction_pred_summary_linear$N >= 15,-1]
 
+reaction_pred_summary_log <- reaction_pred_summary_log[order(apply(reaction_pred_summary_log, 1, sum, na.rm = TRUE)),]
+reaction_pred_summary_linear <- reaction_pred_summary_linear[order(apply(reaction_pred_summary_linear, 1, sum, na.rm = TRUE)),]
+
+reaction_pred_summary_plotter <- rbind(data.frame(modelType = "logFlux ~ logMetab + logEnzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_log[,1])), reaction_pred_summary_log), id.vars = "index")),
+data.frame(modelType = "Flux ~ Metab + Enzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_linear[,1])), reaction_pred_summary_linear), id.vars = "index")))
+
+reaction_pred_summary_plotter <- reaction_pred_summary_plotter[!is.na(reaction_pred_summary_plotter$value),]
+
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank()) 
+ 
+rxnPredictionPlot <- ggplot(reaction_pred_summary_plotter, aes(x = factor(index), y = value, fill = as.factor(variable), color = "black")) + facet_grid(modelType ~ .)
+rxnPredictionPlot + geom_bar(binwidth = 1) + barplot_theme + geom_vline(aes(xintercept = 0), size = 0.5) + geom_hline(aes(yintercept = 0), size = 0.5) + 
+  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) +
+  scale_fill_manual(values = c("enzymeVarianceExplained" = "sienna1", "metaboliteVarianceExplained" = "steelblue1")) + scale_color_identity()
+  
+
+ggsave("varianceExplained.pdf", width = 20, height = 12)
+        
 library(reshape2) #for visualization at the end
 
 
