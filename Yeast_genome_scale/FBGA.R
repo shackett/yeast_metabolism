@@ -4,6 +4,8 @@
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 library(reshape2) #for visualization at the end
+library(nnls) #for non-negative regression used to fit kinetic parameters
+library(ggplot2)
 
 options(stringsAsFactors = FALSE)
 
@@ -229,37 +231,163 @@ for(rxN in 1:length(rxnList_form)){
   met_abund <- rxnSummary$rxnMet[cond_mapping$met_reordering,]
   met_abund <- met_abund[,colnames(met_abund) %in% kineticPars$rel_spec]
   
-  kineticPars$measured[kineticPars$SpeciesType == "Enzyme"] <- TRUE
   kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
   
-  experimentalData <- data.frame(cbind(enzyme_abund, met_abund))
-  colnames(experimentalData) <- ifelse(kineticPars$SpeciesType[kineticPars$SpeciesType %in% c("Enzyme", "Metabolite")] == "Enzyme", kineticPars$commonName[kineticPars$SpeciesType %in% c("Enzyme", "Metabolite")], kineticPars$modelName[kineticPars$SpeciesType %in% c("Enzyme", "Metabolite")])
-  experimentalData_linear <- 2^experimentalData
   
+  ### set missing data to invariant across conditions
+  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 1
+  met_abund <- met_abund^2
+  colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
+    
+  enzyme_abund <- enzyme_abund^2
+  
+  flux <- rxnSummary$flux/median(abs(rxnSummary$flux)) #flux, scaled to a prettier range
+  
+  
+  
+  
+  
+  markov_pars <- list()
+    markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+    markov_pars$n_samples <- 10000 #how many total markov samples are desired
+    markov_pars$burn_in <- 500 #how many initial samples should be skipped
+  
+  kineticParPrior <- data.frame(distribution = rep(NA, times = length(kineticPars[,1])), par_1 = NA, par_2 = NA) #par1/2 of a uniform are the lower bound and upper bound; par1/2 of a normal are the mean and variance
+  kineticParPrior$distribution <- "unif"
+  kineticParPrior$par_1 <- -10; kineticParPrior$par_2 <- 10
+  
+  lik_track <- NULL
+  markov_par_vals <- matrix(NA, ncol = length(kineticPars[,1]), nrow = markov_pars$n_samples)
+  colnames(markov_par_vals) <- kineticPars$formulaName
+  
+  current_pars <- rep(NA, times = length(kineticParPrior[,1]))
+  current_pars <- par_draw(1:length(kineticParPrior[,1]))
+  current_lik <- lik_calc(current_pars)
+  
+  for(i in 1:(markov_pars$burn_in + markov_pars$n_samples*markov_pars$sample_freq)){
+    for(j in 1:length(kineticPars[,1])){#loop over parameters values
+      proposed_par <- par_draw(j)
+      proposed_lik <- lik_calc(proposed_par)
+      if(runif(1, 0, 1) < exp(proposed_lik - current_lik)){
+        current_pars <- proposed_par
+        current_lik <- proposed_lik
+        }
+      }
+    
+    if(i > markov_pars$burn_in){
+      if((i - markov_pars$burn_in) %% markov_pars$sample_freq == 0){
+        markov_par_vals[(i - markov_pars$burn_in)/markov_pars$sample_freq,] <- current_pars
+        lik_track <- c(lik_track, current_lik)
+        }
+      }
+    }
+  
+  colnames(markov_par_vals) <- ifelse(kineticPars$SpeciesType == "keq", "keq", kineticPars$commonName)
+  }
+
+par_draw <- function(updates){
+  #### update parameters using their prior (given by kineticParPrior) - update those those parameters whose index is in "updates" ####
+  
+  draw <- current_pars
+  for(par_n in updates){
+    if(kineticParPrior$distribution[par_n] == "unif"){
+      draw[par_n] <- runif(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
+      } else if(kineticParPrior$distribution[par_n] == "unif"){
+      draw[par_n] <- rnorm(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
+      }
+    }
+  draw
+  }
+
  
- #### generate a complete data matrix
+
+lik_calc <- function(proposed_params){
+  #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
   
+  par_stack <- rep(1, n_c) %*% t(proposed_params); colnames(par_stack) <- kineticPars$formulaName
+  par_stack <- exp(par_stack)
+  occupancy_vals <- data.frame(met_abund, par_stack)
   
-  #### Create a parameter list over indivduals where there are elements for enzyme pseudo-counts, mixing fractions and Km relative to mean(S)
+  predOcc <- model.matrix(occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*enzyme_abund #occupany of enzymes * relative abundance of enzymes
   
-       
-  #for enzyme mixtures, draw from a dirichlet 
+  flux_fit <- nnls(enzyme_activity, flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  fit_resid_error <- sqrt(mean((flux_fit$resid - mean(flux_fit$resid))^2))
   
+  sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
+  
+  }
+
+
+
+flux_fitting <- function(x){
+  # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
   
   
   }
 
-# form a Km hyperparameter using the distribution of [met]/km estimates
+
+param_compare <- function(kineticPars){
+  # visualize the joint and marginal distribution of parameter values from the markov chain
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank()) 
+  
+  hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "gray90"), legend.position = "top", 
+  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
+
+  
+  par_combinations <- expand.grid(1:length(kineticPars[,1]), 1:length(kineticPars[,1]))
+  like_comparison <- ifelse(par_combinations[,1] == par_combinations[,2], TRUE, FALSE)
+  
+  par_comp_like <- NULL
+  for(i in 1:sum(like_comparison)){
+    par_comp_like <- rbind(par_comp_like, data.frame(xval = markov_par_vals[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(markov_par_vals)[par_combinations[like_comparison,][i,1]],
+         parameter_2 = colnames(markov_par_vals)[par_combinations[like_comparison,][i,1]]))
+      }
+  
+  par_comp_dissimilar <- NULL
+  for(i in 1:sum(!like_comparison)){
+    par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = markov_par_vals[,par_combinations[!like_comparison,][i,1]], yval = markov_par_vals[,par_combinations[!like_comparison,][i,2]], 
+          parameter_1 = colnames(markov_par_vals)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(markov_par_vals)[par_combinations[!like_comparison,][i,2]]))
+      }
+  
+  #### determine the maximum bin from the histogram so that values can be scaled to the bivariate histogram values ###
+  par_comp_like
+  par_hist_binwidth = 0.2
+  
+  max_density <- max(apply(markov_par_vals, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
+  
+  par_comp_dissimilar$yval <- par_comp_dissimilar$yval*(max_density/20) + max_density/2
+  
+  
+  ggplot() + geom_tile(data = par_comp_dissimilar, aes(x = xval, y = yval))
+  + geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth) + facet_grid(parameter_2 ~ parameter_1, scales = "fixed")
+  
+  
+  
+  parPoint <- sapply(rownames(parCorrMat), function(x){paste(x, colnames(parCorrMat), sep = "/")})
+parAssoc <- parPoint[upper.tri(parCorrMat)][abs(parCorrMat[upper.tri(parCorrMat)]) > corCO]
+if(length(parAssoc) != 0){
+  
+  for(parSet in parAssoc){
+    bivariateDF <- data.frame(log(gaConstants[,c(1:parNum)[assocConst$name %in% strsplit(parSet, split = '/')[[1]]]]))
+    colnames(bivariateDF) <- c("P1", "P2")
+    print(ggplot(bivariateDF, aes(x = P1, y = P2)) + geom_hex() + scale_x_continuous(assocConst$name[assocConst$name %in% strsplit(parSet, split = '/')[[1]]][1], expand = c(0.02,0.02)) +
+      scale_y_continuous(assocConst$name[assocConst$name %in% strsplit(parSet, split = '/')[[1]]][2], expand = c(0.02,0.02)) + hex_theme +
+      scale_fill_gradient(name = "Counts", low = "black", high = "firebrick1"))
+    }
+   
+     
+  }
+  
+  
+  
+  markov_par_vals
+  
+  }
 
 
-### Km values drawn from a uniform from mean(log) +/- 10
-### vector of mixing proportions drawn from Dirichlet(alpha)
-### alpha pseudo-counts mutate by adding a rounded random normal number to each class - keep track of each individuals pseudocounts (alpha) and the actual corresponding parameter - Dir(alpha)
 
-
-
-# look at subset of reactions which carry flux
-# using 
 
 
 
