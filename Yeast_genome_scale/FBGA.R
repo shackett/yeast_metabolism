@@ -205,17 +205,44 @@ reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$rxnID
 rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
 
 for(rxN in 1:length(rxnList_form)){
-  rxnForm <- rxnList_form[[rxN]]$rxnForm
+  rxnSummary <- rxnList_form[[rxN]]
   
-  kineticPars
-  data.frame(rel_spec = c(rxnList_form[[rxN]]$enzymeAbund[,1], colnames(rxnList_form[[rxN]]$rxnMet)), 
-             SpeciesType = c(rep("Enzyme", times = length(rxnList_form[[rxN]]$enzymeAbund[,1])), rep("Metabolite", times = length(colnames(rxnList_form[[rxN]]$rxnMet))))
-  length(rxnList_form[[rxN]]$enzymeAbund[,1]) + length(rxnList_form[[rxN]]$rxnMet[1,])
+  occupancyEq <- as.formula(paste("~", sub(paste(paste("E", rxnSummary$rxnID, sep = "_"), " \\* ", paste("V", rxnSummary$rxnID, sep = "_"), sep = ""), "1", rxnSummary$rxnForm)[2], sep = " "))
+  #rxnSummary$rxnForm <- as.formula(paste("~", sub(paste(" \\* ", paste("V", rxnSummary$rxnID, sep = "_"), sep = ""), "", rxnForm)[2], sep = " ")) #collapse E and Kcat into Vmax
+  
+  ### Create a data.frame describing the relevent parameters for the model ###
+  kineticPars <- data.frame(rel_spec = c(rxnSummary$enzymeAbund[,1], colnames(rxnSummary$rxnMet)), 
+      SpeciesType = c(rep("Enzyme", times = length(rxnSummary$enzymeAbund[,1])), rep("Metabolite", times = length(colnames(rxnSummary$rxnMet)))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
+  kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste("E", rxnSummary$rxnID, sep = "_")
+  kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metsID2tID[names( rxnSummary$metsID2tID) == x]}))
+  kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metShortnames[names(rxnSummary$metShortnames) == x]}))
+  kineticPars$commonName[kineticPars$SpeciesType == "Enzyme"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
+  kineticPars$formulaName[kineticPars$SpeciesType == "Metabolite"] <- paste("K", rxnSummary$rxnID, kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"], sep = "_")
+  
+  all_species <- kineticPars[sapply(kineticPars$formulaName, function(ele_used){length(grep(ele_used, occupancyEq)) != 0}) | kineticPars$SpeciesType == "Enzyme",]
+  
+  kineticPars <- kineticPars[sapply(kineticPars$formulaName, function(ele_used){length(grep(ele_used, occupancyEq)) != 0}),] #remove species which dont appear in the reaction equation
+  kineticPars <- rbind(kineticPars, c("keq", "keq", NA, NA, paste("Keq", rxnSummary$rxnID, sep = ""), NA))
+  
+  ### Create a matrix containing the metabolites and enzymes 
+  enzyme_abund <- t(rxnSummary$enzymeAbund[,cond_mapping$enzyme_reordering]); colnames(enzyme_abund) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
+  met_abund <- rxnSummary$rxnMet[cond_mapping$met_reordering,]
+  met_abund <- met_abund[,colnames(met_abund) %in% kineticPars$rel_spec]
+  
+  kineticPars$measured[kineticPars$SpeciesType == "Enzyme"] <- TRUE
+  kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
+  
+  experimentalData <- data.frame(cbind(enzyme_abund, met_abund))
+  colnames(experimentalData) <- ifelse(kineticPars$SpeciesType[kineticPars$SpeciesType %in% c("Enzyme", "Metabolite")] == "Enzyme", kineticPars$commonName[kineticPars$SpeciesType %in% c("Enzyme", "Metabolite")], kineticPars$modelName[kineticPars$SpeciesType %in% c("Enzyme", "Metabolite")])
+  experimentalData_linear <- 2^experimentalData
+  
+ 
+ #### generate a complete data matrix
   
   
+  #### Create a parameter list over indivduals where there are elements for enzyme pseudo-counts, mixing fractions and Km relative to mean(S)
   
-  gsub(rxnForm, 
-  
+       
   #for enzyme mixtures, draw from a dirichlet 
   
   
