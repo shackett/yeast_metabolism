@@ -199,25 +199,41 @@ rxnPredictionPlot + geom_bar(binwidth = 1) + barplot_theme + geom_vline(aes(xint
   
 
 ggsave("varianceExplained.pdf", width = 20, height = 12)
-        
+
+
+
+#### Determine which reaction have valid reaction mechanisms ####
+
+reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$rxnID, NA)})  
+rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
+
+#### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
+
+
 ##### looking at subset of reactions where a kinetic form was produced because most/all substrates were ascertained ####
 
-reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$rxnID, NA)})
-  
-rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
+run_summary <- list() #### MCMC run output and formatted inputs
+
+markov_pars <- list()
+    markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+    markov_pars$n_samples <- 10000 #how many total markov samples are desired
+    markov_pars$burn_in <- 500 #how many initial samples should be skipped
+
+run_summary$markov_pars <- markov_pars
+
+
 
 for(rxN in 1:length(rxnList_form)){
   rxnSummary <- rxnList_form[[rxN]]
   
   occupancyEq <- as.formula(paste("~", sub(paste(paste("E", rxnSummary$rxnID, sep = "_"), " \\* ", paste("V", rxnSummary$rxnID, sep = "_"), sep = ""), "1", rxnSummary$rxnForm)[2], sep = " "))
-  #rxnSummary$rxnForm <- as.formula(paste("~", sub(paste(" \\* ", paste("V", rxnSummary$rxnID, sep = "_"), sep = ""), "", rxnForm)[2], sep = " ")) #collapse E and Kcat into Vmax
   
   ### Create a data.frame describing the relevent parameters for the model ###
   kineticPars <- data.frame(rel_spec = c(rxnSummary$enzymeAbund[,1], colnames(rxnSummary$rxnMet)), 
       SpeciesType = c(rep("Enzyme", times = length(rxnSummary$enzymeAbund[,1])), rep("Metabolite", times = length(colnames(rxnSummary$rxnMet)))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
   kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste("E", rxnSummary$rxnID, sep = "_")
   kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metsID2tID[names( rxnSummary$metsID2tID) == x]}))
-  kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metShortnames[names(rxnSummary$metShortnames) == x]}))
+  kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metNames[names(rxnSummary$metNames) == x]}))
   kineticPars$commonName[kineticPars$SpeciesType == "Enzyme"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
   kineticPars$formulaName[kineticPars$SpeciesType == "Metabolite"] <- paste("K", rxnSummary$rxnID, kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"], sep = "_")
   
@@ -243,14 +259,15 @@ for(rxN in 1:length(rxnList_form)){
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux)) #flux, scaled to a prettier range
   
+  #### write flux parameters to a list ####
+  run_summary[[names(rxnList_form)[rxN]]]$metabolites <- met_abund
+  run_summary[[names(rxnList_form)[rxN]]]$enzymes <- enzyme_abund
+  run_summary[[names(rxnList_form)[rxN]]]$flux <- flux
+  run_summary[[names(rxnList_form)[rxN]]]$conditions <- NULL
+  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- occupancyEq
+
   
   
-  
-  
-  markov_pars <- list()
-    markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-    markov_pars$n_samples <- 10000 #how many total markov samples are desired
-    markov_pars$burn_in <- 500 #how many initial samples should be skipped
   
   kineticParPrior <- data.frame(distribution = rep(NA, times = length(kineticPars[,1])), par_1 = NA, par_2 = NA) #par1/2 of a uniform are the lower bound and upper bound; par1/2 of a normal are the mean and variance
   kineticParPrior$distribution <- "unif"
@@ -283,6 +300,19 @@ for(rxN in 1:length(rxnList_form)){
     }
   
   colnames(markov_par_vals) <- ifelse(kineticPars$SpeciesType == "keq", "keq", kineticPars$commonName)
+  
+  colnames(markov_par_vals) <- unname(sapply(colnames(markov_par_vals), function(name_int){
+    if(length(strsplit(name_int, split = "")[[1]]) >= 22){
+      split_name <- strsplit(name_int, split = "")[[1]]
+      split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(22 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
+      split_name[split_pois] <- "\n"
+      paste(split_name, collapse = "")
+      }else{name_int}
+    }))
+  
+  run_summary[[names(rxnList_form)[rxN]]]$markovParams <- markov_pars
+  run_summary[[names(rxnList_form)[rxN]]]$markovChain <- markov_par_vals
+  
   }
 
 par_draw <- function(updates){
@@ -300,6 +330,10 @@ par_draw <- function(updates){
   }
 
  
+
+
+
+
 
 lik_calc <- function(proposed_params){
   #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
@@ -322,19 +356,23 @@ lik_calc <- function(proposed_params){
 
 flux_fitting <- function(x){
   # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
+  param_interval <- exp(apply(markov_par_vals, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
+  param_interval <- data.frame(cbind(t(param_interval), median = exp(apply(markov_par_vals, 2, median))))
   
+  par_stack <- rep(1, n_c) %*% t(param_interval$median); colnames(par_stack) <- kineticPars$formulaName
+  occupancy_vals <- data.frame(met_abund, par_stack)
+  predOcc <- model.matrix(occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  flux_fit <- nnls(enzyme_activity, flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  
+  anova(lm(flux ~ flux_fit$fitted))$S[1]/sum(anova(lm(flux ~ flux_fit$fitted))$S)
+  anova(lm(flux ~ enzyme_abund + met_abund))
   
   }
 
 
 param_compare <- function(kineticPars){
   # visualize the joint and marginal distribution of parameter values from the markov chain
-  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank()) 
-  
-  hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "gray90"), legend.position = "top", 
-  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
-
   
   par_combinations <- expand.grid(1:length(kineticPars[,1]), 1:length(kineticPars[,1]))
   like_comparison <- ifelse(par_combinations[,1] == par_combinations[,2], TRUE, FALSE)
@@ -352,42 +390,33 @@ param_compare <- function(kineticPars){
       }
   
   #### determine the maximum bin from the histogram so that values can be scaled to the bivariate histogram values ###
-  par_comp_like
+
   par_hist_binwidth = 0.2
   
   max_density <- max(apply(markov_par_vals, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
   
+  
   par_comp_dissimilar$yval <- par_comp_dissimilar$yval*(max_density/20) + max_density/2
+  density_trans_inv <- function(x){x*(max_density/20) + max_density/2}
+  density_trans <- function(x){(x - max_density/2)/(max_density/20)}
+  
+  density_trans <- function(){function(x) (x - max_density/2)/(max_density/20)}
   
   
-  ggplot() + geom_tile(data = par_comp_dissimilar, aes(x = xval, y = yval))
-  + geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth) + facet_grid(parameter_2 ~ parameter_1, scales = "fixed")
+  hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), 
+      legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
+      panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line"), axis.title = element_blank()) 
+
+  ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
+    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), labels = c(0:floor(max_density/50))*50, breaks = c(0:floor(max_density/50))*50) +
+    scale_x_continuous(NULL, expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5)))
+
+  
+  ggsave("mcmc_output.pdf", width = 20, height = 20)
   
   
-  
-  parPoint <- sapply(rownames(parCorrMat), function(x){paste(x, colnames(parCorrMat), sep = "/")})
-parAssoc <- parPoint[upper.tri(parCorrMat)][abs(parCorrMat[upper.tri(parCorrMat)]) > corCO]
-if(length(parAssoc) != 0){
-  
-  for(parSet in parAssoc){
-    bivariateDF <- data.frame(log(gaConstants[,c(1:parNum)[assocConst$name %in% strsplit(parSet, split = '/')[[1]]]]))
-    colnames(bivariateDF) <- c("P1", "P2")
-    print(ggplot(bivariateDF, aes(x = P1, y = P2)) + geom_hex() + scale_x_continuous(assocConst$name[assocConst$name %in% strsplit(parSet, split = '/')[[1]]][1], expand = c(0.02,0.02)) +
-      scale_y_continuous(assocConst$name[assocConst$name %in% strsplit(parSet, split = '/')[[1]]][2], expand = c(0.02,0.02)) + hex_theme +
-      scale_fill_gradient(name = "Counts", low = "black", high = "firebrick1"))
-    }
-   
      
   }
-  
-  
-  
-  markov_par_vals
-  
-  }
-
-
-
 
 
 
