@@ -13,6 +13,8 @@ n_c <- 25
 
 ######## Import all of the species involved in a reaction and other reaction information ###########
 
+load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
+
 ##### import list of metabolite abundances and rxn forms
 
 load("rxnf_formulametab.rdata")
@@ -221,6 +223,13 @@ markov_pars <- list()
 
 run_summary$markov_pars <- markov_pars
 
+### compare variance explained using NNLS vs LS vs rxn form
+### flux vs predicted flux colored by condition
+### metabolite abundance ~ DR colored by condition, faceted over metabolites
+### enzyme abundance ~ DR colored by condition, faceted over enzymes
+### import conditions list
+### analyze metabolomics data - convert to the same DR in proteomics/flux
+
 
 
 for(rxN in 1:length(rxnList_form)){
@@ -265,7 +274,7 @@ for(rxN in 1:length(rxnList_form)){
   run_summary[[names(rxnList_form)[rxN]]]$flux <- flux
   run_summary[[names(rxnList_form)[rxN]]]$conditions <- NULL
   run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- occupancyEq
-
+  run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
   
   
   
@@ -365,9 +374,19 @@ flux_fitting <- function(x){
   enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*enzyme_abund #occupany of enzymes * relative abundance of enzymes
   flux_fit <- nnls(enzyme_activity, flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
   
-  anova(lm(flux ~ flux_fit$fitted))$S[1]/sum(anova(lm(flux ~ flux_fit$fitted))$S)
-  anova(lm(flux ~ enzyme_abund + met_abund))
+  fit_summary <- data.frame(parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
   
+  ### using flux fitted from the median parameter set, how much variance is explained
+  fit_summary$parametricFit = anova(lm(flux ~ flux_fit$fitted))$S[1]
+  
+  ### using flux fitted using non-negative least squares regression, how much variance is explained
+  fit_summary$NNLS = anova(lm(flux ~ nnls(as.matrix(data.frame(met_abund, enzyme_abund)), flux)$fitted))$S[1]
+  
+  ### using LS regression, how much variance is explained 
+  fit_summary$LS_met = anova(lm(flux ~ met_abund))$S[1]
+  fit_summary$LS_enzyme = anova(lm(flux ~ enzyme_abund))$S[1]
+  fit_summary$LS = sum(anova(lm(flux ~ met_abund + enzyme_abund))$S[1:2])
+  fit_summary$TSS = sum(anova(lm(flux ~ met_abund + enzyme_abund))$S)
   }
 
 
