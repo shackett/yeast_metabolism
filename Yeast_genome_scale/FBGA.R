@@ -17,7 +17,10 @@ load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific bo
 
 ##### import list of metabolite abundances and rxn forms
 
-load("rxnf_formulametab.rdata")
+chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.05H2")),] # the 25 chemostat conditions of interest and their actual growth rates
+
+
+load("rxnf_formulametab.rdata") #### run Vito script which using the stoichiometric matrix and FBA_run files to construct a list of reaction information, including a mechanism.
 
 ##### Import fluxes
 load("fluxSummaryQP.Rdata") #load flux through each reaction
@@ -88,13 +91,14 @@ for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactio
 #save(rxnList_all, file = "all_rxnList.Rdata")
 
 
-##### predict flux ####
+##### predict flux using linear regression using either metabolites and enzymes or their log - partition variance explained into that explained by metabolite and by enzymes ####
 
-reaction_pred_log <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedMetab = NA, varExplainedEnzy = NA, TSS = NA)
-reaction_pred_linear <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedMetab = NA, varExplainedEnzy = NA, TSS = NA)
+reaction_pred_log <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, TSS = NA)
+reaction_pred_linear <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, TSS = NA)
 
-cond_mapping <- data.frame(flux_cond = names(rxnList[[1]]$flux), met_reordering = c(11:15, 1:5, 6:10, 16:20, 21:25), enzyme_reordering = c(17:21, 2:6, 12:16, 7:11, 23:27)) #remove this when metabolite conditions are remapped onto flux/protein ones prior to this script
-cond_mapping$met_cond = rownames(rxnList[[1]]$rxnMet)[cond_mapping$met_reordering]
+
+cond_mapping <- data.frame(flux_cond = names(rxnList[[1]]$flux), met_reordering = c(11:15, 1:5, 6:10, 16:20, 21:25), enzyme_reordering = sapply(toupper(chemostatInfo$condition), function(x){c(1:length(colnames(rxnList[[1]]$enzymeAbund)))[colnames(rxnList[[1]]$enzymeAbund) == x]})) #remove this when metabolite conditions are remapped onto flux/protein ones prior to this script
+cond_mapping$met_cond = rownames(rxnList[[1]]$rxnMet)[cond_mapping$met_reordering] #remove this when new metabolite abundance are introduced
 cond_mapping$enzyme_cond = colnames(rxnList[[1]]$enzymeAbund)[cond_mapping$enzyme_reordering]
 
 for(rxN in 1:length(rxnList)){
@@ -127,44 +131,46 @@ for(rxN in 1:length(rxnList)){
   
   if(reaction_pred_linear$nenz[rxN] == 0 & reaction_pred_linear$nmetab[rxN] == 0){
     next
-    } else if(reaction_pred_linear$nenz[rxN] != 0 & reaction_pred_linear$nmetab[rxN] == 0){
+    }
+  
+  if(reaction_pred_linear$nenz[rxN] != 0){
     ### only enzymes ###
-      ### prediction using log measures ###
-      reaction_pred_log$Fenz[rxN] <- anova(lm(rxFlux ~ lenzymes))$F[1]
-      reaction_pred_log$varExplainedEnzy[rxN] <- anova(lm(rxFlux ~ lenzymes))$Sum[1]
-      reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lenzymes))$Sum)
-      
-      ### prediction using linear measures ###
-      reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes))$F[1]
-      reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes))$Sum[1]
-      reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes))$Sum)  
-      
-    } else if(reaction_pred_linear$nenz[rxN] == 0 & reaction_pred_linear$nmetab[rxN] != 0){
+    ### prediction using log measures ###
+    reaction_pred_log$Fenz[rxN] <- anova(lm(rxFlux ~ lenzymes))$F[1]
+    reaction_pred_log$varExplainedEnzy[rxN] <- anova(lm(rxFlux ~ lenzymes))$Sum[1]
+    reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lenzymes))$Sum)
+  
+    ### prediction using linear measures ###
+    reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes))$F[1]
+    reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes))$Sum[1]
+    reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes))$Sum)  
+    }  
+  
+  if(reaction_pred_linear$nmetab[rxN] != 0){
     ### only metabolites ###
-      ### prediction using log measures ###
-      reaction_pred_log$Fmetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$F[1]
-      reaction_pred_log$varExplainedMetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$Sum[1]
-      reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lmetabs))$Sum)
+    ### prediction using log measures ###
+    reaction_pred_log$Fmetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$F[1]
+    reaction_pred_log$varExplainedMetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$Sum[1]
+    reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lmetabs))$Sum)
       
-      ### prediction using linear measures ###
-      reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ metabs))$F[1]
-      reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ metabs))$Sum[1]
-      reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ metabs))$Sum)
-      
-    } else{
+    ### prediction using linear measures ###
+    reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ metabs))$F[1]
+    reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ metabs))$Sum[1]
+    reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ metabs))$Sum)
+    }  
+  
+  if(reaction_pred_linear$nmetab[rxN] != 0 & reaction_pred_linear$nenz[rxN] != 0){
     ### both metabolites and enzymes ###
-      reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$F[2]
-      reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$F[1]
-      reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum[2]
-      reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum[1]
-      reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum)
-      
-      reaction_pred_log$Fmetab[rxN] <- anova(lm(rxFlux ~ lenzymes + lmetabs))$F[2]
-      reaction_pred_log$Fenz[rxN] <- anova(lm(rxFlux ~ lenzymes + lmetabs))$F[1]
-      reaction_pred_log$varExplainedMetab[rxN] <- anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum[2]
-      reaction_pred_log$varExplainedEnzy[rxN] <- anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum[1]
-      reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum)
-      
+    reaction_pred_linear$varExplainedTotal[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum[1:2])
+    reaction_pred_log$varExplainedTotal[rxN] <- sum(anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum[1:2])
+    
+    reaction_pred_linear$varExplainedEither[rxN] <- sum(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN]) - reaction_pred_linear$varExplainedTotal[rxN]
+    reaction_pred_linear$varExplainedEnzy[rxN] <- reaction_pred_linear$varExplainedEnzy[rxN] - reaction_pred_linear$varExplainedEither[rxN]
+    reaction_pred_linear$varExplainedMetab[rxN] <- reaction_pred_linear$varExplainedMetab[rxN] - reaction_pred_linear$varExplainedEither[rxN]
+    
+    reaction_pred_log$varExplainedEither[rxN] <- sum(reaction_pred_log$varExplainedMetab[rxN], reaction_pred_log$varExplainedEnzy[rxN]) - reaction_pred_log$varExplainedTotal[rxN]
+    reaction_pred_log$varExplainedEnzy[rxN] <- reaction_pred_log$varExplainedEnzy[rxN] - reaction_pred_log$varExplainedEither[rxN]
+    reaction_pred_log$varExplainedMetab[rxN] <- reaction_pred_log$varExplainedMetab[rxN] - reaction_pred_log$varExplainedEither[rxN]
     }
   }
 
@@ -172,8 +178,15 @@ for(rxN in 1:length(rxnList)){
 qplot(reaction_pred_linear$Fmetab)
 qplot(reaction_pred_linear$Fenz)
 
-reaction_pred_summary_log <- data.frame(N = reaction_pred_log$nCond, metaboliteVarianceExplained = reaction_pred_log$varExplainedMetab/reaction_pred_log$TSS, enzymeVarianceExplained = reaction_pred_log$varExplainedEnzy/reaction_pred_log$TSS)
-reaction_pred_summary_linear <- data.frame(N = reaction_pred_linear$nCond, metaboliteVarianceExplained = reaction_pred_linear$varExplainedMetab/reaction_pred_linear$TSS, enzymeVarianceExplained = reaction_pred_linear$varExplainedEnzy/reaction_pred_linear$TSS)
+reaction_pred_log$varExplainedJointly <- NA; reaction_pred_log$varExplainedJointly[!is.na(reaction_pred_log$varExplainedEither) & reaction_pred_log$varExplainedEither < 0] <- -1*reaction_pred_log$varExplainedEither[!is.na(reaction_pred_log$varExplainedEither) & reaction_pred_log$varExplainedEither < 0]
+reaction_pred_linear$varExplainedJointly <- NA; reaction_pred_linear$varExplainedJointly[!is.na(reaction_pred_linear$varExplainedEither) & reaction_pred_linear$varExplainedEither < 0] <- -1*reaction_pred_linear$varExplainedEither[!is.na(reaction_pred_linear$varExplainedEither) & reaction_pred_linear$varExplainedEither < 0]
+reaction_pred_log$varExplainedEither[!is.na(reaction_pred_log$varExplainedEither) & reaction_pred_log$varExplainedEither < 0] <- NA
+reaction_pred_linear$varExplainedEither[!is.na(reaction_pred_linear$varExplainedEither) & reaction_pred_linear$varExplainedEither < 0] <- NA
+
+reaction_pred_summary_log <- data.frame(N = reaction_pred_log$nCond, metaboliteVarianceExplained = reaction_pred_log$varExplainedMetab/reaction_pred_log$TSS, enzymeVarianceExplained = reaction_pred_log$varExplainedEnzy/reaction_pred_log$TSS, 
+        varianceAmbiguouslyExplained = reaction_pred_log$varExplainedEither/reaction_pred_log$TSS, varianceJointlyExplained = reaction_pred_log$varExplainedJointly/reaction_pred_log$TSS)
+reaction_pred_summary_linear <- data.frame(N = reaction_pred_linear$nCond, metaboliteVarianceExplained = reaction_pred_linear$varExplainedMetab/reaction_pred_linear$TSS, enzymeVarianceExplained = reaction_pred_linear$varExplainedEnzy/reaction_pred_linear$TSS,
+        varianceAmbiguouslyExplained = reaction_pred_linear$varExplainedEither/reaction_pred_linear$TSS, varianceJointlyExplained = reaction_pred_linear$varExplainedJointly/reaction_pred_linear$TSS)
 rownames(reaction_pred_summary_log) <- rownames(reaction_pred_summary_linear) <- names(rxnList)
 
 
@@ -197,10 +210,20 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
 rxnPredictionPlot <- ggplot(reaction_pred_summary_plotter, aes(x = factor(index), y = value, fill = as.factor(variable), color = "black")) + facet_grid(modelType ~ .)
 rxnPredictionPlot + geom_bar(binwidth = 1) + barplot_theme + geom_vline(aes(xintercept = 0), size = 0.5) + geom_hline(aes(yintercept = 0), size = 0.5) + 
   scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) +
-  scale_fill_manual(values = c("enzymeVarianceExplained" = "sienna1", "metaboliteVarianceExplained" = "steelblue1")) + scale_color_identity()
+  scale_fill_manual(values = c("enzymeVarianceExplained" = "sienna1", "metaboliteVarianceExplained" = "steelblue1", varianceAmbiguouslyExplained = "olivedrab3", varianceJointlyExplained = "red")) + scale_color_identity()
   
 
 ggsave("varianceExplained.pdf", width = 20, height = 12)
+
+
+### compare variance explained using NNLS vs LS vs rxn form
+### flux vs predicted flux colored by condition
+### metabolite abundance ~ DR colored by condition, faceted over metabolites
+### enzyme abundance ~ DR colored by condition, faceted over enzymes
+### import conditions list
+### analyze metabolomics data - convert to the same DR in proteomics/flux
+
+
 
 
 
@@ -214,6 +237,8 @@ rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
 
 ##### looking at subset of reactions where a kinetic form was produced because most/all substrates were ascertained ####
 
+load("paramOptim.Rdata")
+
 run_summary <- list() #### MCMC run output and formatted inputs
 
 markov_pars <- list()
@@ -221,25 +246,64 @@ markov_pars <- list()
     markov_pars$n_samples <- 10000 #how many total markov samples are desired
     markov_pars$burn_in <- 500 #how many initial samples should be skipped
 
+markov_pars <- list()
+    markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+    markov_pars$n_samples <- 100 #how many total markov samples are desired
+    markov_pars$burn_in <- 0 #how many initial samples should be skipped
+
+
 run_summary$markov_pars <- markov_pars
 
-### compare variance explained using NNLS vs LS vs rxn form
-### flux vs predicted flux colored by condition
-### metabolite abundance ~ DR colored by condition, faceted over metabolites
-### enzyme abundance ~ DR colored by condition, faceted over enzymes
-### import conditions list
-### analyze metabolomics data - convert to the same DR in proteomics/flux
+#save(rxnList_form, cond_mapping, file = "paramOptim.Rdata")
 
 
+
+########### Functions ##########
+
+par_draw <- function(updates){
+  #### update parameters using their prior (given by kineticParPrior) - update those those parameters whose index is in "updates" ####
+  
+  draw <- current_pars
+  for(par_n in updates){
+    if(kineticParPrior$distribution[par_n] == "unif"){
+      draw[par_n] <- runif(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
+      } else if(kineticParPrior$distribution[par_n] == "unif"){
+      draw[par_n] <- rnorm(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
+      }
+    }
+  draw
+  }
+
+lik_calc <- function(proposed_params){
+  #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
+  
+  par_stack <- rep(1, n_c) %*% t(proposed_params); colnames(par_stack) <- kineticPars$formulaName
+  par_stack <- exp(par_stack)
+  occupancy_vals <- data.frame(met_abund, par_stack)
+  
+  predOcc <- model.matrix(occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  
+  flux_fit <- nnls(enzyme_activity, flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  fit_resid_error <- sqrt(mean((flux_fit$resid - mean(flux_fit$resid))^2))
+  
+  sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
+  
+  }
+
+n_c <- length(rxnList_form[[1]]$flux)
+
+############# Body ###########
 
 for(rxN in 1:length(rxnList_form)){
+  
   rxnSummary <- rxnList_form[[rxN]]
   
   occupancyEq <- as.formula(paste("~", sub(paste(paste("E", rxnSummary$rxnID, sep = "_"), " \\* ", paste("V", rxnSummary$rxnID, sep = "_"), sep = ""), "1", rxnSummary$rxnForm)[2], sep = " "))
   
   ### Create a data.frame describing the relevent parameters for the model ###
   kineticPars <- data.frame(rel_spec = c(rxnSummary$enzymeAbund[,1], colnames(rxnSummary$rxnMet)), 
-      SpeciesType = c(rep("Enzyme", times = length(rxnSummary$enzymeAbund[,1])), rep("Metabolite", times = length(colnames(rxnSummary$rxnMet)))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
+  SpeciesType = c(rep("Enzyme", times = length(rxnSummary$enzymeAbund[,1])), rep("Metabolite", times = length(colnames(rxnSummary$rxnMet)))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
   kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste("E", rxnSummary$rxnID, sep = "_")
   kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metsID2tID[names( rxnSummary$metsID2tID) == x]}))
   kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metNames[names(rxnSummary$metNames) == x]}))
@@ -256,24 +320,31 @@ for(rxN in 1:length(rxnList_form)){
   met_abund <- rxnSummary$rxnMet[cond_mapping$met_reordering,]
   met_abund <- met_abund[,colnames(met_abund) %in% kineticPars$rel_spec]
   
-  kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
+  if(length(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]) <= 1){
+    met_abund <- data.frame(met_abund)
+    colnames(met_abund) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
+    kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- !all(is.na(met_abund))
+    }else{
+      kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
+      }
   
   
   ### set missing data to invariant across conditions
   met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 1
   met_abund <- met_abund^2
   colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
-    
+  
   enzyme_abund <- enzyme_abund^2
   
-  flux <- rxnSummary$flux/median(abs(rxnSummary$flux)) #flux, scaled to a prettier range
+  flux <- rxnSummary$flux/median(abs(rxnSummary$flux[rxnSummary$flux != 0])) #flux, scaled to a prettier range
   
   #### write flux parameters to a list ####
   run_summary[[names(rxnList_form)[rxN]]]$metabolites <- met_abund
   run_summary[[names(rxnList_form)[rxN]]]$enzymes <- enzyme_abund
   run_summary[[names(rxnList_form)[rxN]]]$flux <- flux
-  run_summary[[names(rxnList_form)[rxN]]]$conditions <- NULL
   run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- occupancyEq
+  run_summary[[names(rxnList_form)[rxN]]]$all_species <- all_species
+  run_summary[[names(rxnList_form)[rxN]]]$kineticPars <- kineticPars
   run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
   
   
@@ -289,6 +360,8 @@ for(rxN in 1:length(rxnList_form)){
   current_pars <- rep(NA, times = length(kineticParPrior[,1]))
   current_pars <- par_draw(1:length(kineticParPrior[,1]))
   current_lik <- lik_calc(current_pars)
+  
+  proposed_params <- current_pars
   
   for(i in 1:(markov_pars$burn_in + markov_pars$n_samples*markov_pars$sample_freq)){
     for(j in 1:length(kineticPars[,1])){#loop over parameters values
@@ -311,55 +384,24 @@ for(rxN in 1:length(rxnList_form)){
   colnames(markov_par_vals) <- ifelse(kineticPars$SpeciesType == "keq", "keq", kineticPars$commonName)
   
   colnames(markov_par_vals) <- unname(sapply(colnames(markov_par_vals), function(name_int){
-    if(length(strsplit(name_int, split = "")[[1]]) >= 22){
+    if(length(strsplit(name_int, split = "")[[1]]) >= 25){
       split_name <- strsplit(name_int, split = "")[[1]]
-      split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(22 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
+      split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(20 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
       split_name[split_pois] <- "\n"
       paste(split_name, collapse = "")
       }else{name_int}
     }))
   
-  run_summary[[names(rxnList_form)[rxN]]]$markovParams <- markov_pars
   run_summary[[names(rxnList_form)[rxN]]]$markovChain <- markov_par_vals
+  run_summary[[names(rxnList_form)[rxN]]]$likelihood <- lik_track
   
   }
 
-par_draw <- function(updates){
-  #### update parameters using their prior (given by kineticParPrior) - update those those parameters whose index is in "updates" ####
-  
-  draw <- current_pars
-  for(par_n in updates){
-    if(kineticParPrior$distribution[par_n] == "unif"){
-      draw[par_n] <- runif(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
-      } else if(kineticParPrior$distribution[par_n] == "unif"){
-      draw[par_n] <- rnorm(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
-      }
-    }
-  draw
-  }
-
- 
 
 
 
 
 
-lik_calc <- function(proposed_params){
-  #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
-  
-  par_stack <- rep(1, n_c) %*% t(proposed_params); colnames(par_stack) <- kineticPars$formulaName
-  par_stack <- exp(par_stack)
-  occupancy_vals <- data.frame(met_abund, par_stack)
-  
-  predOcc <- model.matrix(occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*enzyme_abund #occupany of enzymes * relative abundance of enzymes
-  
-  flux_fit <- nnls(enzyme_activity, flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
-  fit_resid_error <- sqrt(mean((flux_fit$resid - mean(flux_fit$resid))^2))
-  
-  sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
-  
-  }
 
 
 
