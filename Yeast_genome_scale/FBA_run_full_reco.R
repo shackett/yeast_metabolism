@@ -1,6 +1,4 @@
 #### Libraries ####
-#library(lpSolve)
-#library(limSolve)
 library(gplots)
 library(ggplot2)
 
@@ -426,6 +424,8 @@ co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 
 reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
+
+save(rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, compositionFile, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
 
 
 
