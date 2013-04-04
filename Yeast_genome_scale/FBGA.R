@@ -291,7 +291,7 @@ lik_calc <- function(proposed_params){
   sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
   
   }
-current_pars -> proposed_params
+#current_pars -> proposed_params
 
 ############# Body ###########
 
@@ -330,11 +330,11 @@ for(rxN in 1:length(rxnList_form)){
   
   
   ### set missing data to invariant across conditions
-  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 1
-  met_abund <- met_abund^2
+  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 0
+  met_abund <- 2^met_abund
   colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
   
-  enzyme_abund <- enzyme_abund^2
+  enzyme_abund <- 2^enzyme_abund
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux[rxnSummary$flux != 0])) #flux, scaled to a prettier range
   
@@ -398,6 +398,15 @@ for(rxN in 1:length(rxnList_form)){
   }
 current_pars <- markov_par_vals[which.max(lik_track),]
 
+
+
+
+
+
+
+
+
+
 ###### import cluster parameter results #####
 
 param_sets <- list.files('FBGA_files/paramSets/')
@@ -447,8 +456,12 @@ for(arxn in all_rxns){
   pdf(file = paste(c("FBGA_files/outputPlots/", arxn, ".pdf"), collapse = ""), width = 20, height = 20)
   
   print(ggplot() + geom_violin(data = par_likelihood, aes(x = factor(index), y = likelihood), fill = "RED"))
-  print(param_compare(run_rxn, par_markov_chain))
-  
+  print(param_compare(run_rxn, par_markov_chain, par_likelihood))
+  species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
+  print(species_plots[[1]])
+  print(species_plots[[2]])
+  print(species_plots[[3]])
+  print(species_plots[[4]])
   dev.off()
   
   }
@@ -458,13 +471,70 @@ rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
 under_determined_rxnFits <- under_determined_rxnFits[,-c(1:2)]
 under_determined_rxnFits_frac <- under_determined_rxnFits/under_determined_rxnFits$TSS
 under_determined_rxnFits_frac <- under_determined_rxnFits_frac[,!(colnames(under_determined_rxnFits_frac) %in% c("TSS", "LS_met", "LS_enzyme"))]
+under_determined_rxnFits_frac$bestFit = ifelse(under_determined_rxnFits_frac[,1] > under_determined_rxnFits_frac[,2], TRUE, "LS/NNLS max")
+under_determined_rxnFits_frac$bestFit[under_determined_rxnFits_frac$bestFit == "TRUE"] <- ifelse(apply(under_determined_rxnFits_frac[under_determined_rxnFits_frac$bestFit == "TRUE",1:3], 1, which.max) == 1, "parametric fit", "parameteric fit > NNLS")
 
-under_determined_rxnFits_frac <- under_determined_rxnFits_frac[order(apply(under_determined_rxnFits_frac, 1, max, na.rm = TRUE)),]
+under_determined_rxnFits_frac <- under_determined_rxnFits_frac[order(under_determined_rxnFits_frac$bestFit),]
+barplot_ordering <- 1:length(under_determined_rxnFits_frac[,1])
+for(afit in unique(under_determined_rxnFits_frac$bestFit)){
+  orderfit <- if(afit %in% c("parametric fit", "parameteric fit > NNLS")){"parametricFit"}else{"LS"}
+  barplot_ordering[under_determined_rxnFits_frac$bestFit == afit] <- barplot_ordering[under_determined_rxnFits_frac$bestFit == afit][order(under_determined_rxnFits_frac[,colnames(under_determined_rxnFits_frac) == orderfit][under_determined_rxnFits_frac$bestFit == afit])]
+  }
+under_determined_rxnFits_frac <- under_determined_rxnFits_frac[barplot_ordering,]
+
 under_determined_rxnFits_frac$reaction <- factor(rownames(under_determined_rxnFits_frac), levels = rownames(under_determined_rxnFits_frac))
-rxnFit_frac_melt <- melt(under_determined_rxnFits_frac, id.vars = "reaction")
+rxnFit_frac_melt <- melt(under_determined_rxnFits_frac, id.vars = c("reaction", "bestFit"))
 
-rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = reaction, y = value, fill = variable))
-rxnFit_frac_plot + geom_bar(position = "dodge")
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank()) 
+
+
+rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = reaction, y = value, fill = variable)) + facet_wrap(~bestFit, ncol = 1, scales = "free_x")
+rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge") + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+  scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2")
+
+
+ 
+  
+
+species_plot <- function(run_rxn, flux_fit, chemostatInfo){
+  
+  output_plots <- list()
+  
+  scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", 
+      panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
+      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
+
+  flux_plot <- data.frame(actual = run_rxn$flux, predicted = flux_fit$fitted_flux, condition = chemostatInfo$limitation, DR = chemostatInfo$actualDR)
+  output_plots$flux_plot <- ggplot() + geom_path(data = flux_plot, aes(x = actual, y = predicted, col = condition, size = 2)) + scatter_theme +
+    geom_point(data = flux_plot, aes(x = actual, y = predicted, col = condition, size = DR*50)) + scale_size_identity() + 
+    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux predicted from FBA versus parametric form")
+  
+  output_plots$FBA_flux <- ggplot() + geom_path(data = flux_plot, aes(x = DR, y = actual, col = condition, size = 2)) + scatter_theme +
+    geom_point(data = flux_plot, aes(x = DR, y = actual, col = condition, size = DR*50)) + scale_size_identity() + 
+    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux predicted from FBA - actual")
+    
+  all_species <- data.frame(run_rxn$enzymes, run_rxn$metabolites)
+  colnames(all_species) <- run_rxn$all_species$commonName
+  
+  all_species_tab <- run_rxn$all_species[colSums(all_species != 1) != 0,]
+  all_species <- all_species[,colSums(all_species != 1) != 0]
+  
+  species_df <- melt(data.frame(all_species, condition = chemostatInfo$limitation, DR = chemostatInfo$actualDR, flux = run_rxn$flux), id.vars = c("condition", "DR", "flux"))
+  
+  output_plots$species <- ggplot() + geom_path(data = species_df, aes(x = DR, y = value, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free_y") +
+    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_y_continuous("Relative concentration") +
+    ggtitle("Relationship between metabolites/enzyme levels and condition")
+  
+  output_plots$flux_species <- ggplot() + geom_path(data = species_df, aes(x = value, y = flux, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free") +
+    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_x_continuous("Relative concentration") +
+    geom_point(data = species_df, aes(x = value, y = flux, col = condition, size =  DR*30)) + ggtitle("Relationship between metabolite/enzyme levels and flux carried")
+  
+  output_plots
+  }
+
+
+
 
 
 
@@ -484,10 +554,6 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   ### using flux fitted from the median parameter set, how much variance is explained
   fit_summary$parametricFit = anova(lm(run_rxn$flux ~ flux_fit$fitted))$S[1]
-  
-  run_rxn$rxnSummary$metsID2tID
-  run_rxn$rxnSummary$rxnStoi
-  
   
   ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
   NNLSmetab <- run_rxn$metabolites * -1*(rep(1, n_c) %*% t(sapply(colnames(run_rxn$metabolites), function(x){run_rxn$rxnSummary$rxnStoi[names(run_rxn$rxnSummary$rxnStoi) == names(run_rxn$rxnSummary$metsID2tID)[run_rxn$rxnSummary$metsID2tID == x]]})))
@@ -548,11 +614,11 @@ param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
   
   max_density <- max(apply(par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
   
-  par_comp_dissimilar$yval <- par_comp_dissimilar$yval*(max_density/20) + max_density/2
   density_trans_inv <- function(x){x*(max_density/20) + max_density/2}
   density_trans <- function(x){(x - max_density/2)/(max_density/20)}
   
-  
+  par_comp_dissimilar$yval <- density_trans_inv(par_comp_dissimilar$yval)
+  MLEpoints$yval <- density_trans_inv(MLEpoints$yval)
   
   hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), 
       legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 

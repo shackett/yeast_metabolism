@@ -98,11 +98,11 @@ for(rxN in 1:length(rxnList_form)){
   
   
   ### set missing data to invariant across conditions
-  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 1
-  met_abund <- met_abund^2
+  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 0
+  met_abund <- 2^met_abund
   colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
   
-  enzyme_abund <- enzyme_abund^2
+  enzyme_abund <- 2^enzyme_abund
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux[rxnSummary$flux != 0])) #flux, scaled to a prettier range
   
