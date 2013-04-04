@@ -6,10 +6,9 @@ setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 library(reshape2) #for visualization at the end
 library(nnls) #for non-negative regression used to fit kinetic parameters
 library(ggplot2)
+library(gplots)
 
 options(stringsAsFactors = FALSE)
-
-n_c <- 25
 
 ######## Import all of the species involved in a reaction and other reaction information ###########
 
@@ -231,6 +230,7 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$rxnID, NA)})  
 rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
+n_c <- length(rxnList_form[[1]]$flux)
 
 #### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
 
@@ -248,8 +248,8 @@ markov_pars <- list()
 
 markov_pars <- list()
     markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-    markov_pars$n_samples <- 100 #how many total markov samples are desired
-    markov_pars$burn_in <- 0 #how many initial samples should be skipped
+    markov_pars$n_samples <- 1000 #how many total markov samples are desired
+    markov_pars$burn_in <- 500 #how many initial samples should be skipped
 
 
 run_summary$markov_pars <- markov_pars
@@ -274,6 +274,7 @@ par_draw <- function(updates){
   draw
   }
 
+
 lik_calc <- function(proposed_params){
   #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
   
@@ -290,8 +291,7 @@ lik_calc <- function(proposed_params){
   sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
   
   }
-
-n_c <- length(rxnList_form[[1]]$flux)
+current_pars -> proposed_params
 
 ############# Body ###########
 
@@ -396,276 +396,179 @@ for(rxN in 1:length(rxnList_form)){
   run_summary[[names(rxnList_form)[rxN]]]$likelihood <- lik_track
   
   }
+current_pars <- markov_par_vals[which.max(lik_track),]
+
+###### import cluster parameter results #####
+
+param_sets <- list.files('FBGA_files/paramSets/')
+
+param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), runNum = sapply(param_sets, function(x){as.numeric(regmatches(x, regexec('[0-9]+', x))[[1]])}), n_samples = NA, sample_freq = NA, burn_in = NA)
+
+param_set_list <- list()
+for(an_index in param_run_info$index){
+  load(paste(c("FBGA_files/paramSets/", param_run_info$file[an_index]), collapse = ""))
+  param_run_info$n_samples[an_index] <- run_summary$markov_pars$n_samples
+  param_run_info$sample_freq[an_index] <- run_summary$markov_pars$sample_freq
+  param_run_info$burn_in[an_index] <- run_summary$markov_pars$burn_in
+  param_set_list[[an_index]] <- run_summary
+  }
+
+names(param_set_list[[1]])[-1]
+
+all_rxns <- names(rxnList_form)
+rxn_fits <- NULL
+
+for(arxn in all_rxns){
+  #which runs contain the desired reaction
+  rxn_found <- unlist(lapply(param_set_list, function(x){arxn %in% names(x)}))
+  if(!all(rxn_found)){print(paste(c(arxn, "missing in", paste(param_run_info$file[!rxn_found], collapse = " & ")), collapse = " "))}
+  if(all(!rxn_found)){print("skip"); next}
+  
+  par_likelihood <- NULL
+  par_markov_chain <- NULL
+  
+  for(i in param_run_info$index[rxn_found]){
+    run_rxn <- param_set_list[[i]][names(param_set_list[[i]]) == arxn][[1]]
+    
+    par_likelihood <- rbind(par_likelihood, data.frame(sample = 1:param_run_info$n_samples[i], likelihood = run_rxn$likelihood, index = param_run_info$index[i]))
+    par_markov_chain <- rbind(par_markov_chain, run_rxn$markovChain)
+    }
+  
+  if(var(par_likelihood$likelihood) < 10^-10 | all(run_rxn$metabolites == 1)){next} #skip underparameterized reactions - those with essentially no variation
+  
+  
+  
+  if(length(run_rxn$enzymes[1,]) != 0){
+    flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
+    rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
+  }
+  
+  
+  pdf(file = paste(c("FBGA_files/outputPlots/", arxn, ".pdf"), collapse = ""), width = 20, height = 20)
+  
+  print(ggplot() + geom_violin(data = par_likelihood, aes(x = factor(index), y = likelihood), fill = "RED"))
+  print(param_compare(run_rxn, par_markov_chain))
+  
+  dev.off()
+  
+  }
+
+under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
+rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
+under_determined_rxnFits <- under_determined_rxnFits[,-c(1:2)]
+under_determined_rxnFits_frac <- under_determined_rxnFits/under_determined_rxnFits$TSS
+under_determined_rxnFits_frac <- under_determined_rxnFits_frac[,!(colnames(under_determined_rxnFits_frac) %in% c("TSS", "LS_met", "LS_enzyme"))]
+
+under_determined_rxnFits_frac <- under_determined_rxnFits_frac[order(apply(under_determined_rxnFits_frac, 1, max, na.rm = TRUE)),]
+under_determined_rxnFits_frac$reaction <- factor(rownames(under_determined_rxnFits_frac), levels = rownames(under_determined_rxnFits_frac))
+rxnFit_frac_melt <- melt(under_determined_rxnFits_frac, id.vars = "reaction")
+
+rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = reaction, y = value, fill = variable))
+rxnFit_frac_plot + geom_bar(position = "dodge")
 
 
 
-
-
-
-
-
-
-flux_fitting <- function(x){
+flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
-  param_interval <- exp(apply(markov_par_vals, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
-  param_interval <- data.frame(cbind(t(param_interval), median = exp(apply(markov_par_vals, 2, median))))
+  param_interval <- exp(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
+  param_interval <- data.frame(cbind(t(param_interval), median = exp(apply(par_markov_chain, 2, median))))
   
-  par_stack <- rep(1, n_c) %*% t(param_interval$median); colnames(par_stack) <- kineticPars$formulaName
-  occupancy_vals <- data.frame(met_abund, par_stack)
-  predOcc <- model.matrix(occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*enzyme_abund #occupany of enzymes * relative abundance of enzymes
-  flux_fit <- nnls(enzyme_activity, flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  par_stack <- rep(1, n_c) %*% t(exp(par_markov_chain[which.max(par_likelihood$likelihood),])); colnames(par_stack) <- run_rxn$kineticPars$formulaName
+  occupancy_vals <- data.frame(run_rxn$metabolites, par_stack)
+  predOcc <- model.matrix(run_rxn$occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+ 
+  enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*run_rxn$enzymes #occupany of enzymes * relative abundance of enzymes
+  flux_fit <- nnls(enzyme_activity, run_rxn$flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
   
-  fit_summary <- data.frame(parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
+  fit_summary <- data.frame(residDF = sum(run_rxn$flux != 0) - length(par_stack[1,]), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
   
   ### using flux fitted from the median parameter set, how much variance is explained
-  fit_summary$parametricFit = anova(lm(flux ~ flux_fit$fitted))$S[1]
+  fit_summary$parametricFit = anova(lm(run_rxn$flux ~ flux_fit$fitted))$S[1]
   
-  ### using flux fitted using non-negative least squares regression, how much variance is explained
-  fit_summary$NNLS = anova(lm(flux ~ nnls(as.matrix(data.frame(met_abund, enzyme_abund)), flux)$fitted))$S[1]
+  run_rxn$rxnSummary$metsID2tID
+  run_rxn$rxnSummary$rxnStoi
+  
+  
+  ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
+  NNLSmetab <- run_rxn$metabolites * -1*(rep(1, n_c) %*% t(sapply(colnames(run_rxn$metabolites), function(x){run_rxn$rxnSummary$rxnStoi[names(run_rxn$rxnSummary$rxnStoi) == names(run_rxn$rxnSummary$metsID2tID)[run_rxn$rxnSummary$metsID2tID == x]]})))
+    
+  if(all(run_rxn$flux < 0)){
+    NNLSanova <- anova(lm(-1*run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)$fitted))
+    fit_summary$NNLS <- ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
+    }else{
+      NNLSanova <- anova(lm(run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)$fitted))
+      fit_summary$NNLS = ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
+    }
+  
   
   ### using LS regression, how much variance is explained 
-  fit_summary$LS_met = anova(lm(flux ~ met_abund))$S[1]
-  fit_summary$LS_enzyme = anova(lm(flux ~ enzyme_abund))$S[1]
-  fit_summary$LS = sum(anova(lm(flux ~ met_abund + enzyme_abund))$S[1:2])
-  fit_summary$TSS = sum(anova(lm(flux ~ met_abund + enzyme_abund))$S)
+  fit_summary$LS_met = anova(lm(run_rxn$flux ~ run_rxn$metabolites))$S[1]
+  fit_summary$LS_enzyme = anova(lm(run_rxn$flux ~ run_rxn$enzymes))$S[1]
+  fit_summary$LS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S[1:2])
+  fit_summary$TSS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S)
+  
+  output <- list()
+    output$fit_summary <- fit_summary
+    output$param_interval <- param_interval
+    output$fitted_flux <- flux_fit$fitted
+  output
   }
 
 
-param_compare <- function(kineticPars){
+param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
   # visualize the joint and marginal distribution of parameter values from the markov chain
   
-  par_combinations <- expand.grid(1:length(kineticPars[,1]), 1:length(kineticPars[,1]))
+  par_combinations <- expand.grid(1:length(run_rxn$kineticPars[,1]), 1:length(run_rxn$kineticPars[,1]))
   like_comparison <- ifelse(par_combinations[,1] == par_combinations[,2], TRUE, FALSE)
+  
+  max_likelihood <- par_markov_chain[which.max(par_likelihood$likelihood),]
   
   par_comp_like <- NULL
   for(i in 1:sum(like_comparison)){
-    par_comp_like <- rbind(par_comp_like, data.frame(xval = markov_par_vals[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(markov_par_vals)[par_combinations[like_comparison,][i,1]],
-         parameter_2 = colnames(markov_par_vals)[par_combinations[like_comparison,][i,1]]))
+    par_comp_like <- rbind(par_comp_like, data.frame(xval = par_markov_chain[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(par_markov_chain)[par_combinations[like_comparison,][i,1]],
+         parameter_2 = colnames(par_markov_chain)[par_combinations[like_comparison,][i,1]]))
       }
   
   par_comp_dissimilar <- NULL
   for(i in 1:sum(!like_comparison)){
-    par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = markov_par_vals[,par_combinations[!like_comparison,][i,1]], yval = markov_par_vals[,par_combinations[!like_comparison,][i,2]], 
-          parameter_1 = colnames(markov_par_vals)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(markov_par_vals)[par_combinations[!like_comparison,][i,2]]))
+    par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = par_markov_chain[,par_combinations[!like_comparison,][i,1]], yval = par_markov_chain[,par_combinations[!like_comparison,][i,2]], 
+          parameter_1 = colnames(par_markov_chain)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(par_markov_chain)[par_combinations[!like_comparison,][i,2]]))
       }
+  
+  MLEbarplot <- data.frame(xval = max_likelihood[par_combinations[like_comparison,1]], parameter_1 = colnames(par_markov_chain)[par_combinations[like_comparison,1]],
+      parameter_2 = colnames(par_markov_chain)[par_combinations[like_comparison,1]])
+  MLEpoints <- data.frame(xval = max_likelihood[par_combinations[!like_comparison,1]], yval = max_likelihood[par_combinations[!like_comparison,2]],
+      parameter_1 = colnames(par_markov_chain)[par_combinations[!like_comparison,1]], parameter_2 = colnames(par_markov_chain)[par_combinations[!like_comparison,2]])
+  
+  
   
   #### determine the maximum bin from the histogram so that values can be scaled to the bivariate histogram values ###
 
   par_hist_binwidth = 0.2
   
-  max_density <- max(apply(markov_par_vals, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
-  
+  max_density <- max(apply(par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
   
   par_comp_dissimilar$yval <- par_comp_dissimilar$yval*(max_density/20) + max_density/2
   density_trans_inv <- function(x){x*(max_density/20) + max_density/2}
   density_trans <- function(x){(x - max_density/2)/(max_density/20)}
   
-  density_trans <- function(){function(x) (x - max_density/2)/(max_density/20)}
   
   
   hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), 
       legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
       panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line"), axis.title = element_blank()) 
 
+  #labels = c(0:floor(max_density/50))*50, breaks = c(0:floor(max_density/50))*50
+  
   ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
-    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), labels = c(0:floor(max_density/50))*50, breaks = c(0:floor(max_density/50))*50) +
-    scale_x_continuous(NULL, expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5)))
+    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black")) +
+    scale_x_continuous(NULL, expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5))) +
+    geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) + geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 2, col = "cornflowerblue")
 
-  
-  ggsave("mcmc_output.pdf", width = 20, height = 20)
-  
-  
-     
   }
 
 
 
-
-
-
-########## TOY ##############
-
-# species involved in reaction
-n_c <- 100
-metabs <- matrix(rgamma(50, 1, 2), nrow = n_c, ncol = 2); colnames(metabs) <- c("fu", "bar")
-enzyme <- matrix(rgamma(50, 1, 2), nrow = n_c, ncol = 2); colnames(enzyme) <- c("yfg1", "yfg2")
-# Model parameters, and correspondence between parameters and species - i.e. kcat - species 1 matches the activity of the first enzyme catalyzing the reaction. km - species 1 means this the affinity of the first metabolite (column 1) for  the enzyme
-assocConst <- data.frame(name = c("yfg1_kcat", "fu_km", "C"), type = c("kcat", "km", "ki"), specie = c(1, 1, 2), priorMean = NA, priorSD = NA) # all of these parameters are lognormally distributed, the parameterization that I am using for this is the parameter MLE (prior mean) and the log standard deviation (priorSD)
-assocConst$priorSD <- assocConst$priorMean <- c(1, 0.25, 0.8)
-assocConstTRUE <- assocConst; assocConstTRUE$priorMean <- c(1, 0.5, 0.6)
-
-trueFlux <- (enzyme[,1] * assocConstTRUE$priorMean[1] * metabs[,1] / (metabs[,1] + assocConstTRUE$priorMean[2])) #simulate measured fluxes from the rxn equation form assuming that metabolites and enzymes are measured accurately
-measuredFlux <- trueFlux*rlnorm(n_c, 0, 0.25) #simulate measured fluxes from the rxn equation form with added lognormal noise
-
-parNum <- length(assocConst[,1]) #how many parameters are there in the model
-plot(measuredFlux ~ metabs[,1])
-plot(measuredFlux ~ enzyme[,1])
-
-
-# function predicting flux from provided paramters
-#exampleformula
-#enzyme activity
-#substrate occupancy
-
-rxnEqn <- as.formula(" ~ I(yfg1_kcat * yfg1 * fu / (fu + fu_km)) + 0")
-
-
-
- ## Genetic algorithm parameters ##
-N = 5000 # the number of parameter sets competing for ultimate fit
-mu = 0.1*length(assocConst[,1]) # the lambda mutation rate across all parameters 
-generations <- 100
-genMeanlogFit <- rep(NA, generations)
-
-#initialize with parameters drawn from the parameters prior
-gaConstants <- sapply(1:parNum, function(initConstN){
-  #rlnorm(N, assocConst[initConstN,colnames(assocConst) == "priorMean"], assocConst[initConstN,colnames(assocConst) == "priorSD"])
-  exp(rnorm(N, log(assocConst[initConstN,colnames(assocConst) == "priorMean"]), assocConst[initConstN,colnames(assocConst) == "priorSD"]))
-  })
-colnames(gaConstants) <- assocConst$name
-
-for(genN in 1:generations){
-  ### generations of selection (implicitely includes drift - because sampling is proportional to fitness but N is finite), and mutation
-  
-  ### Mutation ###
-  
-  mutations <- rpois(N, mu)
-  mutations <- sapply(mutations, function(x){min(c(x, length(assocConst[,1])))}) #floor to the maximum number of parameters
-  mutInds <- c(1:N)[mutations != 0]
-  
-  newPar <- sapply(1:length(mutInds), function(mutInd){
-    replpar <- sample(1:parNum, mutations[mutInd], replace = TRUE)
-    indPars <- gaConstants[mutInd,]
-    for(mut in replpar){
-      indPars[mut] <- exp(rnorm(1, log(assocConst[mut,colnames(assocConst) == "priorMean"]), assocConst[mut,colnames(assocConst) == "priorSD"]))
-        #rlnorm(1, assocConst[mut,colnames(assocConst) == "priorMean"], assocConst[mut,colnames(assocConst) == "priorSD"])
-      }
-    indPars
-    })
-  
-  gaConstants[mutInds,] <- t(newPar)
-  
-  ######
-  
-  indPrior <- apply(sapply(1:parNum, function(parN){
-    dnorm(log(gaConstants[,parN]), log(assocConst$priorMean[parN]),  assocConst$priorSD[parN])
-    #dlnorm(gaConstants[,parN], assocConst$priorMean[parN], assocConst$priorSD[parN])
-  }), 1, prod) #presolve the prior probability of a model (of parameter values)
-
-  ### Selection ###
-  
-  indLogFit <- sapply(1:N, indFitnessFxn)
-  
-  rFit <- exp(indLogFit - max(indLogFit)) #fitness relative to most fit individual
-  progeny <- rowSums(rmultinom(N, 1, rFit))
-  progeny <- unlist(sapply(1:N, function(x){rep(x, progeny[x])}))
-  
-  genMeanlogFit[genN] <- mean(indLogFit[progeny]) #save the average log fitness of individuals
-
-  gaConstants <- gaConstants[progeny,] #replace current population with selected progeny
-  
-  if(genN/10 == floor(genN/10)){
-    print(paste("Generation", genN, "complete.  The mean log fitness is", signif(genMeanlogFit[genN], 5), sep = " "))
-    }
-  
-  }
-
-plot(genMeanlogFit, pch = 16, col = "RED", cex = 0.3)
-
-finalFit <- t(sapply(1:N, indFitnessFxn, splitFit = TRUE))
-colnames(finalFit) <- c("fit", "prior")
-
-# visualize the parameter correlation matrix
-library(colorRamps)
-library(gplots)
-parCorrMat <- cor(log(gaConstants))
-#parSpearCorrMat <- cor(log(gaConstants), method = "spearman")
-heatmap.2(parCorrMat, symm = TRUE, col = blue2yellow(1000), dendrogram = "row", symkey = TRUE)
-
-# visualize parameter distributions colored by score
-
-par_fit <- data.frame(gaConstants, finalFit)
-par_fit_stack <- melt(par_fit, measure.vars = assocConst$name)
-par_fit_stack$logVal = log(par_fit_stack$value)
-#par_fit_stack2 <- melt(par_fit_stack, measure.vars = c("fit", "prior"))
-#colnames(par_fit_stack2) <- c("Parameter", "ParValue", "BayesFactorComponent", "BFVal"); par_fit_stack2$BFVal <- exp(par_fit_stack2$BFVal)
-#dist_plotter <- ggplot(par_fit_stack, aes(x =  logVal)) + facet_grid(variable ~ .) + geom_abline
-#dist_plotter + geom_histogram(par_fit_stack, aes(x = logVal), binwidth = 0.01)
-
-colnames(par_fit_stack) <- c("Fit", "Prior", "name", "Value", "lnValue")
-maxCatVal <- sapply(assocConst$name, function(x){max(table(floor(par_fit_stack$lnValue[par_fit_stack$name == x] * 100)))})
-assocConst$CImin <- log(assocConst$priorMean) - 2 * assocConst$priorSD; assocConst$CImax <- log(assocConst$priorMean) + 2 * assocConst$priorSD
-assocConst$maxBinCount = maxCatVal
-
-
-hist_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
-  panel.grid.minor = element_blank(), legend.key.width = unit(6, "line"), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
-
-dist_plotter <- ggplot() + facet_grid(name ~ ., scales = "free_y") + hist_theme
-dist_plotter + geom_histogram(data = par_fit_stack, aes(x = lnValue), binwidth = 0.1) + geom_vline(data = assocConst, aes(xintercept = log(priorMean), colour = "RED", size = 2)) +
-  geom_errorbarh(data = assocConst, aes(x = log(priorMean), xmin = CImin, xmax = CImax, y = maxCatVal/2, height = maxBinCount/10, size = 2, colour = "RED"))
-
-ggsave("gatoy.pdf", height = 10, width = 10)
-
-
-
-
-
-
-
-#dist_plotter <- ggplot(par_fit_stack2, aes(x =  ParValue, fill = BFVal)) + facet_grid(BayesFactorComponent ~ Parameter)
-#dist_plotter + geom_histogram() + scale_fill_gradient(name = "woot", low = "black", high = "firebrick1")
-
-#scale_fill_gradient(name = "Counts", low = "black", high = "firebrick1", trans = "log", breaks = hex_breaks, labels = hex_breaks)
-
-# for pairs of parameters exceeding a correlation cutoff plot a bivariate histogram
-# find a good example first
-corCO <- .2
-
-hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "gray90"), legend.position = "top", 
-  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
-
-parPoint <- sapply(rownames(parCorrMat), function(x){paste(x, colnames(parCorrMat), sep = "/")})
-parAssoc <- parPoint[upper.tri(parCorrMat)][abs(parCorrMat[upper.tri(parCorrMat)]) > corCO]
-if(length(parAssoc) != 0){
-  
-  for(parSet in parAssoc){
-    bivariateDF <- data.frame(log(gaConstants[,c(1:parNum)[assocConst$name %in% strsplit(parSet, split = '/')[[1]]]]))
-    colnames(bivariateDF) <- c("P1", "P2")
-    print(ggplot(bivariateDF, aes(x = P1, y = P2)) + geom_hex() + scale_x_continuous(assocConst$name[assocConst$name %in% strsplit(parSet, split = '/')[[1]]][1], expand = c(0.02,0.02)) +
-      scale_y_continuous(assocConst$name[assocConst$name %in% strsplit(parSet, split = '/')[[1]]][2], expand = c(0.02,0.02)) + hex_theme +
-      scale_fill_gradient(name = "Counts", low = "black", high = "firebrick1"))
-    }
-   
-     
-  }
-
-
-
-
-
-
-indFitnessFxn <- function(i, splitFit = FALSE){
-  indParams <- t(t(rep(1, n_c))) %*% gaConstants[i,]; colnames(indParams) <- assocConst$name
-  indDat <- data.frame(metabs, enzyme, indParams)
-  
-  predFlux <- model.matrix(rxnEqn, data = indDat)[,1] #evaluates the combination of data and parameters in indDat according to the reaction equation
-  
-  # setting the mean of measured flux to the mean of the predicted flux is equivalent to scaling flux magnitude to account for kcat (when weights are not used this is true, otherwise the weighted mean needs to be determined)
-  # Determine how to propogate weights associated with measurement through to get a weight on predicted flux
-  
-  lpredFluxcent <- log(predFlux) + (mean(log(measuredFlux)) - mean(log(predFlux))) #centered log flux
-  
-  SSE <- sum((lpredFluxcent - log(measuredFlux))^2) #determine the sum of squared error between predicted log flux and observed log flux
-  var_fit <- SSE / (n_c - 1) #correct estimate of variance according to number of fitted parameters + 1
-  
-  if(splitFit == FALSE){
-  sum(dnorm(lpredFluxcent, log(measuredFlux), sqrt(var_fit), log = TRUE)) + log(indPrior[i]) # bayes factor for this parameter set is returned
-    }else{
-      c(sum(dnorm(lpredFluxcent, log(measuredFlux), sqrt(var_fit), log = TRUE)), log(indPrior[i]))
-      }
-  }
 
 
 
