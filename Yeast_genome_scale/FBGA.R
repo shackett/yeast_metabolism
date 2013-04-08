@@ -291,7 +291,8 @@ lik_calc <- function(proposed_params){
   sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
   
   }
-#current_pars -> proposed_params
+#markov_par_vals[which.max(lik_track),] -> proposed_params
+
 
 ############# Body ###########
 
@@ -471,6 +472,7 @@ rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
 under_determined_rxnFits <- under_determined_rxnFits[,-c(1:2)]
 under_determined_rxnFits_frac <- under_determined_rxnFits/under_determined_rxnFits$TSS
 under_determined_rxnFits_frac <- under_determined_rxnFits_frac[,!(colnames(under_determined_rxnFits_frac) %in% c("TSS", "LS_met", "LS_enzyme"))]
+under_determined_rxnFits_frac <- under_determined_rxnFits_frac[rowSums(is.na(under_determined_rxnFits_frac[,1:3])) == 0,]
 under_determined_rxnFits_frac$bestFit = ifelse(under_determined_rxnFits_frac[,1] > under_determined_rxnFits_frac[,2], TRUE, "LS/NNLS max")
 under_determined_rxnFits_frac$bestFit[under_determined_rxnFits_frac$bestFit == "TRUE"] <- ifelse(apply(under_determined_rxnFits_frac[under_determined_rxnFits_frac$bestFit == "TRUE",1:3], 1, which.max) == 1, "parametric fit", "parameteric fit > NNLS")
 
@@ -498,6 +500,11 @@ rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge") + barplot_the
   
 
 species_plot <- function(run_rxn, flux_fit, chemostatInfo){
+  #generate a list of four plots:
+  #1: Flux predicted from FBA versus parametric form
+  #2: Flux predicted from FBA - actual
+  #3: Relationship between metabolites/enzyme levels and condition
+  #4: Relationship between metabolite/enzyme levels and flux carried
   
   output_plots <- list()
   
@@ -624,8 +631,6 @@ param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
       legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
       panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line"), axis.title = element_blank()) 
 
-  #labels = c(0:floor(max_density/50))*50, breaks = c(0:floor(max_density/50))*50
-  
   ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
     scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black")) +
     scale_x_continuous(NULL, expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5))) +
