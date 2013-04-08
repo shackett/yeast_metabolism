@@ -7,6 +7,7 @@ library(reshape2) #for visualization at the end
 library(nnls) #for non-negative regression used to fit kinetic parameters
 library(ggplot2)
 library(gplots)
+source("FBA_lib.R")
 
 options(stringsAsFactors = FALSE)
 
@@ -209,8 +210,9 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
 rxnPredictionPlot <- ggplot(reaction_pred_summary_plotter, aes(x = factor(index), y = value, fill = as.factor(variable), color = "black")) + facet_grid(modelType ~ .)
 rxnPredictionPlot + geom_bar(binwidth = 1) + barplot_theme + geom_vline(aes(xintercept = 0), size = 0.5) + geom_hline(aes(yintercept = 0), size = 0.5) + 
   scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) +
-  scale_fill_manual(values = c("enzymeVarianceExplained" = "sienna1", "metaboliteVarianceExplained" = "steelblue1", varianceAmbiguouslyExplained = "olivedrab3", varianceJointlyExplained = "red")) + scale_color_identity()
+  scale_fill_brewer("Prediction Method", palette = "Set2") + scale_color_identity()
   
+  #scale_fill_manual(values = c("enzymeVarianceExplained" = "sienna1", "metaboliteVarianceExplained" = "steelblue1", varianceAmbiguouslyExplained = "olivedrab3", varianceJointlyExplained = "red")) 
 
 ggsave("varianceExplained.pdf", width = 20, height = 12)
 
@@ -258,154 +260,6 @@ run_summary$markov_pars <- markov_pars
 
 
 
-########### Functions ##########
-
-par_draw <- function(updates){
-  #### update parameters using their prior (given by kineticParPrior) - update those those parameters whose index is in "updates" ####
-  
-  draw <- current_pars
-  for(par_n in updates){
-    if(kineticParPrior$distribution[par_n] == "unif"){
-      draw[par_n] <- runif(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
-      } else if(kineticParPrior$distribution[par_n] == "unif"){
-      draw[par_n] <- rnorm(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
-      }
-    }
-  draw
-  }
-
-
-lik_calc <- function(proposed_params){
-  #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
-  
-  par_stack <- rep(1, n_c) %*% t(proposed_params); colnames(par_stack) <- kineticPars$formulaName
-  par_stack <- exp(par_stack)
-  occupancy_vals <- data.frame(met_abund, par_stack)
-  
-  predOcc <- model.matrix(occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*enzyme_abund #occupany of enzymes * relative abundance of enzymes
-  
-  flux_fit <- nnls(enzyme_activity, flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
-  fit_resid_error <- sqrt(mean((flux_fit$resid - mean(flux_fit$resid))^2))
-  
-  sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
-  
-  }
-#markov_par_vals[which.max(lik_track),] -> proposed_params
-
-
-############# Body ###########
-
-for(rxN in 1:length(rxnList_form)){
-  
-  rxnSummary <- rxnList_form[[rxN]]
-  
-  occupancyEq <- as.formula(paste("~", sub(paste(paste("E", rxnSummary$rxnID, sep = "_"), " \\* ", paste("V", rxnSummary$rxnID, sep = "_"), sep = ""), "1", rxnSummary$rxnForm)[2], sep = " "))
-  
-  ### Create a data.frame describing the relevent parameters for the model ###
-  kineticPars <- data.frame(rel_spec = c(rxnSummary$enzymeAbund[,1], colnames(rxnSummary$rxnMet)), 
-  SpeciesType = c(rep("Enzyme", times = length(rxnSummary$enzymeAbund[,1])), rep("Metabolite", times = length(colnames(rxnSummary$rxnMet)))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
-  kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste("E", rxnSummary$rxnID, sep = "_")
-  kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metsID2tID[names( rxnSummary$metsID2tID) == x]}))
-  kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metNames[names(rxnSummary$metNames) == x]}))
-  kineticPars$commonName[kineticPars$SpeciesType == "Enzyme"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
-  kineticPars$formulaName[kineticPars$SpeciesType == "Metabolite"] <- paste("K", rxnSummary$rxnID, kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"], sep = "_")
-  
-  all_species <- kineticPars[sapply(kineticPars$formulaName, function(ele_used){length(grep(ele_used, occupancyEq)) != 0}) | kineticPars$SpeciesType == "Enzyme",]
-  
-  kineticPars <- kineticPars[sapply(kineticPars$formulaName, function(ele_used){length(grep(ele_used, occupancyEq)) != 0}),] #remove species which dont appear in the reaction equation
-  kineticPars <- rbind(kineticPars, c("keq", "keq", NA, NA, paste("Keq", rxnSummary$rxnID, sep = ""), NA))
-  
-  ### Create a matrix containing the metabolites and enzymes 
-  enzyme_abund <- t(rxnSummary$enzymeAbund[,cond_mapping$enzyme_reordering]); colnames(enzyme_abund) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
-  met_abund <- rxnSummary$rxnMet[cond_mapping$met_reordering,]
-  met_abund <- met_abund[,colnames(met_abund) %in% kineticPars$rel_spec]
-  
-  if(length(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]) <= 1){
-    met_abund <- data.frame(met_abund)
-    colnames(met_abund) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
-    kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- !all(is.na(met_abund))
-    }else{
-      kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
-      }
-  
-  
-  ### set missing data to invariant across conditions
-  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 0
-  met_abund <- 2^met_abund
-  colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
-  
-  enzyme_abund <- 2^enzyme_abund
-  
-  flux <- rxnSummary$flux/median(abs(rxnSummary$flux[rxnSummary$flux != 0])) #flux, scaled to a prettier range
-  
-  #### write flux parameters to a list ####
-  run_summary[[names(rxnList_form)[rxN]]]$metabolites <- met_abund
-  run_summary[[names(rxnList_form)[rxN]]]$enzymes <- enzyme_abund
-  run_summary[[names(rxnList_form)[rxN]]]$flux <- flux
-  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- occupancyEq
-  run_summary[[names(rxnList_form)[rxN]]]$all_species <- all_species
-  run_summary[[names(rxnList_form)[rxN]]]$kineticPars <- kineticPars
-  run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
-  
-  
-  
-  kineticParPrior <- data.frame(distribution = rep(NA, times = length(kineticPars[,1])), par_1 = NA, par_2 = NA) #par1/2 of a uniform are the lower bound and upper bound; par1/2 of a normal are the mean and variance
-  kineticParPrior$distribution <- "unif"
-  kineticParPrior$par_1 <- -10; kineticParPrior$par_2 <- 10
-  
-  lik_track <- NULL
-  markov_par_vals <- matrix(NA, ncol = length(kineticPars[,1]), nrow = markov_pars$n_samples)
-  colnames(markov_par_vals) <- kineticPars$formulaName
-  
-  current_pars <- rep(NA, times = length(kineticParPrior[,1]))
-  current_pars <- par_draw(1:length(kineticParPrior[,1]))
-  current_lik <- lik_calc(current_pars)
-  
-  proposed_params <- current_pars
-  
-  for(i in 1:(markov_pars$burn_in + markov_pars$n_samples*markov_pars$sample_freq)){
-    for(j in 1:length(kineticPars[,1])){#loop over parameters values
-      proposed_par <- par_draw(j)
-      proposed_lik <- lik_calc(proposed_par)
-      if(runif(1, 0, 1) < exp(proposed_lik - current_lik)){
-        current_pars <- proposed_par
-        current_lik <- proposed_lik
-        }
-      }
-    
-    if(i > markov_pars$burn_in){
-      if((i - markov_pars$burn_in) %% markov_pars$sample_freq == 0){
-        markov_par_vals[(i - markov_pars$burn_in)/markov_pars$sample_freq,] <- current_pars
-        lik_track <- c(lik_track, current_lik)
-        }
-      }
-    }
-  
-  colnames(markov_par_vals) <- ifelse(kineticPars$SpeciesType == "keq", "keq", kineticPars$commonName)
-  
-  colnames(markov_par_vals) <- unname(sapply(colnames(markov_par_vals), function(name_int){
-    if(length(strsplit(name_int, split = "")[[1]]) >= 25){
-      split_name <- strsplit(name_int, split = "")[[1]]
-      split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(20 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
-      split_name[split_pois] <- "\n"
-      paste(split_name, collapse = "")
-      }else{name_int}
-    }))
-  
-  run_summary[[names(rxnList_form)[rxN]]]$markovChain <- markov_par_vals
-  run_summary[[names(rxnList_form)[rxN]]]$likelihood <- lik_track
-  
-  }
-current_pars <- markov_par_vals[which.max(lik_track),]
-
-
-
-
-
-
-
-
 
 
 ###### import cluster parameter results #####
@@ -427,6 +281,7 @@ names(param_set_list[[1]])[-1]
 
 all_rxns <- names(rxnList_form)
 rxn_fits <- NULL
+rxn_fit_params <- list()
 
 for(arxn in all_rxns){
   #which runs contain the desired reaction
@@ -451,6 +306,7 @@ for(arxn in all_rxns){
   if(length(run_rxn$enzymes[1,]) != 0){
     flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
     rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
+    rxn_fit_params[[arxn]] <- flux_fit$param_interval  
   }
   
   
@@ -466,6 +322,8 @@ for(arxn in all_rxns){
   dev.off()
   
   }
+
+save(param_set_list, file = "param_set_list.Rdata")
 
 under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
 rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
@@ -494,150 +352,10 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
 rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = reaction, y = value, fill = variable)) + facet_wrap(~bestFit, ncol = 1, scales = "free_x")
 rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge") + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
   scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2")
-
+ggsave("parFitQuality.pdf", height = 20, width = 20)
 
  
   
-
-species_plot <- function(run_rxn, flux_fit, chemostatInfo){
-  #generate a list of four plots:
-  #1: Flux predicted from FBA versus parametric form
-  #2: Flux predicted from FBA - actual
-  #3: Relationship between metabolites/enzyme levels and condition
-  #4: Relationship between metabolite/enzyme levels and flux carried
-  
-  output_plots <- list()
-  
-  scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", 
-      panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
-      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
-
-  flux_plot <- data.frame(actual = run_rxn$flux, predicted = flux_fit$fitted_flux, condition = chemostatInfo$limitation, DR = chemostatInfo$actualDR)
-  output_plots$flux_plot <- ggplot() + geom_path(data = flux_plot, aes(x = actual, y = predicted, col = condition, size = 2)) + scatter_theme +
-    geom_point(data = flux_plot, aes(x = actual, y = predicted, col = condition, size = DR*50)) + scale_size_identity() + 
-    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux predicted from FBA versus parametric form")
-  
-  output_plots$FBA_flux <- ggplot() + geom_path(data = flux_plot, aes(x = DR, y = actual, col = condition, size = 2)) + scatter_theme +
-    geom_point(data = flux_plot, aes(x = DR, y = actual, col = condition, size = DR*50)) + scale_size_identity() + 
-    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux predicted from FBA - actual")
-    
-  all_species <- data.frame(run_rxn$enzymes, run_rxn$metabolites)
-  colnames(all_species) <- run_rxn$all_species$commonName
-  
-  all_species_tab <- run_rxn$all_species[colSums(all_species != 1) != 0,]
-  all_species <- all_species[,colSums(all_species != 1) != 0]
-  
-  species_df <- melt(data.frame(all_species, condition = chemostatInfo$limitation, DR = chemostatInfo$actualDR, flux = run_rxn$flux), id.vars = c("condition", "DR", "flux"))
-  
-  output_plots$species <- ggplot() + geom_path(data = species_df, aes(x = DR, y = value, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free_y") +
-    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_y_continuous("Relative concentration") +
-    ggtitle("Relationship between metabolites/enzyme levels and condition")
-  
-  output_plots$flux_species <- ggplot() + geom_path(data = species_df, aes(x = value, y = flux, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free") +
-    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_x_continuous("Relative concentration") +
-    geom_point(data = species_df, aes(x = value, y = flux, col = condition, size =  DR*30)) + ggtitle("Relationship between metabolite/enzyme levels and flux carried")
-  
-  output_plots
-  }
-
-
-
-
-
-
-flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
-  # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
-  param_interval <- exp(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
-  param_interval <- data.frame(cbind(t(param_interval), median = exp(apply(par_markov_chain, 2, median))))
-  
-  par_stack <- rep(1, n_c) %*% t(exp(par_markov_chain[which.max(par_likelihood$likelihood),])); colnames(par_stack) <- run_rxn$kineticPars$formulaName
-  occupancy_vals <- data.frame(run_rxn$metabolites, par_stack)
-  predOcc <- model.matrix(run_rxn$occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
- 
-  enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*run_rxn$enzymes #occupany of enzymes * relative abundance of enzymes
-  flux_fit <- nnls(enzyme_activity, run_rxn$flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
-  
-  fit_summary <- data.frame(residDF = sum(run_rxn$flux != 0) - length(par_stack[1,]), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
-  
-  ### using flux fitted from the median parameter set, how much variance is explained
-  fit_summary$parametricFit = anova(lm(run_rxn$flux ~ flux_fit$fitted))$S[1]
-  
-  ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
-  NNLSmetab <- run_rxn$metabolites * -1*(rep(1, n_c) %*% t(sapply(colnames(run_rxn$metabolites), function(x){run_rxn$rxnSummary$rxnStoi[names(run_rxn$rxnSummary$rxnStoi) == names(run_rxn$rxnSummary$metsID2tID)[run_rxn$rxnSummary$metsID2tID == x]]})))
-    
-  if(all(run_rxn$flux < 0)){
-    NNLSanova <- anova(lm(-1*run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)$fitted))
-    fit_summary$NNLS <- ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
-    }else{
-      NNLSanova <- anova(lm(run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)$fitted))
-      fit_summary$NNLS = ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
-    }
-  
-  
-  ### using LS regression, how much variance is explained 
-  fit_summary$LS_met = anova(lm(run_rxn$flux ~ run_rxn$metabolites))$S[1]
-  fit_summary$LS_enzyme = anova(lm(run_rxn$flux ~ run_rxn$enzymes))$S[1]
-  fit_summary$LS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S[1:2])
-  fit_summary$TSS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S)
-  
-  output <- list()
-    output$fit_summary <- fit_summary
-    output$param_interval <- param_interval
-    output$fitted_flux <- flux_fit$fitted
-  output
-  }
-
-
-param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
-  # visualize the joint and marginal distribution of parameter values from the markov chain
-  
-  par_combinations <- expand.grid(1:length(run_rxn$kineticPars[,1]), 1:length(run_rxn$kineticPars[,1]))
-  like_comparison <- ifelse(par_combinations[,1] == par_combinations[,2], TRUE, FALSE)
-  
-  max_likelihood <- par_markov_chain[which.max(par_likelihood$likelihood),]
-  
-  par_comp_like <- NULL
-  for(i in 1:sum(like_comparison)){
-    par_comp_like <- rbind(par_comp_like, data.frame(xval = par_markov_chain[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(par_markov_chain)[par_combinations[like_comparison,][i,1]],
-         parameter_2 = colnames(par_markov_chain)[par_combinations[like_comparison,][i,1]]))
-      }
-  
-  par_comp_dissimilar <- NULL
-  for(i in 1:sum(!like_comparison)){
-    par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = par_markov_chain[,par_combinations[!like_comparison,][i,1]], yval = par_markov_chain[,par_combinations[!like_comparison,][i,2]], 
-          parameter_1 = colnames(par_markov_chain)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(par_markov_chain)[par_combinations[!like_comparison,][i,2]]))
-      }
-  
-  MLEbarplot <- data.frame(xval = max_likelihood[par_combinations[like_comparison,1]], parameter_1 = colnames(par_markov_chain)[par_combinations[like_comparison,1]],
-      parameter_2 = colnames(par_markov_chain)[par_combinations[like_comparison,1]])
-  MLEpoints <- data.frame(xval = max_likelihood[par_combinations[!like_comparison,1]], yval = max_likelihood[par_combinations[!like_comparison,2]],
-      parameter_1 = colnames(par_markov_chain)[par_combinations[!like_comparison,1]], parameter_2 = colnames(par_markov_chain)[par_combinations[!like_comparison,2]])
-  
-  
-  
-  #### determine the maximum bin from the histogram so that values can be scaled to the bivariate histogram values ###
-
-  par_hist_binwidth = 0.2
-  
-  max_density <- max(apply(par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
-  
-  density_trans_inv <- function(x){x*(max_density/20) + max_density/2}
-  density_trans <- function(x){(x - max_density/2)/(max_density/20)}
-  
-  par_comp_dissimilar$yval <- density_trans_inv(par_comp_dissimilar$yval)
-  MLEpoints$yval <- density_trans_inv(MLEpoints$yval)
-  
-  hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), 
-      legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
-      panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line"), axis.title = element_blank()) 
-
-  ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
-    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black")) +
-    scale_x_continuous(NULL, expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5))) +
-    geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) + geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 2, col = "cornflowerblue")
-
-  }
-
 
 
 
