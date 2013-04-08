@@ -21,6 +21,8 @@
 \usepackage{multicol}
 \usepackage{upquote}
 \usepackage{tikz}
+\usepackage{colors} % coloring text
+\usepackage{xfrac} % slanted fractions
 
 \DeclareGraphicsRule{.tif}{png}{.png}{`convert #1 `dirname #1`/`basename #1 .tif`.png}
 
@@ -30,20 +32,146 @@
 
 \begin{document}
 
-\setlength{\parskip}{1mm}
+\setlength{\parskip}{2mm}
 \linespread{1}
 
 \thispagestyle{empty}
 \pagestyle{empty}
 
+\title{Leveraging wide-data to improve protein quantification andinference}
+\author{Sean R. Hackett}
+
+
 \maketitle
+
+
+\section*{Paper Outline}
+
+Previous studies have attempted to independently address two of the largest statistical and bioinformatics questions in quantitative proteomics, the protein inference and protein quantification problems. In this study I will elaborate upon an essential connection between these problems which I will leverage to improve protein inference and quantification. I will present a new statistical model of how the expectation and precision of relative protein abundances depends upon peptide abundance.
+
+Using liquid chromatography - tandem mass spectrometry (LC-MS/MS), complex ensembles of peptides can be separated through a combination of fractionation and chromatography, allowing quantification by MS, and further fragmentation for the purpose of identification \textcolor{red}{cite}. Because this workflow is applicable to the identification and quantification of whole proteomes, its has become the prevailing technique for this purpose \textcolor{red}{Prevalence of technique}. While extensive research has gone into increasing the technical reproducibility of LC-MS, this added variance can be minimized by making relative comparison of multiple chemically-distinguishable samples within individual MS runs. This distinguishability by changing the mass of peptides in a predictable way using either $^{15}$N labeling of whole microbes or using SILAC (\underline{S}table \underline{I}sotope \underline{L}abeling with \underline{A}mino Acids in \underline{C}ell Culture) \textcolor{red}{cite * 2}. This relative quantification is reminiscent of two-color microarrays, where the ratio of an experimental sample and a common reference can be more precisely determined than directly comparing experimental samples across arrays. The methods developed in this paper will largely be discussed in the context of an experimental framework where a shared internally-labelled reference exists, though the extension to unlabeled experiments is plain.
+
+After whole proteome LC-MS/MS and peptide identification, these peptides are mapped to an organisms predicted proteome, to determine which proteins are possibly represented in a sample. For microbes, most peptides will map uniquely to one protein, while for others, homology due to shared domains or descent makes the process of attributing a peptide to a protein ambiguous. This problem is amplified in metazoans, because of a larger fraction of paralogous gene families whose sequence is difficult to deconvolve. Within these groups of similar proteins, the ascertained peptides may be consistent with a subset of the family, allowing the remaining members to possibly be pruned from the dataset. This problem of identifying the suite of proteins in a sample from a partially degenerate set of identified peptides is the heart of the \textit{protein identification problem} \textcolor{red}{cite}.
+
+Once the affiliation of peptides to proteins have been resolved, if one desires to quantify the abundance of proteins, a consensus of peptide abundances must be used to estimate the relative abundance of proteins, the protein quantification problem. During this process ambiguous proteins are routinely discarded \textcolor{red}{cite} and then unique peptides are used to predict proteins using methods such as taking the median of relative peptide abundances and filtering outliers \textcolor{red}{(cox - maxQuant)}. A more principled approach to protein quantification relies upon assuming some parametric sampling distribution of peptide abundances given protein abundance. The chief difference between these distributions revolves around the form of measured deviations from the expected value. Because ion counts generated from mass spectrometry are count data, an attractive model for how observed peptide abundance depends upon relative protein levels is the quasipoisson model, where deviations will be due to over-dispersed counting error \textcolor{red}{cite}. An alternative attractive model is one based upon the log-normal distribution, which essentially asserts that deviations between sampled ion counts are as likely to result in a 2-fold difference as a $\sfrac{1}{2}$. When relative protein abundance is calculated using an appropriate parametric form, the results should inherently be closer to the truth, as relative peptide abundances are combined based upon how precisely they measured. This further allows this peptide-specific precision to propagate into protein-specific precision so that subsequent inference can integrate this knowledge of how confident we are in a protein's relative abundance into appropriately weighted statistical inferences such as using weighted least squares\textcolor{red}{cite}.
+
+Why log normal instead of over-dispersed poisson On each peptide regress out C * DR effect anddetermine the distribution of residuals using KS test.
+In order to implement statistical methods where the principal question is how levels of proteins varyacross conditions, protein point estimates are made assuming some parametric sampling distributionof peptide abundances given protein abundance. The form these
+
+\begin{itemize}
+\item[A] Description of the protein inference problem
+\item[B] Description of the protein quantification problem - Using multiple estimates of the abundance of a protein from individual peptides to arrive at a consensus prediction of the abundance of that protein.
+\item[C] Missing data in proteomics can arise from two source, either peptides are missing because they are present below the limit of detectability or they are missing despite their expectation being above this limit as a decrease probability of signal strength (Karpievitch et al. 2009).
+\item[D] Compatibility with other platforms: label-free and multiple-labelled methods. Using label-free methods, sample-level normalization that put different samples in the same IC ballpark, such as quantile or median normalization can be followed by setting the log abundance of a given peptide to zero. Using multiple-labeling methods, relative quantification of all pairwise-combinations or pairwise combinations with respect to a common reference can be used to yield ratios of proteins across conditions.
+\item[E] Plot graph of protein overlaps, showing which proteins can be disregarded using likelihood, compared to those that would be removed using parsimony methods
+\item[F] Compare correlations across technical replicates and biological replicates, with and without using ambiguous proteins
+\end{itemize}
+
+\color{red}
+To do
+\begin{itemize}
+\item[A] Relative abundance patterns should implicitly change the mixing fraction of proteins\item[B] Accurately modeling the
+\end{itemize}
+\color{black}
+
+\section*{Results}
+
+The methods that I have developed revolve around two observations: A) Peptides differ in how noisy they are, but as the number of peptides measured from a protein increases, this protein’s precision can be measured more accurately. B) As the number of conditions in which a peptide is quantified increases, some peptides noisily track the consensus protein abundance, while others depart strongly. These gross departures are either because a peptide is common to multiple proteins and therefore its trend is a mixture of theirs, or the peptide is the unmodified complement of a covalently-modified pool of nonascertained peptides. Because these covalent modifications such as phosphorylation, methylation affect protein activity and structure \textcolor{red}{cite} their specific detection is a huge area of active research \textcolor{red}{cite}.  While traditional approaches aimed at measuring these modifications do so by enriching and directly measuring these species, this \textit{peptide obscura} approach can measure the complement of all ascertained covalent-modified peptides simultaneously,
+
+While these two issues may seem separate, protein quantification depends upon choosing a relevant pool of peptides; while inferring protein mixtures and divergent peptides depends upon accurately measuring the relative abundance of proteins under each condition.
+
+To demonstrate and validate the utility of this approach, we used a previously published experiment looking at the abundance of X peptides corresponding to Y proteins across Z S. cerevisiae segregants each with two biological replicates.
+
+\subsection*{The noise in mass spectrometry data}
+
+log(sd) is a decreasing function of intensity - draw equivalence to microarray analysis
+
+comparison of heteroschedastic-log-normal versus quasipoisson
+
+residuals of log-normal follow more of a gamma than normal dispersion - shrinkage or otherwise betteraccounting for outliers.
+
+\subsection*{Protein quantification via gaussian integrated likelihood}
+
+Combining multiple distributions drawn from log-normal to produce protein posterior distribution.
+
+The mean and precision of protein pattern inference can be determined by seeing that this is equivalent to a product of normal distributions, for which a closed-form solution exists through \textit{integrated likelihood}.
+
+$\tau_{y} = \prod_{z \neq y}^{Y}\sigma^{2}_{z}$
+
+\begin{align}
+\mathbf{\Omega}_{kc} \sim \mbox{\Large \textbf{N}}\left(\mu = \frac{\sum_{i = 1}^{I}\mathbf{\Theta}_{ik}\alpha_{k}\textbf{X}_{ic}\tau_{i}}{\sum_{i = 1}^{I}\mathbf{\Theta}_{ik}\alpha_{k}\tau_{i}}, \sigma^{2} =  \left(\sum_{i = 1}^{I}\frac{\mathbf{\Theta}_{ik}\alpha_{k}}{\sigma^{2}_{i}}\right)^{-1} \right)
+\end{align}
+
+- Combining over ionization states
+
+\subsection*{The pretenders to the throne}
+
+There are three ways in which the previous direct inference of protein trends from peptide trends should be altered to better represent the realities of a proteomics experiment. Each of these changes is meant to statistically frame a specific biological scenario.
+
+\textbf{Degenerate peptides:} Not all peptides have a 1-1 mapping between their sequence and a unique protein. In our trial dataset this fraction of degenerate peptides is relatively low, XXX. While these degenerate peptides could be discarded, patterns of protein overlap tend to be highly non-random such that some pairs of highly-related paralogs may have many more shared than unique peptides. Discarding these peptides may greatly reduce the signal for these proteins, limiting our ability to detect their relative abundance. This problem is compounded as organismal complexity both because a higher number of total number of proteins elevates the overlap of shared domains gene families, as well as the expansion of paralogous gene families.
+
+Show overlap of protein families
+
+While degenerate peptides can not be used to directly inform protein trends, they are not information-free. Rather, the relative abundance trend of each degenerate peptide will be some mixture of the trends of each of the proteins it could have come from. Jointly using peptides which are unique to a protein and peptides which are ambiguous, a relative mixture of confounded proteins can be found.
+
+Cartoon showing private trends, conflated trends and resolution. Ideally with data
+
+\textbf{Absent proteins:} If a sample contains peptides which are unique to a protein, that is generally sufficient for us to conclude that this protein exists in the sample. When this protein is subsumable or a subset of other proteins (i.e. it has no unique peptides) this conclusion is more difficult to make. When utilizing the above framework of defining a mixing fraction between two proteins which is manifested in the peptide trends being mixtures of protein trends, the absence of unique peptides for a putative protein would mean that it was unconstrained and could always increase the fit of the model due to the addition of a number of parameters equal to the number of samples. For t
+
+To counteract this intrinsic increase in the fit due to spuriously adding free parameters, a prior probability that a protein exists can be balanced with the increase in the model fit the protein affords. Representing the presence of a protein \textit{k} as a binary variable $\alpha_{k}$, a protein can be said to exist if p(peptides | $\alpha_{k} = 1$) $\cdot$ p($\alpha_{k}$ = 1) > p(peptides | $\alpha_{k}$ = 0) $\cdot$ p($\alpha_{k}$ = 0). The nature of the prior p($\alpha_{k}$) will be subsequently discussed.
+
+
+\textbf{Divergent peptides:} Peptides which are never modified should be a fair readout of the relative abundance of a protein; if a protein is twice as abundant in the experimental sample as the reference, after digestion there should be approximately twice as many experimental peptides as reference ones. This relationship breaks down when a peptide is covalently modified to a varying degree across samples. In this situation the modified peptide may be difficult to detect depending upon the nature of the mass spectrometry experiment (e.g. phosphopeptides ionize poorly amidst un-modified peptides), however the un-modified complement of this modified pool can be detected as normal and the relative levels of modification can be determined. Initially assuming that a peptide is at least partially modified:
+
+The most minimally modified condition c' can be detected as the condition with the largest ratio of divergent peptide relative abundance \textbf{X}$_{C}$ to protein relative abundance $\boldsymbol\Omega_{C}$. While the actual level of constitutive phosphorylation under this condition \textit{c}' can not be determined, this fraction of the total protein pool can be represented as $\phi_{min}$ and the level of condition-specific phosphorylation can be foundaccording to equation \ref{covamount}.
+
+\begin{align}
+\phi_{c} = 1 - [1 - \phi_{min}]\frac{2^{[log_{2}\textbf{X}_{c} - log_{2}\boldsymbol\Omega_{c}]}}{2^{[log_{2}\textbf{X}_{c'} - log_{2}\boldsymbol\Omega_{c'}]}}\label{covamount}
+\end{align}
+
+In order to determine whether a peptide trends differ substantially enough from the pattern of protein relative abundance across samples to be labelled as a ``divergent peptide'', we can consider a
+
+\begin{align}
+Lik(\mathbf{\Omega}, \mathbf{\Theta}, \pi, \alpha | \sigma^{2}, \textbf{X}) &= \prod_{i}^{I}\prod_{c}^{C}\left[ \pi_{i}\mbox{\Large \textbf{N}}(\sum_{k}^{K}\mathbf{\Theta}_{iK}\alpha_{K}\mathbf{\Omega}_{Kc} ; \textbf{X}_{ic}, \sigma^{2}_{ic}) + (1-\pi_{i})\mbox{\Large \textbf{N}}( \textbf{X}_{ic}; \textbf{X}_{ic}, \sigma^{2}_{ic}) \right]
+\end{align}
+
+\color{red}
+\begin{itemize}
+\item[A] Comparing log-normal to poisson distribution - description of problem, how does a better fit of residuals indicate an appropriate distribution.
+\item[B] Patterns of missing data
+\item[C] Algorithm pseudo-code
+\item[D] Computational performance
+\end{itemize}
+\color{black}
+
+\section*{Discussion}
+
+\color{red}
+\begin{itemize}
+\item[A] Degeneracy
+\item[B] Inherit mismatches
+\end{itemize}
+\color{black}
+
+\subsection*{Similarity to early microarray analysis}
+
+Fitting variance as a function of signal strength
+
+Quackenbush:
+
+Description of Lowess normalization - correcting for local dependence of log2(H/L) on log10(H*L) - saturation effects, not really present in MS data - check for each sample
+
+Rather than locally shrinking variance to make variance comparable, establish what the appropriate local variance is and then use that to determine a an IC dependent fitted peptide precision
+
+
 
 \section*{Going from peptides to proteins via expectation-maximization}
 
-When using relative variation in peptides to predict variation in protein abundance we need to deal with two factors
+When using relative variation in peptides to predict variation in protein abundance we need to deal with several factors
 \begin{itemize}
 \item If a peptide maps to multiple proteins, it should be attributed to a protein (thereby adding signal) to the extent that its pattern matches the pattern from other peptides.
-\item Some peptides won't conform to the trends of their protein because they may be the non-covalently modified complement of a set of unascertained modified peptides.  These peptides shouldn't inform the general protein trend, and may be interesting to analyze in isolation.
+\item Some peptides won’t conform to the trends of their protein because they may be the non-covalently modified complement of a set of unascertained modified peptides. These peptides shouldn’t inform the general protein trend, and may be interesting to analyze in isolation.
+\item Some proteins may only have measured peptides which are shared by other proteins. These proteins could be disregarded based upon parsimony arguments, but if they substantially changes the pattern of the peptides to which they ambiguously match, then this should support their existence.
 \end{itemize}
 
 \subsection*{Algorithm structure}
