@@ -507,8 +507,8 @@ for(a_pep_n in 1:n_p){
   
   ### Prune individual points if they are strong outliers based upon a bonferroni-corrected wald test
   wald_p <- 1 - abs(pnorm((peptide_model$RA - mean(peptide_model$RA))/sd(peptide_model$RA)) - 0.5)*2
-  peptide_model$is_outlier[wald_p < 0.05/length(wald_p)] <- TRUE
-  peptide_model$outlier_type[wald_p < 0.05/length(wald_p)] <- "point"
+  peptide_model$is_outlier[wald_p < 0.05/length(wald_p) & abs(peptide_model$RA) > 5] <- TRUE
+  peptide_model$outlier_type[wald_p < 0.05/length(wald_p) & abs(peptide_model$RA) > 5] <- "point"
   
   ### if a peptide is broadly consistent then rather than doing aggresive pruning, the peptides added variance will be accounted for at the level of expected precision
   
@@ -531,6 +531,7 @@ for(a_pep_n in 1:n_p){
   
   if(sum(mean_euclid_dist[!is.na(mean_euclid_dist[,1]),1] > euclidean_threshold) > length(mean_euclid_dist[,1][!is.na(mean_euclid_dist[,1])])/2){
     filtered_peps[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$is_outlier
+    peptide_model$outlier_type[is.na(peptide_model$outlier_type)] <- "peptide"
     outlier_type[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$outlier_type
     next # peptides with a high variance are noted and skipped - this inflated variance will be accounted for by inflating variance / decreasing precision
     }
@@ -583,7 +584,8 @@ for(a_pep_n in 1:n_p){
   peptide_model$is_outlier[bad_block_samples] <- TRUE
   peptide_model$outlier_type[bad_block_samples] <- "block"
   
-  if(totally_inconsistent){peptide_model$is_outlier <- TRUE; totally_inconsistent <- FALSE; peptide_model$outlier_type <- "peptide"}
+  if(totally_inconsistent){
+    totally_inconsistent <- FALSE; peptide_model$outlier_type[is.na(peptide_model$outlier_type)] <- "peptide"}
   }
   
   #plot(peptide_model$RA ~ factor(peptide_model$Condition), col = factor(peptide_model$totalBlocking))
@@ -624,7 +626,14 @@ for(inst in unique(refSamples$Instrument)){
 hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
 
 LHscatter <- ggplot(bioRepPlot, aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
-LHscatter + geom_hex(bins = 200)
+LHscatter + geom_hex(bins = 200) + ggtitle("p0.05H ~ p0.05L")
+
+LHscatter <- ggplot(bioRepPlot[is.na(bioRepPlot$outlier_type),], aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
+LHscatter + geom_hex(bins = 200) + ggtitle("p0.05H ~ p0.05L Filtered")
+
+LHscatter <- ggplot(bioRepPlot[!is.na(bioRepPlot$outlier_type),], aes(y = experimental, x = reference, col = outlier_type)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_color_brewer(palette = "Set2") 
+LHscatter + geom_point(size = 1.5) + geom_abline(intercept = 0, slope = 1, size = 2) + ggtitle("p0.05H ~ p0.05L Outliers")
+
 
 
 nbins <- 50
@@ -633,7 +642,7 @@ var_spline_plot <- list()
 
 for(inst in unique(bioRepPlot$Instrument)){
   # calculate a variance/precision kernal over instrument*IC
-  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst,]
+  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst & is.na(bioRepPlot$outlier_type),]
   binsize <- floor(length(instSubset[,1])/nbins)
   error_bins <- data.frame(val_mean = instSubset$averageIC[order(instSubset$averageIC)], light_val = instSubset$experimental[order(instSubset$averageIC)], bin = c(rep(1:(length(instSubset[,1]) %% nbins), each = binsize + 1), rep(((length(instSubset[,1]) %% nbins) + 1):nbins, each = binsize)))
 
@@ -659,6 +668,8 @@ bin_dist_plot <- NULL
 ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = logIC, y = MLE_var, color = "blue", size = 3))
 
 
+
+
 @
 
 
@@ -666,7 +677,28 @@ ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, a
 
 <<>>=
 
+# remove outliers
+# fit SD(IC)
+# fit a mixed-effect linear model with weights of SD(IC) to determine point estimates abundance
+# determine the extent of over-dispersion (plot across proteins)
 
+good_light
+good_heavy
+outlier_type
+
+for(a_pep_n in 1:n_p){
+  
+  peptide_model <- data.frame(RA = abundMat[a_pep_n,], proteomicsBlocking, totalBlocking = inst_block_level_joined, setBlocking = inst_set_level_joined, lightIC = log2(good_light[a_pep_n,]), heavyIC = log2(good_heavy[a_pep_n,]), averageIC = (log2(good_light[a_pep_n,]) + log2(good_heavy[a_pep_n,]))/2, outlier_type = outlier_type[a_pep_n,])
+  peptide_model <- peptide_model[!is.na(peptide_model$RA),]
+  peptide_model$sd_fit = sapply(1:length(peptide_model[,1]), function(x){predict(var_spline_inst[[peptide_model$Instrument[x]]], peptide_model$averageIC[x])$y})
+    
+  A = rnorm(1000, 0, 1)
+  B = A*500 + rnorm(1000, 0, 200)
+  W = c(rep(1, 500), rep(0.25, 500))
+  test_frame = data.frame(A = A, B = B, W = W, E = 1)
+  lme(B ~ A, weights = ~W, data = test_frame, random =  ~ 1 | E) # weights are by variance rather precision
+  lm(B ~ A, weights = 1/W, data = test_frame)
+  
   ### Prune whole sets if they are highly inconsistent with other sets (and more extreme / high variance) ### Not currently implemented due to the effectiveness of block-level filtering
   
   ### Fit a mixed effects model treating each condition as a fixed effect and all blocking factors as random effects to estimate fixed effects ####
