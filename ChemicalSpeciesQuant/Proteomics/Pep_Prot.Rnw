@@ -268,8 +268,7 @@ MAplot + geom_hex(bins = 150) + geom_smooth(method = "lm", formula = y ~ x, fill
 \end{figure}
 
 <<chargeOxPlot>>=
-barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "none", 
-  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.line = element_line()) 
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.line = element_line()) 
 
 combined_charge_ox_plot <- ggplot(combined_charge_ox, aes(x = correlation, fill = 'chartreuse3')) + facet_grid(~ comparison) + barplot_theme
 combined_charge_ox_plot + geom_bar() + scale_x_continuous(name = "Pearson Correlation", expand = c(0.01,0.01), limits = c(-1,1)) + scale_y_continuous(name = "Counts", expand = c(0.01, 0.01)) + scale_fill_identity()
@@ -495,6 +494,7 @@ inst_block_level_joined <- apply(proteomicsBlocking, 1, function(x){
 
 ### fit relative abundance with condition and blocking main effects to generate LS fit ###
 filtered_peps <- abundMat; filtered_peps[is.na(filtered_peps) | !is.na(filtered_peps)] <- 0
+outlier_type <- filtered_peps; outlier_type[!is.na(outlier_type)] <- NA
 
 for(a_pep_n in 1:n_p){
   
@@ -510,7 +510,7 @@ for(a_pep_n in 1:n_p){
   peptide_model$is_outlier[wald_p < 0.05/length(wald_p)] <- TRUE
   peptide_model$outlier_type[wald_p < 0.05/length(wald_p)] <- "point"
   
-  ### Prune blocks if they are highly inconsistent with the average of other replicates (more extreme and high variance) ###
+  ### if a peptide is broadly consistent then rather than doing aggresive pruning, the peptides added variance will be accounted for at the level of expected precision
   
   block_prune <- TRUE
   RA_blocks <- acast(peptide_model[!peptide_model$is_outlier,], Condition ~  Instrument + Set + Block, value.var = "RA")
@@ -518,6 +518,25 @@ for(a_pep_n in 1:n_p){
   mean_euclid_dist <- data.frame(average_euclid_d = rep(NA, length(RA_blocks[1,])), mean_val = NA, index = 1:length(RA_blocks[1,]))
   isolated_indeces <- NULL
   totally_inconsistent <- FALSE #if all condition pairs are inconsistent then the peptide will be discarded
+  
+  for(j in c(1:length(mean_euclid_dist[,1]))){
+      primary_set <- RA_blocks[!is.na(RA_blocks[,j]),j]
+      if(length(primary_set) == 1 | length(RA_blocks[1,]) == 2){next}
+      
+      compare_set <- apply(RA_blocks[!is.na(RA_blocks[,j]),-j], 1, mean, na.rm = TRUE)
+      if(sum(!is.nan(compare_set)) == 0){next}
+      
+      mean_euclid_dist[j,1:2] <- c(mean((primary_set[!is.nan(compare_set)] - compare_set[!is.nan(compare_set)])^2), mean(primary_set))
+      } # measure the euclidean distance between technical replicates in different blocks
+  
+  if(sum(mean_euclid_dist[!is.na(mean_euclid_dist[,1]),1] > euclidean_threshold) > length(mean_euclid_dist[,1][!is.na(mean_euclid_dist[,1])])/2){
+    filtered_peps[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$is_outlier
+    outlier_type[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$outlier_type
+    next # peptides with a high variance are noted and skipped - this inflated variance will be accounted for by inflating variance / decreasing precision
+    }
+  
+  ### Prune blocks if they are highly inconsistent with the average of other replicates (more extreme and high variance) ###
+  ### check to see whether there are blocks of data which are poor and if so flag them in the "outlier_type" and "filtered_peps" array ###
   
   if(length(unique(peptide_model$setBlocking)) != 1){
   
@@ -532,6 +551,7 @@ for(a_pep_n in 1:n_p){
       
       mean_euclid_dist[j,1:2] <- c(mean((primary_set[!is.nan(compare_set)] - compare_set[!is.nan(compare_set)])^2), mean(primary_set))
       }
+    
     
     isolated_indeces <- c(isolated_indeces, mean_euclid_dist$index[is.na(mean_euclid_dist$average_euclid_d)])
     RA_blocks <- RA_blocks[,!is.na(mean_euclid_dist$average_euclid_d)]
@@ -563,11 +583,13 @@ for(a_pep_n in 1:n_p){
   peptide_model$is_outlier[bad_block_samples] <- TRUE
   peptide_model$outlier_type[bad_block_samples] <- "block"
   
-  if(totally_inconsistent){peptide_model$is_outlier <- TRUE; totally_inconsistent <- FALSE}
+  if(totally_inconsistent){peptide_model$is_outlier <- TRUE; totally_inconsistent <- FALSE; peptide_model$outlier_type <- "peptide"}
   }
   
+  #plot(peptide_model$RA ~ factor(peptide_model$Condition), col = factor(peptide_model$totalBlocking))
+  
   filtered_peps[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$is_outlier
-
+  outlier_type[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$outlier_type
 }
 
 
@@ -578,30 +600,28 @@ for(a_pep_n in 1:n_p){
 refSamples <- proteomicsBlocking[proteomicsBlocking$Condition == "p0.05",]
 # generate an instrument-specific function
 bioRepPlot <- NULL
+
+
 for(inst in unique(refSamples$Instrument)){
   logLight = data.frame(log2(good_light[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]]))
   logHeavy = data.frame(log2(good_heavy[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]]))
-  
-  if(length(logLight[1,]) == 1){
-    logLight[filtered_peps[proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]] == 1,1] <- NA
-    logHeavy[filtered_peps[proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]] == 1,1] <- NA
-    }else{
-      logLight[filtered_peps[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]] == 1] <- NA
-      logHeavy[filtered_peps[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]] == 1] <- NA
-      }
+  outlier_type_ref <- data.frame(outlier_type[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]])
   
   avgSignalSTD <- data.frame((logLight + logHeavy)/2)
   
   for(a_sample in 1:length(refSamples$SampleName[refSamples$Instrument == inst])){
+    outlier_type_redvec = outlier_type_ref[,a_sample][is.finite(avgSignalSTD[,a_sample])]
     logLight_redvec = logLight[,a_sample][is.finite(avgSignalSTD[,a_sample])]
     logHeavy_redvec = logHeavy[,a_sample][is.finite(avgSignalSTD[,a_sample])]
     avgSignal_redvec = avgSignalSTD[is.finite(avgSignalSTD[,a_sample]),a_sample]
-    logLight_redvec <- logLight_redvec + optimize(normFactor, c(-1, 1), logLight = logLight_redvec, logHeavy = logHeavy_redvec)$minimum
+    logLight_redvec <- logLight_redvec + optimize(normFactor, c(-1, 1), logLight = logLight_redvec[is.na(outlier_type_redvec)], logHeavy = logHeavy_redvec[is.na(outlier_type_redvec)])$minimum
     
-    bioRepPlot <- rbind(bioRepPlot, data.frame(experimental = logLight_redvec, reference = logHeavy_redvec, averageIC = avgSignal_redvec, variance = (logLight_redvec - avgSignal_redvec)^2*2,Instrument = inst, Set = refSamples$Set[refSamples$Instrument == inst][a_sample]))
+    bioRepPlot <- rbind(bioRepPlot, data.frame(experimental = logLight_redvec, reference = logHeavy_redvec, averageIC = avgSignal_redvec, variance = (logLight_redvec - avgSignal_redvec)^2*2,Instrument = inst, Set = refSamples$Set[refSamples$Instrument == inst][a_sample], outlier_type = outlier_type_redvec))
     
     }
   }
+
+hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
 
 LHscatter <- ggplot(bioRepPlot, aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200)
