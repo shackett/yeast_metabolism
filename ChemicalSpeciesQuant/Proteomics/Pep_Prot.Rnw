@@ -656,18 +656,22 @@ for(a_pep_n in 1:n_p){
     }
    
   bad_block_samples <- index_blocks[,!(c(1:length(index_blocks[1,])) %in% mean_euclid_dist$index)]
-  bad_block_samples <- bad_block_samples[!is.na(bad_block_samples)]
+  bad_block_samples <- bad_block_samples[!is.na(bad_block_samples)] #list samples in blocks that were removed due to inconsistency or being disjoint
+  
+  disjoint_samples <- unlist(index_blocks[,isolated_indeces])[!is.na(unlist(index_blocks[,isolated_indeces]))]
+  bad_block_samples <- bad_block_samples[!(bad_block_samples %in% disjoint_samples)] #reduce this list to only samples which were inconsistent
   
   peptide_model$is_outlier[bad_block_samples] <- TRUE
   peptide_model$outlier_type[bad_block_samples] <- "block"
   
   if(totally_inconsistent){
-    totally_inconsistent <- FALSE; peptide_model$outlier_type[is.na(peptide_model$outlier_type)] <- "peptide"}
+    totally_inconsistent <- FALSE; peptide_model$outlier_type[is.na(peptide_model$outlier_type)] <- "sparse"}
   }
   
   #plot(peptide_model$RA ~ factor(peptide_model$Condition), col = factor(peptide_model$totalBlocking))
   
   filtered_peps[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$is_outlier
+  peptide_model$outlier_type[is.na(peptide_model$outlier_type)] <- "valid"
   outlier_type[a_pep_n, !is.na(abundMat[a_pep_n,])] <- peptide_model$outlier_type
 }
 
@@ -694,7 +698,7 @@ for(inst in unique(refSamples$Instrument)){
     logLight_redvec = logLight[,a_sample][is.finite(avgSignalSTD[,a_sample])]
     logHeavy_redvec = logHeavy[,a_sample][is.finite(avgSignalSTD[,a_sample])]
     avgSignal_redvec = avgSignalSTD[is.finite(avgSignalSTD[,a_sample]),a_sample]
-    logLight_redvec <- logLight_redvec + optimize(normFactor, c(-1, 1), logLight = logLight_redvec[is.na(outlier_type_redvec)], logHeavy = logHeavy_redvec[is.na(outlier_type_redvec)])$minimum
+    logLight_redvec <- logLight_redvec + optimize(normFactor, c(-1, 1), logLight = logLight_redvec[outlier_type_redvec == "valid"], logHeavy = logHeavy_redvec[outlier_type_redvec == "valid"])$minimum
     SN_redvec <- pepSN[,a_sample][is.finite(avgSignalSTD[,a_sample])]
     
     bioRepPlot <- rbind(bioRepPlot, data.frame(experimental = logLight_redvec, reference = logHeavy_redvec, averageIC = avgSignal_redvec, variance = (logLight_redvec - avgSignal_redvec)^2*2,Instrument = inst, Set = refSamples$Set[refSamples$Instrument == inst][a_sample], SN = SN_redvec, outlier_type = outlier_type_redvec))
@@ -707,10 +711,10 @@ hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = elemen
 LHscatter <- ggplot(bioRepPlot, aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200) + ggtitle("p0.05H ~ p0.05L")
 
-LHscatter <- ggplot(bioRepPlot[is.na(bioRepPlot$outlier_type),], aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
+LHscatter <- ggplot(bioRepPlot[bioRepPlot$outlier_type == "valid",], aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200) + ggtitle("p0.05H ~ p0.05L Filtered")
 
-LHscatter <- ggplot(bioRepPlot[!is.na(bioRepPlot$outlier_type),], aes(y = experimental, x = reference, col = outlier_type)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_color_brewer(palette = "Set2") 
+LHscatter <- ggplot(bioRepPlot[bioRepPlot$outlier_type != "valid",], aes(y = experimental, x = reference, col = outlier_type)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_color_brewer(palette = "Set2") 
 LHscatter + geom_point(size = 1.5) + geom_abline(intercept = 0, slope = 1, size = 2) + ggtitle("p0.05H ~ p0.05L Outliers")
 
 
@@ -821,23 +825,47 @@ for(a_pep_n in 1:n_p){
   if(length(peptide_model[,1]) < n_e*quality_frac){next}
   
   peptide_model$var_fit = sapply(1:length(peptide_model[,1]), function(x){predict(var_spline_inst[[peptide_model$Instrument[x]]], log10(peptide_model$SN)[x])$y})
+  peptide_model <- peptide_model[is.finite(peptide_model$var_fit),] #remove infinite variance because not informative
   
-  mixed_effects_model <- lme(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking)
-  cond_est <-  summary(mixed_effects_model)$coef$fixed + ifelse(names(summary(mixed_effects_model)$coef$fixed) == "(Intercept)", 0, mixed_effects_model$coef$fixed[1]); names(cond_est) <- unique(peptide_model$Condition)
+  
+  if(all(names(table(table(peptide_model$Condition))) <= 1)){
+  #if number of conditions == number of samples then regression is singular, so use measurements directly
+    
+    cond_est <- peptide_model$RA
+    names(cond_est) <- peptide_model$Condition
+    
+    }else{
+      if(length(peptide_model[,1]) < length(unique(peptide_model$Condition)) + length(unique(peptide_model$totalBlocking))){
+        #fit weighted-LS if the number of blocks + conditions is greater than the number of samples
+        gls_model <- gls(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model)
+        cond_est <-  summary(gls_model)$coef + ifelse(names(summary(gls_model)$coef) == "(Intercept)", 0, gls_model$coef[1]); names(cond_est) <- unique(peptide_model$Condition)
+        }else{
+          #the usual case - fit a mixed-effects model to estimate the relative abundance of proteins in each condition accounting for the blocking
+          mixed_effects_model <- try(lme(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking), silent = TRUE)
+          
+          grep('Error', mixed_effects_model[[1]][1]) == 1
+          
+          mixed_effects_model <- lme(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking)
+          cond_est <-  summary(mixed_effects_model)$coef$fixed + ifelse(names(summary(mixed_effects_model)$coef$fixed) == "(Intercept)", 0, mixed_effects_model$coef$fixed[1]); names(cond_est) <- unique(peptide_model$Condition)
+          
+          }
+      }
+  model.matrix(RA ~ factor(Condition), data = peptide_model)
   
   peptide_model$fitted <- sapply(peptide_model$Condition, function(x){cond_est[names(cond_est) == x]})
-  peptide_model$RA - peptide_model$fitted
   
-  if(sum(table(peptide_model$Condition) >= 2) < 5 & all(peptide_model$outlier_type == "peptide")){ #if peptide was flagged due to inconsistency between replicates and there are few examples where a peptide was ascertained in multiple conditions, then discard the peptide
+  if(sum(table(peptide_model$Condition) >= 2) < 5 & all(peptide_model$outlier_type == "peptide")){
     next
     }
   
-  repeated_conds <- peptide_model[peptide_model$Condition %in% names(table(peptide_model$Condition))[table(peptide_model$Condition) >= 2],]
-  repeated_conds$nreps <- sapply(repeated_conds$Condition, function(x){table(repeated_conds$Condition)[names(table(repeated_conds$Condition)) == x]})
-  #### inflate each residual by nreps/(nreps - 1)
+  if(sum(table(peptide_model$Condition) >= 2) >= 5){
+    repeated_conds <- peptide_model[peptide_model$Condition %in% names(table(peptide_model$Condition))[table(peptide_model$Condition) >= 2],]
+    repeated_conds$nreps <- sapply(repeated_conds$Condition, function(x){table(repeated_conds$Condition)[names(table(repeated_conds$Condition)) == x]})
+    #### inflate each residual by nreps/(nreps - 1)
   
-  dispersion_adj[a_pep_n] <- length(repeated_conds[,1])/sum(((repeated_conds$RA - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$var_fit)))
-  
+    dispersion_adj[a_pep_n] <- length(repeated_conds[,1])/sum(((repeated_conds$RA - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$var_fit)))
+    } else{dispersion_adj[a_pep_n] <- 1}
+    
   peptide_model$precision_adj <- 1/peptide_model$var_fit*dispersion_adj[a_pep_n]
   
   cond_summary <- data.frame(condition = conditions, RA = NA, precision = NA)
