@@ -45,12 +45,12 @@ QTSV_SD$SD<-sqrt(QTSV_SD$N14^2 + QTSV_SD$N15^2)
 QTSV_SD<-QTSV_SD[c("QuantID", "SD")]
 
 QTSV_SN<-dcast(QTSV, QuantID ~ QuantClass, value.var="SN")
-QTSV_SN$SN<-sqrt(QTSV_SD$N14^2 + QTSV_SD$N15^2)
-QTSV_SN<-QTSV_SD[c("QuantID", "SD")]
+QTSV_SN$SN<-sqrt(((1/QTSV_SN$N14^2) + (1/QTSV_SN$N15^2))^-1) #sqrt of sum of CVs
+QTSV_SN<-QTSV_SN[c("QuantID", "SN")]
 
 QTSV_Ratios<-dcast(QTSV, QuantID ~ QuantClass, value.var="Quant")
 QTSV_Ratios$Quant<-QTSV_Ratios$N14 + QTSV_Ratios$N15
-QTSV_Ratios<-merge(QTSV_Ratios, QTSV_SD)
+QTSV_Ratios<-merge(merge(QTSV_Ratios, QTSV_SD), QTSV_SN)
 QTSV_Ratios$Log2LvH<-log2(QTSV_Ratios$N14/QTSV_Ratios$N15)
 QTSV_Ratios<-merge(QTSV_Ratios, unique(QTSV[c("QuantID", "SpectrumID", "Sequence", "ProtAcc", "Iter")]))
 
@@ -85,7 +85,9 @@ QTSV_Ratios.Uni$Rep<-ifelse(grepl("OG-", QTSV_Ratios.Uni$File), "QTOF6538",
 
 QTSV_Ratios.Uni<-data.table(QTSV_Ratios.Uni)
 setkeyv(QTSV_Ratios.Uni, c("PepID", "Set", "Rep"))
-system.time({QTSV_Ratios.Uni.Set<-QTSV_Ratios.Uni[,data.frame(LQuant=sum(.SD$N14), HQuant=sum(.SD$N15)),by=c("PepID", "Set", "Rep")]})
+
+sqrt_sum_sq <- function(x){sqrt(sum(x^2))}
+system.time({QTSV_Ratios.Uni.Set<-QTSV_Ratios.Uni[,data.frame(LQuant=sum(.SD$N14), HQuant=sum(.SD$N15), SN=sqrt_sum_sq(.SD$SN)), by=c("PepID", "Set", "Rep")]})
 
 save(QTSV_Ratios.Uni.Set, file="20130313QTSV_RatiosUniSet.Rdata")
 
@@ -98,7 +100,7 @@ library(reshape2)
 acast(QTSV_Ratios.Uni.Set, PepID~Set + Rep, value.var="Log2LvH")->PepMatrix
 acast(QTSV_Ratios.Uni.Set, PepID~Set + Rep, value.var="HQuant")->heavyIC
 acast(QTSV_Ratios.Uni.Set, PepID~Set + Rep, value.var="LQuant")->lightIC
-
+acast(QTSV_Ratios.Uni.Set, PepID~Set + Rep, value.var="SN")->peptideSN
 #PepMatrix[rowSums(is.finite(PepMatrix))==16,]->test2
 #test2[sample(rownames(test2)),]->test2
 
@@ -129,4 +131,5 @@ ddply(ProtPep, .(PepID), function(df) {
 ProtPep$Val<-1
 acast(ProtPep, PepID~ProtAcc, value.var="Val", fill=0)->ProtPepMatrix
 
-save(PepMatrix, ProtPepMatrix, heavyIC, lightIC, file="20130313ProtPepMatrices.Rdata")
+save(PepMatrix, ProtPepMatrix, heavyIC, lightIC, peptideSN, file="20130313ProtPepMatrices.Rdata")
+=

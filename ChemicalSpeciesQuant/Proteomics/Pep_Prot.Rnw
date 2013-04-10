@@ -82,7 +82,7 @@ lightIC[lightIC < ICthreshold] <- NA; heavyIC[heavyIC < ICthreshold] <- NA
 
 #filter experimental column from instruments without an biological replicates
 good_experimental_samples <- colnames(lightIC) %in% proteomicsBlocking$SampleName[proteomicsBlocking$Instrument %in% c("QTOF6538", "QTOF6550")]
-lightIC <- lightIC[,good_experimental_samples]; heavyIC <- heavyIC[,good_experimental_samples]; PepMatrix <- PepMatrix[,good_experimental_samples]
+lightIC <- lightIC[,good_experimental_samples]; heavyIC <- heavyIC[,good_experimental_samples]; PepMatrix <- PepMatrix[,good_experimental_samples]; peptideSN <- peptideSN[,good_experimental_samples]
 proteomicsBlocking <- proteomicsBlocking[good_experimental_samples,]
 
 #filter samples with too many missing values (below threshold)
@@ -126,6 +126,7 @@ abundMat[is.infinite(abundMat)] <- NA
 
 good_light <- lightIC[good_samples,]
 good_heavy <- heavyIC[good_samples,]
+good_SN <- peptideSN[good_samples,]
 
 #map measured peaks to unique peptide sequences
 
@@ -205,6 +206,7 @@ bioRepPlot <- NULL
 for(inst in unique(refSamples$Instrument)){
   logLight = data.frame(log2(lightIC[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]]))
   logHeavy = data.frame(log2(heavyIC[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]]))
+  pepSN = data.frame(peptideSN[,proteomicsBlocking$SampleName %in% refSamples$SampleName[refSamples$Instrument == inst]])
   avgSignalSTD <- data.frame((logLight + logHeavy)/2)
   
   for(a_sample in 1:length(refSamples$SampleName[refSamples$Instrument == inst])){
@@ -212,8 +214,9 @@ for(inst in unique(refSamples$Instrument)){
     logHeavy_redvec = logHeavy[,a_sample][is.finite(avgSignalSTD[,a_sample])]
     avgSignal_redvec = avgSignalSTD[is.finite(avgSignalSTD[,a_sample]),a_sample]
     logLight_redvec <- logLight_redvec + optimize(normFactor, c(-1, 1), logLight = logLight_redvec, logHeavy = logHeavy_redvec)$minimum
+    SN_redvec <- pepSN[is.finite(avgSignalSTD[,a_sample]),a_sample]
     
-    bioRepPlot <- rbind(bioRepPlot, data.frame(experimental = logLight_redvec, reference = logHeavy_redvec, averageIC = avgSignal_redvec, variance = (logLight_redvec - avgSignal_redvec)^2*2,Instrument = inst, Set = refSamples$Set[refSamples$Instrument == inst][a_sample]))
+    bioRepPlot <- rbind(bioRepPlot, data.frame(experimental = logLight_redvec, reference = logHeavy_redvec, averageIC = avgSignal_redvec, variance = (logLight_redvec - avgSignal_redvec)^2*2,Instrument = inst, Set = refSamples$Set[refSamples$Instrument == inst][a_sample], SN = SN_redvec ))
     
     }
   }
@@ -236,6 +239,8 @@ hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = elemen
 LHscatter <- ggplot(bioRepPlot, aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200)
 
+SNscatter <- ggplot(bioRepPlot, aes(y = experimental - reference, x = log2(SN))) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_fill_gradientn(name = "Counts", colours = rainbow(7)) + scale_x_continuous("log2 Signal:noise of H/L measurement", expand = c(0.02,0.02), limit = c(-10, 20)) + scale_y_continuous("H - L log2 p0.05 abundance", expand = c(0.01,0.01), limit = c(-10,10))
+SNscatter + geom_hex(bins = 100)
 @
 \label{heavylightcomp}
 \caption{Comparison of log$_{2}$p0.05$^{H}$ and log$_{2}$p0.05$^{L}$}
@@ -321,6 +326,76 @@ ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, a
 \caption{pooling peptides by mean($log_{2}^{H}, log_{2}^{L}$) and within these pools looking at the average variance}
 \label{poole_var_fig}
 \end{figure}
+
+<<>>=
+
+nbins <- 50
+var_spline_inst <- list()
+var_spline_plot <- list()
+
+for(inst in unique(bioRepPlot$Instrument)){
+  # calculate a variance/precision kernal over instrument*IC
+  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst,]
+  binsize <- floor(length(instSubset[,1])/nbins)
+  error_bins <- data.frame(val_mean = instSubset$averageIC[order(instSubset$SN)], light_val = instSubset$experimental[order(instSubset$SN)], SN = instSubset$SN[order(instSubset$SN)], bin = c(rep(1:(length(instSubset[,1]) %% nbins), each = binsize + 1), rep(((length(instSubset[,1]) %% nbins) + 1):nbins, each = binsize)))
+
+  bin_var <- data.frame(logIC = rep(NA, times = nbins), SN = NA, MLE_var = NA)
+  bin_dist_plot <- NULL
+
+  for(bin in 1:nbins){
+    bin_var$logIC[bin] <- mean(error_bins[error_bins$bin == bin,]$val_mean)
+    bin_var$SN[bin] <- mean(error_bins[error_bins$bin == bin,]$SN)
+      
+	  #calculate unbiased estimate of variance
+	  resid_dist <- (error_bins[error_bins$bin == bin,]$light_val - error_bins[error_bins$bin == bin,]$val_mean)*sqrt(2)
+    #get the average residual magnitude and then square for the varianace
+	  bin_var$MLE_var[bin] <- mean(abs(resid_dist[abs(resid_dist) < sd(resid_dist)*3]))^2
+	
+	}
+  var_spline <- smooth.spline(x = log10(bin_var$SN), y = bin_var$MLE_var, df = 11)
+  var_spline_inst[[inst]] <- var_spline
+  var_spline_plot$spline <- rbind(var_spline_plot$spline, data.frame(predict(var_spline, log10(seq(min(bin_var$SN), max(bin_var$SN), diff(c(min(bin_var$SN), max(bin_var$SN)))/(nbins*10)))), instrument = inst))
+  var_spline_plot$bins <- rbind(var_spline_plot$bins, data.frame(bin_var, instrument = inst))
+    
+}
+
+@
+
+<<>>=
+SNvsIC <- data.frame(melt((log2(lightIC) + log2(heavyIC))/2),melt(peptideSN)[,3])
+colnames(SNvsIC) <- c("peptide", "condition", "meanIC", "SN")
+SNvsIC <- SNvsIC[apply(data.frame(is.finite(SNvsIC[,3]), is.finite(SNvsIC[,4])), 1, sum) == 2,]
+
+hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
+
+LHscatter <- ggplot(SNvsIC, aes(y = SN, x = meanIC)) + hex_theme + scale_x_continuous("meanIC", expand = c(0.02,0.02)) + scale_y_continuous("SN", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
+LHscatter + geom_hex(bins = 200)
+
+
+@
+
+
+
+\begin{figure}
+<<pooled_var_plot, echo = FALSE, cache = TRUE, fig.width=10, fig.height=6>>=
+scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
+
+
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
+
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation", limits = c(0,1)) + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
+
+@
+\caption{pooling peptides by mean($log_{2}^{H}, log_{2}^{L}$) and within these pools looking at the average variance}
+\label{poole_var_fig}
+\end{figure}
+
+
+
+
+
+
+
 
 From the results above, the variance of peptide abundances is clearly a decreasing function of peak size.  In order to form a more robust estimate of variance as a function of ion-count, peptides were sorted by mean($log_{2}X^{H}, log_{2}X^{L}$) and pooled into \Sexpr{nbins} binds,  containing \Sexpr{binsize}-\Sexpr{binsize+1} peptides.  The variance within these bins was calculated as according to equation \ref{poolvar}, and a 5$^{th}$ degree spline was fit through these points (figure \ref{poole_var_fig}).  This estimate of V(IC) can be used as a prediction of how close a peptides relative abundance is to the population parameter of interest, the protein mean. 
 
@@ -690,8 +765,11 @@ for(a_pep_n in 1:n_p){
   
   peptide_model <- data.frame(RA = abundMat[a_pep_n,], proteomicsBlocking, totalBlocking = inst_block_level_joined, setBlocking = inst_set_level_joined, lightIC = log2(good_light[a_pep_n,]), heavyIC = log2(good_heavy[a_pep_n,]), averageIC = (log2(good_light[a_pep_n,]) + log2(good_heavy[a_pep_n,]))/2, outlier_type = outlier_type[a_pep_n,])
   peptide_model <- peptide_model[!is.na(peptide_model$RA),]
-  peptide_model$sd_fit = sapply(1:length(peptide_model[,1]), function(x){predict(var_spline_inst[[peptide_model$Instrument[x]]], peptide_model$averageIC[x])$y})
-    
+  peptide_model$var_fit = sapply(1:length(peptide_model[,1]), function(x){predict(var_spline_inst[[peptide_model$Instrument[x]]], peptide_model$averageIC[x])$y})
+  
+  mixed_effects_model <- lme(RA ~ Condition, weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking)
+  
+  
   A = rnorm(1000, 0, 1)
   B = A*500 + rnorm(1000, 0, 200)
   W = c(rep(1, 500), rep(0.25, 500))
@@ -702,7 +780,6 @@ for(a_pep_n in 1:n_p){
   ### Prune whole sets if they are highly inconsistent with other sets (and more extreme / high variance) ### Not currently implemented due to the effectiveness of block-level filtering
   
   ### Fit a mixed effects model treating each condition as a fixed effect and all blocking factors as random effects to estimate fixed effects ####
-  mixed_effects_model <- lme(RA ~ Condition, data = peptide_model[!peptide_model$is_outlier,], random = ~ 1 | totalBlocking)
   
   mixed_effects_model$resid
   
