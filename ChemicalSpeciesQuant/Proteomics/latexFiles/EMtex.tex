@@ -154,7 +154,7 @@ Lik(\mathbf{\Omega}, \mathbf{\Theta}, \pi, \alpha | \sigma^{2}, \textbf{X}) &= \
 
 \subsection*{Predicting the variance of a peptide random variable about its protein abundance}
 
-The previous discussions in this paper have implicitly assumed that the variance/precision of a peptide is known in order to evaluate the density of a point in a sampling distribution.  Such an estimate can be found by combining a measure of peak quality, how intrinsically well a peptide is measured (\textcolor{red}{handwaaaavvy}) and sanely dealing with outliers whose inclusion could inflate the estimation of variance.
+The previous discussions in this paper have implicitly assumed that the variance/precision of a peptide is known in order to evaluate the density of a point in a sampling distribution.  Such an estimate can be found by combining a measure of peak quality, how well a peptide is quantified (\textcolor{red}{handwaaaavvy}) and sanely dealing with outliers whose inclusion could overinflate the estimation of variance.
 
 \subsubsection*{Outliers}
 
@@ -181,10 +181,33 @@ CV$_{L/H}$ = $\sqrt{CV_{L}^{2} + CV_{H}^2}$
 \color{black}
 
 
-While this IC/SN-dependent variance fitting can capture a substantial amount of variance variation, variance also varies between peptides to a level going beyond what is captured with these effects.  This is likely because of effects such as ion-suppression which damper the ionization of a peptide depending upon the chemical environment with which they elute.  
+While this IC/SN-dependent variance fitting can capture a substantial amount of variance variation, variance also varies between peptides beyond what is captured with these effects.  This is likely because of effects such as ion-suppression which damper the ionization of a peptide depending upon the chemical environment with which they elute.  
+
+\begin{align}
+\hat{\tau}^{2}_{ij} &= \tau^{2}_{ij}\hat{\phi}_{i}\notag\\
+\hat{\phi_{i}} &= \frac{C}{\sum\limits_{c = 1}^{C}\sum\limits_{s_{c} = 1}^{S_{c}}(\textbf{X}_{ics} - \hat{\textbf{X}}_{ic})^{2}\frac{S_{c}}{S_{c} - 1}\tau^{2}_{ic}}
+\end{align}
+
+\textit{C} is the number of experimental conditions, \textit{S}$_{c}$ is the number of replicates of a condition \textit{c}.
+
+Because the estimate of $\hat{\phi}_{i}$ will over-fit the variance estimate (particularly when the number of comparable samples used to reconstruct variance estimates is small), these estimates should be shrunk towards \textit{one} depending on how accurately $\hat{\phi}_{i}$ was estimated.
+
+\begin{align}
+\phi_{i} &= 1\cdot(1-\rho_{i}) + \hat{\phi}_{i}\rho_{i}\notag\\
+\rho_{i} &= \frac{\sum\limits_{m=1}^{M}(n_{im} - 1)}{\sum\limits_{c=1}^{C}(n_{ic} - 1)}\lambda
+\end{align}
+
+The shrinkage fraction for peptide \textit{i}, $\rho_{i}$, is based on the global shrinkage fraction, $\lambda$, and the number of samples which can be used to estimate variance (where $\textit{n}_{im}$ is the number of ascertained samples of condition \textit{m} for peptide \textit{i}, and $\textit{n}_{ic}$ is the number of total samples of condition \textit{c} for peptide \textit{i}; when relative abundances were measured for all samples, $\rho_{i}$ = $\lambda$).  In order to estimate the level of shrinkage which should be applied, a value of $\lambda$ may be proposed which can then be used to weight $\hat{\phi}_{i}$.  One $\hat{\phi}_{i}$ value is found after removing each \textit{block} of data and then comparing the likelihood of held-out data about the point estimate with precision of $\tau_{ij}$
+
+\color{red}
+Look at mean reconstruction error versus lambda
+
+At lambda which minimized reconstruction error, plot reconstruction error versus vs sum(n(im))
+\color{black}
 
 
-The accuracy with which a peptide's relative abundance can be measured depends upon two factors, the 
+
+The accuracy with which a peptide's relative abundance can be measured depends upon two factors
 
 - outliers - Wald test followed by bonferroni correction
 
@@ -192,9 +215,7 @@ The accuracy with which a peptide's relative abundance can be measured depends u
 
 - peptides vary in how noisy they are (correct for peptide-specific dispersion)
 
-\begin{equation}
-\hat{\tau_{ij}} = \tau(\textbf{X}_{ij})\phi_{i}
-\end{equatoin}
+
 
 
 
