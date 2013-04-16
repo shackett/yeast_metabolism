@@ -16,10 +16,10 @@ markov_pars <- list()
     markov_pars$n_samples <- 10000 #how many total markov samples are desired
     markov_pars$burn_in <- 500 #how many initial samples should be skipped
 
-#markov_pars <- list()
-#   markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-#   markov_pars$n_samples <- 100 #how many total markov samples are desired
-#   markov_pars$burn_in <- 0 #how many initial samples should be skipped
+markov_pars <- list()
+   markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+   markov_pars$n_samples <- 100 #how many total markov samples are desired
+   markov_pars$burn_in <- 0 #how many initial samples should be skipped
 
 
 run_summary$markov_pars <- markov_pars
@@ -112,7 +112,6 @@ for(rxN in 1:length(rxnList_form)){
   run_summary[[names(rxnList_form)[rxN]]]$flux <- flux
   run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- occupancyEq
   run_summary[[names(rxnList_form)[rxN]]]$all_species <- all_species
-  run_summary[[names(rxnList_form)[rxN]]]$kineticPars <- kineticPars
   run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
   
   
@@ -149,9 +148,10 @@ for(rxN in 1:length(rxnList_form)){
       }
     }
   
-  colnames(markov_par_vals) <- ifelse(kineticPars$SpeciesType == "keq", "keq", kineticPars$commonName)
-  
-  colnames(markov_par_vals) <- unname(sapply(colnames(markov_par_vals), function(name_int){
+  #colnames(markov_par_vals) <- ifelse(kineticPars$SpeciesType == "keq", "keq", kineticPars$commonName)
+  colnames(markov_par_vals) <- kineticPars$rel_spec
+    
+  kineticPars$formatted[kineticPars$SpeciesType != "keq"] <- unname(sapply(kineticPars$commonName[kineticPars$SpeciesType != "keq"], function(name_int){
     if(length(strsplit(name_int, split = "")[[1]]) >= 25){
       split_name <- strsplit(name_int, split = "")[[1]]
       split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(20 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
@@ -159,7 +159,9 @@ for(rxN in 1:length(rxnList_form)){
       paste(split_name, collapse = "")
       }else{name_int}
     }))
+  kineticPars$formatted[kineticPars$SpeciesType == "keq"] <- "keq"
   
+  run_summary[[names(rxnList_form)[rxN]]]$kineticPars <- kineticPars
   run_summary[[names(rxnList_form)[rxN]]]$markovChain <- markov_par_vals
   run_summary[[names(rxnList_form)[rxN]]]$likelihood <- lik_track
   
