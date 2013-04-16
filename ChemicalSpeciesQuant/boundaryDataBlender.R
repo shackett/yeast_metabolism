@@ -13,8 +13,12 @@ compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = 
 modelMetComp <- read.table("stoiMetsComp.tsv", header = TRUE)
 
 compComp <- data.frame(t(sapply(compositionFile$AltName, function(x){
-  unlist(modelMetComp[modelMetComp[,2] == x,][1,])
+  incorporated <- sub('TP', 'MP', x)
+  output <- unlist(modelMetComp[modelMetComp[,2] == incorporated,][1,])
+  output[2] <- x
+  output
   }))) #elemental composition each macromolecule in biomass function
+  # for NTPs and dNTPs the relevent stoichiometry for determining the fractional contribution to dry-weight is (d)NMPs
 
 compComp[compComp$name == "(1->3)-beta-D-glucan", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5) #one oxygen shared bc of condensation
 compComp[compComp$name == "glycogen", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5)
@@ -87,8 +91,8 @@ RNA_file <- read.delim("BulkComposition/RNA_abundance/RNAabund.csv", sep = ",", 
 RNAconc <- sapply(chemostatInfo$condition, function(x){mean(RNA_file$RNAconc[RNA_file$condition == x])})
 RNA_peruLcellVol <- RNAconc/chemostatInfo$VolFrac_mean #numerator is ug of RNA per mL of cells, denominator is uL of cells per mL of cells
 totalRNApercell <- RNA_peruLcellVol/((10^-6)/(chemostatInfo$medcellVol * 10^-15)) * 10^6 #pg per cell
-RNAdefaultcomp <- compositionFile[compositionFile$MetName %in% c("AMP", "UMP", "CMP", "GMP"),]
-comp_by_cond$moles_per_cell[compositionFile$MetName %in% c("AMP", "UMP", "CMP", "GMP"),] <- t(t(RNAdefaultcomp$weightPerUn/sum(RNAdefaultcomp$weightPerUn)/RNAdefaultcomp$MW)) %*% t(totalRNApercell)
+RNAdefaultcomp <- compositionFile[compositionFile$MetName %in% c("ATP", "UTP", "CTP", "GTP"),]
+comp_by_cond$moles_per_cell[compositionFile$MetName %in% c("ATP", "UTP", "CTP", "GTP"),] <- t(t(RNAdefaultcomp$weightPerUn/sum(RNAdefaultcomp$weightPerUn)/RNAdefaultcomp$MW)) %*% t(totalRNApercell)
 
 ##### Total DNA #####
 
@@ -99,8 +103,8 @@ genomeLength = 12157105 # yeast genome length from SGD http://www.yeastgenome.or
 GContent = 0.383 #http://bionumbers.hms.harvard.edu//bionumber.aspx?id=102126&ver=0
 avogadros = 6.02214e23
  
-comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dAMP", "dTMP"),] <- rbind((genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac)), (genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac))) * 10^12
-comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dGMP", "dCMP"),] <- rbind((genomeLength * GContent / avogadros)*(1+(1-buddingFrac)), (genomeLength * GContent / avogadros)*(1+(1-buddingFrac))) * 10^12
+comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dATP", "dTTP"),] <- rbind((genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac)), (genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac))) * 10^12
+comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dGTP", "dCTP"),] <- rbind((genomeLength * GContent / avogadros)*(1+(1-buddingFrac)), (genomeLength * GContent / avogadros)*(1+(1-buddingFrac))) * 10^12
 
 ##### Combining observed abundances with total dry weight per cell and inferring contributions of non-measured elements based upon the assumption that they remain in constant proportions, filling the rest of the dry weight ####
 
@@ -145,24 +149,99 @@ ggsave(file = "fractional_composition.pdf", height = 12, width = 20)
 
 
 #fill in structural composition components based on residual dry weight
-comp_by_cond$grams_per_cell[compositionFile$Class != "Energy Balance" & rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c,] <- t(t(compositionFile$weightPerUn[compositionFile$Class != "Energy Balance" & rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c]/sum(compositionFile$weightPerUn[compositionFile$Class != "Energy Balance" & rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c])
+comp_by_cond$grams_per_cell[rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c,] <- t(t(compositionFile$weightPerUn[rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c]/sum(compositionFile$weightPerUn[compositionFile$Class != "Energy Balance" & rowSums(is.na(comp_by_cond$grams_per_cell)) == n_c])
 )) %*% t(cond_dryweight - colSums(comp_by_cond$grams_per_cell[compositionFile$Class == "Amino Acid",]))
 
-#initially assume that ATP -> ADP + Pi flux is proportional to cellular dry weight
-
 comp_by_cond$moles_per_cell[compositionFile$Class != "Energy Balance",] <- comp_by_cond$grams_per_cell[compositionFile$Class != "Energy Balance",]/t(t(compositionFile$MW[compositionFile$Class != "Energy Balance"])) %*% rep(1, n_c)
-comp_by_cond$moles_per_cell[compositionFile$Class == "Energy Balance",] <- -1*t(t(as.numeric(compositionFile$StoiCoef[compositionFile$Class == "Energy Balance"]))) %*% t(cond_dryweight/sum(compositionFile$weightPerUn[compositionFile$Class != "Energy Balance"] * -1))
+
+# calculate the maintenance flux from dry weight and polymerization costs from molarity
+
+# maintenance flux - relative to DW
+maintFlux <- 0.0001 * colSums(comp_by_cond$grams_per_cell)
+maintVec <- c(1, -1, -1); names(maintVec) <- c("ATP", "ADP", "phosphate")
+
+maintMatrix <- maintVec %*% t(maintFlux/chemostatInfo$actualDR) #divide out the dilution rate so that when culture concentration is multiplied by DR in FBA_run_full_reco.R, this adjustment is canceled leaving flux per hr
+rownames(maintMatrix) <- names(maintVec)
+
+# energetic flux in order to polymerization monomers
+composition_part <- NULL
+for(i in 1:length(compositionFile[,1])){
+  
+  poly_stoi <- compositionFile$Polymerization_Cost[i]
+  poly_stoi <- strsplit(poly_stoi, '->')[[1]]
+  reactants <- strsplit(poly_stoi[1], '\\+')[[1]]
+  products <- strsplit(poly_stoi[2], '\\+')[[1]]
+  for(reactant in reactants){
+    reactant <- sub('^ ', '', reactant)
+    reactant <- sub(' $', '', reactant)
+    
+    reactantSpec <- ifelse(length(grep('[0-9]\\.*[0-9]*', reactant)) == 0, reactant, regmatches(reactant, regexpr('[0-9]\\.*[0-9]*', reactant), invert = TRUE)[[1]][2])
+    reactantSpec <- sub('^ ', '', reactantSpec)
+    reactantStoi <- ifelse(length(grep('[0-9]\\.*[0-9]*', reactant)) == 0, 1, regmatches(reactant, regexpr('[0-9]\\.*[0-9]*', reactant)))
+    
+    composition_part <- rbind(composition_part, data.frame(name = compositionFile$AltName[i], compound = reactantSpec, stoi = as.numeric(reactantStoi)))
+    }
+  for(product in products){
+    product <- sub('^ ', '', product)
+    product <- sub(' $', '', product)
+    
+    productSpec <- ifelse(length(grep('[0-9]\\.*[0-9]*', product)) == 0, product, regmatches(product, regexpr('[0-9]\\.*[0-9]*', product), invert = TRUE)[[1]][2])
+    productSpec <- sub('^ ', '', productSpec)
+    productStoi <- ifelse(length(grep('[0-9]\\.*[0-9]*', product)) == 0, 1, regmatches(product, regexpr('[0-9]\\.*[0-9]*', product)))
+    
+    composition_part <- rbind(composition_part, data.frame(name = compositionFile$AltName[i], compound = productSpec, stoi = -1*as.numeric(productStoi)))
+    }
+  }
+
+composition_part <- cast(composition_part, formula = name ~ compound, sum, value = "stoi")
+composition_part <- composition_part[,colnames(composition_part) != "NA"]
+
+composition_part$name <- factor(composition_part$name, levels = compositionFile$AltName)
+composition_part <- composition_part[order(composition_part$name),]
+
+energy_balance <- t(comp_by_cond$moles_per_cell) %*% as.matrix(composition_part[,-1])
+colnames(energy_balance) <- colnames(composition_part)[-1]
+
+for(maint_cmpd in rownames(maintMatrix)){
+  if(maint_cmpd %in% colnames(energy_balance)){
+    energy_balance[,colnames(energy_balance) == maint_cmpd] <- maintMatrix[rownames(maintMatrix) == maint_cmpd,] + energy_balance[,colnames(energy_balance) == maint_cmpd]
+    }
+}
+
+added_cmpds <- data.frame(maintMatrix[!(rownames(maintMatrix) %in% colnames(energy_balance)),])
+colnames(added_cmpds) <- rownames(maintMatrix)[!(rownames(maintMatrix) %in% colnames(energy_balance))]
+
+energy_balance <- cbind(energy_balance, added_cmpds)
+
+### add energetic balances back into composition fxn
+comp_by_cond$moles_per_cell[rownames(comp_by_cond$moles_per_cell) %in% colnames(energy_balance),] <- comp_by_cond$moles_per_cell[rownames(comp_by_cond$moles_per_cell) %in% colnames(energy_balance),] + t(energy_balance[,colnames(energy_balance) %in% compositionFile$AltName])
+
+comp_by_cond$moles_per_cell <- rbind(comp_by_cond$moles_per_cell, t(energy_balance[,!(colnames(energy_balance) %in% compositionFile$AltName)]))
 
 
 
-# generate weight per volume
+### rewrite compositionFile so that added species in polymerization cost have appropriate names in FBA model
+added_cmpds <- data.frame(MetName = colnames(energy_balance[,!(colnames(energy_balance) %in% compositionFile$AltName)]), StoiCoef = NA, AltName = colnames(energy_balance[,!(colnames(energy_balance) %in% compositionFile$AltName)]), Class = "Energy Balance", Abbreviated = colnames(energy_balance[,!(colnames(energy_balance) %in% compositionFile$AltName)]), Polymerization_Cost = NA, MW = NA, weightPerUn = NA)
+compositionFile_Extended = data.frame(t(cbind(t(compositionFile), t(added_cmpds))))
+write.table(compositionFile_Extended, file = "../Yeast_comp_energy.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
+
+
+
+
+
+# generate weight per cellular volume
 apply((comp_by_cond$grams_per_cell * 10^-12)/(t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$medcellVol * 10^-15), 2, sum, na.rm = TRUE)/10 #grams per 100mL of macromolecules - chunky but reasonable
 
 # determine the fluxes into macromolecule biosynthesis and energy per volume
-comp_by_cond$intacellularMolarity = (comp_by_cond$moles_per_cell * 10^-12)/(t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$medcellVol * 10^-15)
-comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$actualDR) #moles/L-hr 
+comp_by_cond$intacellularMolarity = (comp_by_cond$moles_per_cell * 10^-12)/(t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$medcellVol * 10^-15)
 
-comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$VolFrac_mean/1000 #moles/L culture
+
+
+
+
+comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$actualDR) #moles/L-hr 
+
+comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$VolFrac_mean/1000 #moles/L culture
 
 save(comp_by_cond, chemostatInfo, file = "boundaryFluxes.Rdata")
 
