@@ -40,7 +40,7 @@ compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsA
 
 #### Load files describing boundary conditions and reaction reversibility from ecoli ####
 metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
-compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
+compositionFile <- read.delim("../Yeast_comp_energy.txt")
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
@@ -66,7 +66,9 @@ if(file.exists("yeast_stoi.R")){
   load("yeast_stoi.R")
 } else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
 
-
+named_stoi <- stoiMat
+rownames(named_stoi) <- metIDtoSpec(rownames(named_stoi))
+rxn_search(named_stoi, 'mannan', is_rxn = FALSE)
 
 #### For reactions where proteins match multiple KEGG reactions, manually choose which is the proper match ####
 if(!file.exists("manualKEGGrxns.Rdata")){
@@ -147,8 +149,6 @@ for(i in 1:n_c){
   #define observed fluxes per culture volume #eventually scale to the intracellular volume where these fluxes occur
   treatment_par[[chemostatInfo$condition[i]]][["boundaryFlux"]] = -1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$condition[i]]*chemostatInfo$actualDR[i]
   
-  #temporarely remove energy balance reactions - setting boundary flux to zero
-  treatment_par[[i]]$"boundaryFlux"[compositionFile$Class == "Energy Balance"] <- 0
   
   }
 possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID)), as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID)))
@@ -425,7 +425,7 @@ co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
-save(rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, compositionFile, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
+save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, compositionFile, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
 
 
 
@@ -700,9 +700,17 @@ fluxMat <- fluxMat[rowSums(fluxMat) != 0,]
 
 fluxMat_per_cellVol <- fluxMat / t(t(rep(1, length(fluxMat[,1])))) %*% chemostatInfo$VolFrac_mean[1:n_c] # moles per h*mL cell volume
 
+
+### for now only look at reactions which carry flux in >= 80% of conditions
+rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
+fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
+
+
+
 flux_summary <- list()
 flux_summary$IDs = rxNames
 flux_summary$ceulluarFluxes = fluxMat_per_cellVol
+
 
 save(flux_summary, file = "fluxSummaryQP.Rdata")
 
@@ -723,46 +731,6 @@ print(plot(fluxMat_per_cellVol[row_check,] ~ chemostatInfo$actualDR[1:n_c], pch 
 
 
 
-
-
-
-
-
-############### costFxn - indicates the final rxn in S ######
-
-#lp loss fxn
-if(QPorLP == "LP"){
-  flux_penalty = 0.001 # resistance on fluxes to minimize feutality
-  costFxn = c(rep(0, times = length(S[1,]) -1), -1) + ifelse(Sinfo$direction == "F", 1, -1) * flux_penalty
-  }
-
-# QP loss fxn - boundaries should be as close to measured composition as possible and all other edges are penalized to minimize the sum of fluxes.
-# When variable precision of measurement is incorporated, composition/nutrient conditions will be split into seperate boundary conditions with weights proportional to the molar precision.
-if(QPorLP == "QP"){
-  flux_penalty = 0.001   # this value needs to be high enough that sufficient convexity on the solution space is enforced.
-  costFxn = matrix(c(c(rep(0, times = length(S[1,]) -1), 1), flux_penalty*c(rep(1, times = length(S[1,]) -1), 0)), nrow = 2, byrow = TRUE)
-  costObjective = c(1,0)
-  htot_up = htot*100
-
-  }
-
-######## use linear programming to maximize biomass or QP to match boundary #######
-
-if(QPorLP == "LP"){optimSol <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = costFxn, ispos = FALSE)}
-
-if(QPorLP == "QP"){optimSol <- lsei(E = S, F = Fzero, G = Gtot, H = htot_up, A = costFxn, B = costObjective, type = 2)}
-#if(QPorLP == "QP"){optimSol <- lsei(E = S, F = Fzero, G = Gtot, H = htot, A = costFxn, B = costObjective, type = 1)}
-
-
-#reconstruct reaction-specific flux from the F or R reaction which actually carried flux
-
-collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
-  sum(optimSol$X[names(optimSol$X) %in% Sinfo$rxDesignation[Sinfo$reaction == frcombo]])
-})
-
-flux_vectors[[names(treatment_par)[treatment]]] <- collapsedFlux
-
-growth_rate$growth[treatment] <- optimSol$X[names(optimSol$X) == "composition"]
 
 
 
