@@ -835,22 +835,20 @@ for(a_pep_n in 1:n_p){
     names(cond_est) <- peptide_model$Condition
     
     }else{
-      if(length(peptide_model[,1]) < length(unique(peptide_model$Condition)) + length(unique(peptide_model$totalBlocking))){
+      
+      mixed_effects_model <- try(lme(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking), silent = TRUE)
+          
+      if(class(mixed_effects_model) == "try-error"){
+        #use gls if lme fails to converge
         #fit weighted-LS if the number of blocks + conditions is greater than the number of samples
         gls_model <- gls(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model)
         cond_est <-  summary(gls_model)$coef + ifelse(names(summary(gls_model)$coef) == "(Intercept)", 0, gls_model$coef[1]); names(cond_est) <- unique(peptide_model$Condition)
         }else{
           #the usual case - fit a mixed-effects model to estimate the relative abundance of proteins in each condition accounting for the blocking
-          mixed_effects_model <- try(lme(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking), silent = TRUE)
-          
-          grep('Error', mixed_effects_model[[1]][1]) == 1
-          
-          mixed_effects_model <- lme(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking)
           cond_est <-  summary(mixed_effects_model)$coef$fixed + ifelse(names(summary(mixed_effects_model)$coef$fixed) == "(Intercept)", 0, mixed_effects_model$coef$fixed[1]); names(cond_est) <- unique(peptide_model$Condition)
-          
           }
-      }
-  model.matrix(RA ~ factor(Condition), data = peptide_model)
+        }
+  
   
   peptide_model$fitted <- sapply(peptide_model$Condition, function(x){cond_est[names(cond_est) == x]})
   
@@ -874,9 +872,11 @@ for(a_pep_n in 1:n_p){
     }
   
   point_estimates[a_pep_n,] <- cond_summary$RA
-  precision_estimates[a_pep_n,] <- cond_summary$RA
+  precision_estimates[a_pep_n,] <- cond_summary$precision
   
 }
+
+ggplot(data.frame(dispersion = log2(dispersion_adj)), aes(x = dispersion)) + geom_bar(binwidth = 0.3) + scale_x_continuous(limits = c(0,10))
 
 
 
