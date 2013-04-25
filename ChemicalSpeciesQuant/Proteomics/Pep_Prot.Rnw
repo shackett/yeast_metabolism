@@ -373,6 +373,9 @@ hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = elemen
 LHscatter <- ggplot(SNvsIC, aes(y = SN, x = meanIC)) + hex_theme + scale_x_continuous("meanIC", expand = c(0.02,0.02)) + scale_y_continuous("SN", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200)
 
+LHscatter <- ggplot(SNvsIC[SNvsIC$SN > 2^-5,] , aes(y = log2(SN), x = meanIC)) + hex_theme + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
+LHscatter + geom_hex(bins = 200)
+
 
 @
 
@@ -727,7 +730,7 @@ var_spline_plot <- list()
 
 for(inst in unique(bioRepPlot$Instrument)){
   # calculate a variance/precision kernal over instrument*IC
-  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst & is.na(bioRepPlot$outlier_type),]
+  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst & !(bioRepPlot$outlier_type %in% c("block", "point")),]
   binsize <- floor(length(instSubset[,1])/nbins)
   error_bins <- data.frame(val_mean = instSubset$averageIC[order(instSubset$averageIC)], light_val = instSubset$experimental[order(instSubset$averageIC)], bin = c(rep(1:(length(instSubset[,1]) %% nbins), each = binsize + 1), rep(((length(instSubset[,1]) %% nbins) + 1):nbins, each = binsize)))
 
@@ -803,14 +806,9 @@ bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c
 <<>>=
 
 # remove outliers
-# fit SD(IC)
+# fit SD(IC) or SD(SN)
 # fit a mixed-effect linear model with weights of SD(IC) to determine point estimates abundance
 # determine the extent of over-dispersion (plot across proteins)
-
-good_light
-good_heavy
-outlier_type
-good_SN
 
 point_estimates <- matrix(NA, ncol = n_c, nrow = n_p); rownames(point_estimates) <- rownames(abundMat); colnames(point_estimates) <- unique(proteomicsBlocking$Condition)
 precision_estimates <- point_estimates
@@ -876,50 +874,52 @@ for(a_pep_n in 1:n_p){
   
 }
 
-ggplot(data.frame(dispersion = log2(dispersion_adj)), aes(x = dispersion)) + geom_bar(binwidth = 0.3) + scale_x_continuous(limits = c(0,10))
+ggplot(data.frame(dispersion = dispersion_adj), aes(x = dispersion)) + geom_bar(binwidth = 0.01) + scale_x_continuous(limits = c(0,10))
+ggplot(data.frame(dispersion = log2(dispersion_adj)), aes(x = dispersion)) + geom_bar(binwidth = 0.3)
 
 
+fittedPrec <- precision_estimates
+abundMat <- point_estimates
 
-#calculate the expected sampling variance of the heavy-low diff for experimental measurement
+##### for each unique peptide, combine the multiple ionization states, methionine oxidation to produce a single point estimate, using integrated likelihood ####
 
-lightHeavyCellmean <- sapply(c(1:length(heavyIC[,1]))[good_samples], function(row){
-	mapply(FUN = function(a,b){
-		if(!is.na(a) & !is.na(b)){mean(a, b)}else{NA}
-		}, lightIC[row,], heavyIC[row,])
-	})
+### set the precision of missing values to 0; equivalent to no impact, infinite variance
 
-
-fittedVar <- apply(log2(lightHeavyCellmean), c(1,2), function(x){
-	if(is.na(x)){NA}else{
-		predict(var_spline, x)$y
-		}
-	})
-
-fittedPrec <- fittedVar^-1
-
-#for each unique peptide, combine the multiple ionization states to produce a single point estimate, using integrated likelihood
-
-#set the precision of missing values to 0; equivalent to no impact, infinite variance
-
-fittedPrec[t(is.na(abundMat))] <- 0
+fittedPrec[is.na(point_estimates)] <- 0
 fittedPrec[is.na(fittedPrec)] <- 0
-abundMat[t(fittedPrec) == 0] <- 0
+abundMat[fittedPrec == 0] <- 0
 
+### averaging over ionization states
+uniquePepMean <- as.matrix(((t(abundMat * fittedPrec)) %*% pepToUniq)/(t(fittedPrec) %*% pepToUniq))
+uniquePepPrecision <- Matrix(t(fittedPrec) %*% pepToUniq)
+uniquePepMean[is.nan(uniquePepMean)] <- 0
 
-uniquePepMean <- matrix((((t(abundMat) * fittedPrec) %*% pepToUniq)/(fittedPrec %*% pepToUniq)), ncol = n_p, nrow = n_c)
-uniquePepPrecision <- Matrix(fittedPrec %*% pepToUniq)
-uniquePepMean[is.nan(uniquePepMean)] <- NA
-
-#change mapping from peptides to unique peptides (averaging over ionization states)
 unique_mappingMat <- as.matrix(t(pepToUniq) %*% mappingMat)
 unique_mappingMat[!(unique_mappingMat %in% c(0,1))] <- 1
 unique_mappingMat <- Matrix(unique_mappingMat)
 
+### averaging over methionine oxidation
+
+uniquePepMean <- as.matrix(((uniquePepMean * uniquePepPrecision) %*% pepToUniqM)/uniquePepPrecision %*% pepToUniqM)
+uniquePepPrecision <- uniquePepPrecision %*% pepToUniqM
+uniquePepMean[is.nan(uniquePepMean)] <- 0
+
+unique_mappingMat <- as.matrix(t(pepToUniqM) %*% unique_mappingMat)
+unique_mappingMat[!(unique_mappingMat %in% c(0,1))] <- 1
+unique_mappingMat <- Matrix(unique_mappingMat)
 
 #number of non-missing values for peptides
-Nmissing_val <- table(rowSums(!is.na(t(uniquePepMean))))
+Nmissing_val <- table(colSums(uniquePepMean != 0))
 
-uniquePepMean[is.na(uniquePepMean)] <- 0
+### remove peptides which have fewer than quality_frac representation
+
+valid_peptides <- colSums(uniquePepMean != 0) >= quality_frac
+  
+uniquePepMean <- uniquePepMean[,valid_peptides]
+uniquePepPrecision <- uniquePepPrecision[,valid_peptides]
+
+unique_mappingMat <- unique_mappingMat[valid_peptides,]
+unique_mappingMat <- unique_mappingMat[,colSums(unique_mappingMat) != 0]
 
 #number of non-missing values for all peptides (before uniquenss combination)
 Nmissing_val_all <- table(apply(is.finite(PepMatrix), 1, sum))
@@ -933,7 +933,9 @@ print(xtable(data.frame(Proteins = n_prot, Peptides = n_p, Conditions = n_c), di
 
 \begin{figure}[h!]
 <<mvbarplot, dependson = "EMsetup", echo = FALSE>>=
-barplot(table(apply(is.finite(PepMatrix), 1, sum)), col = c(rep("darkgray", times = sum(as.numeric(names(Nmissing_val_all)) < ceiling(n_c * quality_frac))), rep("orange", times = sum(as.numeric(names(Nmissing_val_all)) >= ceiling(n_c * quality_frac)))))
+barplot(Nmissing_val, col = c(rep("darkgray", times = sum(as.numeric(names(Nmissing_val)) < ceiling(n_c * quality_frac))), rep("orange", times = sum(as.numeric(names(Nmissing_val)) >= ceiling(n_c * quality_frac)))))
+
+barplot(Nmissing_val_all, col = c(rep("darkgray", times = sum(as.numeric(names(Nmissing_val_all)) < ceiling(n_e * quality_frac))), rep("orange", times = sum(as.numeric(names(Nmissing_val_all)) >= ceiling(n_e * quality_frac)))))
 @
 \caption{Distribution of non-missing values for all peptides.  Peptides with non-missing values over the cutoff are shown in orange}
 \label{nonmissingvals}
@@ -1189,17 +1191,14 @@ $\tau_{y} = \prod_{z \neq y}^{Y}\sigma^{2}_{z}$
 prerun_fixed_mat <- TRUE
 
 ### Initalization ###
+n_prot <- length(unique_mappingMat[1,])
+n_p <- length(unique_mappingMat[,1])
+
 
 prior_bound <- 0.9999
-prior_p_div <- exp(-1*qchisq(prior_bound, n_c))
+prior_p_div <- exp(-1*qchisq(prior_bound, n_c))  ### this should probably be adjusted to the number of conditions a peptide was measured in
 
-#if a putative protein only has component peptides which are matched to other proteins than penalize any assignment to it by the supremum of the mixing fraction
-
-#number of shared peptides per protein
-pepshared <- colSums(unique_mappingMat[c(1:n_p)[rowSums(unique_mappingMat) > 1],])
-#total peptides per protein
-peptotal <- colSums(unique_mappingMat)
-ambigprots <- c(1:n_prot)[pepshared == peptotal]
+#if a putative protein only has component peptides which are matched to other proteins then penalize any assignment to it by the supremum of the mixing fraction
 
 if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_only == FALSE & file.exists("EMoutputDeg.Rdata"))){
 	if(unq_matches_only == TRUE){
@@ -1208,7 +1207,7 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 			load("EMoutputDeg.Rdata")
 			i}
 	}else{
-	save(unq_matches_only, prerun_fixed_mat, prior_p_div, uniquePepMean, uniquePepPrecision, unique_pepNames, unique_mappingMat, n_p, n_pp, n_prot, n_c, ambigprots, file = "EMimport.Rdata")
+	save(unq_matches_only, prerun_fixed_mat, prior_p_div, uniquePepMean, uniquePepPrecision, unique_mappingMat, n_p, n_prot, n_c, file = "EMimport.Rdata")
 	#system("R64 callEM.R")
 
 	}

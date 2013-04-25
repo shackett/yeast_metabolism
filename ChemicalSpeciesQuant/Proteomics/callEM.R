@@ -4,6 +4,12 @@ matrix_fxn()
 load("EMimport.Rdata")
 library(limSolve)
 
+options(digits = 15)
+
+prior_bound <- 1 - 10^-14
+prior_p_div <- exp(-1*qchisq(prior_bound, n_c))  ### this should probably be adjusted to the 
+
+
 #initialize theta (mixing_fraction) and pi (prob non-divergent peptide) and alpha (support for a protein existing)
 
 mixing_fract <- unique_mappingMat/rowSums(unique_mappingMat)
