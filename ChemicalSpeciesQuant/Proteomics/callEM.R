@@ -54,8 +54,6 @@ for(entry in 1:length(entry_split)){
 }
 
 
-#plot the shared peptides across groups of proteins
-plot_proteinConnections(overlapMat)
 
 #save the estimates of mixing fractions generated on a per-peptide basis
 mixing_fract_inconsistent <- mixing_fract
@@ -78,6 +76,7 @@ whole_data_logL <- NULL
 previous_it <- -Inf
 continue_it <- TRUE
 set_alpha <- FALSE # determines which proteins can be dropped at the time of convergence
+param_track <- list()
 
 t <- 1
 while(continue_it){
@@ -89,8 +88,8 @@ while(continue_it){
 	prot_abund[is.nan(prot_abund)] <- 0
 	
   #if all peptides attributed to a protein are called "divergent" then initialize its trend as the median of matched peptides for each condition
-	divOverride <- colSums(mixing_fract * pi_fit) == 0; divOverride[alpha_pres == 0] <- FALSE
-	prot_abund[,divOverride] <- prot_abund_over[,divOverride]
+	#divOverride <- colSums(mixing_fract * pi_fit) == 0; divOverride[alpha_pres == 0] <- FALSE
+	#prot_abund[,divOverride] <- prot_abund_over[,divOverride]
   
 	#update protein precision
 	prot_prec <- uniquePepPrecision %*% mixing_fract
@@ -205,6 +204,14 @@ while(continue_it){
     
   if(set_alpha == TRUE){ 
   
+    #set parameters as the set with the highest likelihood
+    
+    param_track$alpha_pres[[which.max(whole_data_logL)]] -> alpha_pres
+    Matrix(param_track$mixing_fract[[which.max(whole_data_logL)]]) -> mixing_fract
+    param_track$prot_abund[[which.max(whole_data_logL)]] -> prot_abund
+    param_track$pi_fit[[which.max(whole_data_logL)]] -> pi_fit
+    
+    
     #update alpha - whether a protein is present, based on bayes factors - do this once upon initial convergence and then continue running
     
     for(protein in c(1:n_prot)[subSumable == 1]){
@@ -245,7 +252,13 @@ while(continue_it){
 	#update complete data log-likelihood
 	new_log_lik <- sum(apply(-(1/2)*uniquePepPrecision*(((prot_abund %*% diag(alpha_pres) %*% t(mixing_fract)) - uniquePepMean)^2), 2, sum)*pi_fit + (1-pi_fit)*log(prior_p_div)) + sum(alpha_pres[subSumable == 1])*log(prior_p_div)
   
-	#check for convergence
+	param_track$alpha_pres[[t]] <- alpha_pres
+  param_track$mixing_fract[[t]] <- as.matrix(mixing_fract)
+  param_track$prot_abund[[t]] <- prot_abund
+  param_track$pi_fit[[t]] <- pi_fit
+  
+  
+  #check for convergence
 	
 	if(abs(new_log_lik - previous_it) < 0.01 | (t > 50 + 50*(set_alpha == "SET"))){
 	  
@@ -269,11 +282,34 @@ while(continue_it){
   #plot(c(prot_abund) ~ c(prot_abund_over), cex = 0.5, pch = 16)
 }
 
+### for non-subsumable proteins - check to see if zero peptides carry weight - if so take the median abundance and the corresponding precision
+
+prot_abund_over <- prot_prec_over<- matrix(NA, ncol = n_prot, nrow = n_c)
+for(a_prot in c(1:n_prot)){
+  condMed <- apply(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c), 1, median) #across all matched peptides which has the median relative abundance
+  bestPepMatch <- matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #use correlation between each peptide and median vector to determine which peptide is most representatitive
+  bestPepPrec <- matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #the above peptides precision
+  
+  bestPepMatch[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
+  prot_abund_over[,a_prot] <- bestPepMatch
+}
+
+
+
+###
+
 max_state <- apply(mixing_fract, 1, which.max)
 div_max <- pi_fit == 0
 
 #number of peptides not-conforming to some general protein trend
 table(div_max)
+
+
+#plot the shared peptides across groups of proteins
+
+plot_proteinConnections(overlapMat, subsumedIDs = colnames(prot_abund)[alpha_pres == 0])
+
+
 
 # for each model compare the best peptide-protein match with the non-match likelihood*prior
 
@@ -316,10 +352,14 @@ for(pairs in 1:length(mixed_pairs2[,1])){
   consistent_est <- rbind(consistent_est, data.frame(Pair = pairs, FractionB = paired_mixes_consistent[1,2]/sum(paired_mixes_consistent[1,c(1:2)])))
   }
 
+hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "gray90"), legend.position = "top", 
+  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
+
+
 mixingFracPlot <- ggplot(boxplot_df)
 mixingFracPlot + geom_boxplot(aes(x = factor(Pair), y = FractionB, fill = SharedPeptides, colour = "#3366FF"), position = "dodge") + scale_color_discrete(guide = "none") +
-  scale_x_discrete('Protein pairs with more than 3 overlapping peptides') + scale_y_continuous('Mixing proprotion of second protein of pair') +
-  geom_point(data = consistent_est, aes(x = factor(Pair), y = FractionB), size = 3, colour = I('chartreuse')) + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+  scale_x_discrete('Protein pairs with more than 3 overlapping peptides') + scale_y_continuous('Mixing proprotion of second protein of pair', expand = c(0.005,0.005)) +
+  geom_point(data = consistent_est, aes(x = factor(Pair), y = FractionB), size = 3, colour = I('chartreuse')) + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) + hex_theme
 
 library(reshape)
 
