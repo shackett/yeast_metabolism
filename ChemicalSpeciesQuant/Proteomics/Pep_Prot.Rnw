@@ -282,53 +282,6 @@ combined_charge_ox_plot + geom_bar() + scale_x_continuous(name = "Pearson Correl
 
 
 
-<<pooled_variance, dependson = "dataImp", cache = TRUE>>=
-
-nbins <- 50
-var_spline_inst <- list()
-var_spline_plot <- list()
-
-for(inst in unique(bioRepPlot$Instrument)){
-  # calculate a variance/precision kernal over instrument*IC
-  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst,]
-  binsize <- floor(length(instSubset[,1])/nbins)
-  error_bins <- data.frame(val_mean = instSubset$averageIC[order(instSubset$averageIC)], light_val = instSubset$experimental[order(instSubset$averageIC)], bin = c(rep(1:(length(instSubset[,1]) %% nbins), each = binsize + 1), rep(((length(instSubset[,1]) %% nbins) + 1):nbins, each = binsize)))
-
-  bin_var <- data.frame(logIC = rep(NA, times = nbins), MLE_var = rep(NA, times = nbins))
-bin_dist_plot <- NULL
-
-  for(bin in 1:nbins){
-    bin_var$logIC[bin] <- mean(error_bins[error_bins$bin == bin,]$val_mean)
-	
-	  #calculate unbiased estimate of variance
-	  resid_dist <- (error_bins[error_bins$bin == bin,]$light_val - error_bins[error_bins$bin == bin,]$val_mean)*sqrt(2)
-	  #get the average residual magnitude and then square for the varianace
-	  bin_var$MLE_var[bin] <- mean(abs(resid_dist[abs(resid_dist) < sd(resid_dist)*3]))^2
-	
-	}
-  var_spline <- smooth.spline(x = bin_var$logIC, y = bin_var$MLE_var, df = 4)
-  var_spline_inst[[inst]] <- var_spline
-  var_spline_plot$spline <- rbind(var_spline_plot$spline, data.frame(predict(var_spline, seq(min(bin_var$logIC), max(bin_var$logIC), diff(c(min(bin_var$logIC), max(bin_var$logIC)))/(nbins*10))), instrument = inst))
-  var_spline_plot$bins <- rbind(var_spline_plot$bins, data.frame(bin_var, instrument = inst))
-    
-}
-
-
-@
-
-\begin{figure}
-<<pooled_var_plot, echo = FALSE, cache = TRUE, fig.width=10, fig.height=6>>=
-scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
-
-
-ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = logIC, y = MLE_var, color = "blue", size = 3))
-@
-\caption{pooling peptides by mean($log_{2}^{H}, log_{2}^{L}$) and within these pools looking at the average variance}
-\label{poole_var_fig}
-\end{figure}
-
-Estimating the variance of light/heavy biological/technical replicates based upon the signal:noise of the heavy and light peptides measurement
-
 <<>>=
 
 nbins <- 50
@@ -395,6 +348,7 @@ ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, a
 \label{poole_var_fig}
 \end{figure}
 
+Estimating the variance of light/heavy biological/technical replicates based upon the signal:noise of the heavy and light peptides measurement
 
 
 
@@ -805,6 +759,8 @@ bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c
 
 <<>>=
 
+save(list = ls(), file = "tmp.Rdata")
+
 # remove outliers
 # fit SD(IC) or SD(SN)
 # fit a mixed-effect linear model with weights of SD(IC) to determine point estimates abundance
@@ -813,6 +769,7 @@ bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c
 point_estimates <- matrix(NA, ncol = n_c, nrow = n_p); rownames(point_estimates) <- rownames(abundMat); colnames(point_estimates) <- unique(proteomicsBlocking$Condition)
 precision_estimates <- point_estimates
 dispersion_adj <- rep(NA, n_p)
+dispersion_ks.test <- rep(NA, n_p)
 
 for(a_pep_n in 1:n_p){
   
@@ -834,7 +791,9 @@ for(a_pep_n in 1:n_p){
     
     }else{
       
-      mixed_effects_model <- try(lme(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking), silent = TRUE)
+     
+      
+      mixed_effects_model <- try(lme(RA ~ treatment_mat, weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking), silent = TRUE)
           
       if(class(mixed_effects_model) == "try-error"){
         #use gls if lme fails to converge
@@ -857,12 +816,20 @@ for(a_pep_n in 1:n_p){
   if(sum(table(peptide_model$Condition) >= 2) >= 5){
     repeated_conds <- peptide_model[peptide_model$Condition %in% names(table(peptide_model$Condition))[table(peptide_model$Condition) >= 2],]
     repeated_conds$nreps <- sapply(repeated_conds$Condition, function(x){table(repeated_conds$Condition)[names(table(repeated_conds$Condition)) == x]})
-    #### inflate each residual by nreps/(nreps - 1)
+    #### inflate each residual by sqrt(nreps/(nreps - 1))
   
-    dispersion_adj[a_pep_n] <- length(repeated_conds[,1])/sum(((repeated_conds$RA - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$var_fit)))
+    Zscores <- (repeated_conds$RA - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$var_fit)
+    ### Zscores/sd(Zscores) ~ N(0,1), so overdispersion of variance is by factor of var(Zscores)
+    dispersion_adj[a_pep_n] <- var(Zscores)
+    
+    (repeated_conds$RA - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$var_fit*var(Zscores))
+    
+    dispersion_ks.test[a_pep_n] <- ks.test(Zscores/sd(Zscores), pnorm)$p
+    
+    #dispersion_adj[a_pep_n] <- length(repeated_conds[,1])/sum(((repeated_conds$RA - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$var_fit)))
     } else{dispersion_adj[a_pep_n] <- 1}
     
-  peptide_model$precision_adj <- 1/peptide_model$var_fit*dispersion_adj[a_pep_n]
+  peptide_model$precision_adj <- 1/(peptide_model$var_fit*dispersion_adj[a_pep_n])
   
   cond_summary <- data.frame(condition = conditions, RA = NA, precision = NA)
   for(a_cond in 1:n_c){
@@ -1205,7 +1172,7 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 		load("EMoutputUnq.Rdata")
 			}else{
 			load("EMoutputDeg.Rdata")
-			i}
+			}
 	}else{
 	save(unq_matches_only, prerun_fixed_mat, prior_p_div, uniquePepMean, uniquePepPrecision, unique_mappingMat, n_p, n_prot, n_c, file = "EMimport.Rdata")
 	#system("R64 callEM.R")
