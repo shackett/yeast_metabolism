@@ -6,8 +6,13 @@ library(limSolve)
 
 options(digits = 15)
 
-prior_bound <- 1 - 10^-14
-prior_p_div <- exp(-1*qchisq(prior_bound, n_c))  ### this should probably be adjusted to the 
+
+#prior_p_div <- exp(-1*qchisq(prior_bound, n_c))  ### this should probably be adjusted to the 
+n_pep_samples <- colSums(uniquePepMean != 0) 
+prior_bound <- 1 - 0.0001
+prior_p_div <- exp(-1*qchisq(prior_bound, n_pep_samples)) 
+
+
 
 
 #initialize theta (mixing_fraction) and pi (prob non-divergent peptide) and alpha (support for a protein existing)
@@ -60,16 +65,7 @@ mixing_fract_inconsistent <- mixing_fract
 ambig_peps <- c(1:n_p)[rowSums(sparse_mapping) != 1]  
   
 
-#override determination - switch the protein abundance with the most consistent single peptide
 
-prot_abund_over <- matrix(NA, ncol = n_prot, nrow = n_c)
-for(a_prot in c(1:n_prot)){
-  condMed <- apply(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c), 1, median)
-  bestPepMatch <- matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))]
-  bestPepMatch[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
-  prot_abund_over[,a_prot] <- bestPepMatch
-}
-  
 ### Iteration ###
 
 whole_data_logL <- NULL
@@ -284,17 +280,22 @@ while(continue_it){
 
 ### for non-subsumable proteins - check to see if zero peptides carry weight - if so take the median abundance and the corresponding precision
 
-prot_abund_over <- prot_prec_over<- matrix(NA, ncol = n_prot, nrow = n_c)
+prot_abund_over <- prot_prec_over <- matrix(NA, ncol = n_prot, nrow = n_c)
 for(a_prot in c(1:n_prot)){
   condMed <- apply(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c), 1, median) #across all matched peptides which has the median relative abundance
   bestPepMatch <- matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #use correlation between each peptide and median vector to determine which peptide is most representatitive
-  bestPepPrec <- matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #the above peptides precision
-  
-  bestPepMatch[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
+  bestPepPrec <- matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #the above peptides precisio
+  bestPepMatch[bestPepMatch == 0] <- bestPepPrec[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
   prot_abund_over[,a_prot] <- bestPepMatch
+  prot_prec_over[,a_prot] <- bestPepPrec
 }
 
+NinformedPeps <- colSums(mixing_fract[,alpha_pres == 1])
+table(NinformedPeps) #number of overwritten proteins
 
+prot_abund[,alpha_pres == 1][,NinformedPeps == 0] <- prot_abund_over[,alpha_pres == 1][,NinformedPeps == 0]
+prot_prec[,alpha_pres == 1][,NinformedPeps == 0] <- prot_prec_over[,alpha_pres == 1][,NinformedPeps == 0]
+	
 
 ###
 
@@ -303,6 +304,8 @@ div_max <- pi_fit == 0
 
 #number of peptides not-conforming to some general protein trend
 table(div_max)
+
+
 
 
 #plot the shared peptides across groups of proteins
