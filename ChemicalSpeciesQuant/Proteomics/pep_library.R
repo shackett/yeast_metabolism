@@ -601,16 +601,16 @@ plot_proteinConnections <- function(overlapMat, subsumedIDs = NULL){
 varianceGP <- function(){
   
   require(msm)
+  require(data.table)
   
   #### generative process for peptide variance ####
   I <- 1000 # number of peptides, each with their own dispersion
   C <- 100 # number of conditions
   max_reps <- 3 # number of possible replicates (fewer will be present to model missing values)
-  #CV_fold <- 10
   
   ### knowns ###
   #known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.5), ncol = C*max_reps, nrow = I)
-  known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0), ncol = C*max_reps, nrow = I)
+  known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.1), ncol = C*max_reps, nrow = I)
   
   
   ### unknowns ###
@@ -626,43 +626,45 @@ varianceGP <- function(){
     total_dispersion[i,missingVals] <- NA
     }
   
-
   normality_tests <- data.frame(KS_A = rep(NA, I), KS_B = NA, KS_oracle = NA, KS_oracle_Nadjust = NA)
+  chisq_tests <- data.frame(CS_A = rep(NA, I), CS_B = NA, CS_oracle = NA, CS_oracle_Nadjust = NA)
   peptide_ODdiff <- data.frame(A = rep(NA, I), B = NA, nquant_samples = NA)
   
   for(i in 1:I){
     
     ### generate technical replicates ###
     
-    mock_data = data.frame(sample = rep(1:C, each = max_reps), effect = rep(sample_effects[i,], each = max_reps), var = total_dispersion[i,], known_dispersion = known_sample_dispersion[i,])
-    mock_data <- mock_data[!is.na(mock_data$var),]
-    mock_data$observed <- rnorm(length(mock_data[,1]), mock_data$effect, sqrt(mock_data$var))
+    mock_data = data.table(sample = rep(1:C, each = max_reps), effect = rep(sample_effects[i,], each = max_reps), var = total_dispersion[i,], known_dispersion = known_sample_dispersion[i,])
+    mock_data <- mock_data[!is.na(var),]
+    mock_data$observed <- rnorm(nrow(mock_data), mock_data$effect, sqrt(mock_data$var))
     
     if(sum(table(mock_data$sample) >= 2) >= 5){
       
       ### fitted value is equal to the observations weighted by the inverse of their dispersion
-      gls_model <- gls(observed ~ factor(sample), weights = ~known_dispersion, data = mock_data)
-      #weighted.mean(mock_data$observed[mock_data$sample == 2], 1/mock_data$known_dispersion[mock_data$sample == 2])
-      
-      cond_est <-  summary(gls_model)$coef + ifelse(names(summary(gls_model)$coef) == "(Intercept)", 0, gls_model$coef[1]); names(cond_est) <- unique(mock_data$sample)
-      mock_data$fitted <- sapply(mock_data$sample, function(x){cond_est[names(cond_est) == x]})
-  
-      repeated_conds <- mock_data[mock_data$sample %in% names(table(mock_data$sample))[table(mock_data$sample) >= 2],]
-      repeated_conds$nreps <- sapply(repeated_conds$sample, function(x) sum(repeated_conds$sample == x))
+      mock_data[, fitted:=weighted.mean(observed, 1/known_dispersion), by=sample]
+      mock_data[, nreps:=length(known_dispersion), by=sample]
+      mock_data[, weight_nadjust:=sample_size_correction(1/known_dispersion), by=sample]
       
       ### MLE of dispersion
+      ODmle <- mean(mock_data[, (observed - fitted)^2 * nreps/(nreps - 1) * (1/known_dispersion),])
+      ODssadjust <- mean(mock_data[, (observed - fitted)^2 * weight_nadjust * (1/known_dispersion),])
       
-      ODest1 <- mean(gls_model$resid^2 * repeated_conds$nreps/(repeated_conds$nreps - 1) * (1/mock_data$known_dispersion))
-      ODest2 <- mean(gls_model$resid^2 * sapply(repeated_conds$sample, function(x){sample_size_correction(1/repeated_conds$known_dispersion[repeated_conds$sample == x])}) * (1/mock_data$known_dispersion))
+      #### compare sum of squares to chi-square(n) ####
       
+      chisq_tests[i,] <- c(pchisq(sum((mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*ODmle) ,])^2), nrow(mock_data)),
+      pchisq(sum((mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*ODssadjust) ,])^2), nrow(mock_data)),
+      pchisq(sum((mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*peptide_overdispersion[i]) ,])^2), nrow(mock_data)),
+      pchisq(sum((mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*peptide_overdispersion[i]) ,])^2), nrow(mock_data)))
       
-      z1 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1)
-      z2 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(sapply(repeated_conds$sample, function(x){sample_size_correction(1/repeated_conds$known_dispersion[repeated_conds$sample == x])}))/sqrt(repeated_conds$known_dispersion * ODest2)
-      z3 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * peptide_overdispersion[i])
-      ### adjust for weight in unbiased correction
-      z4 <- (repeated_conds$observed - repeated_conds$fitted)*sapply(repeated_conds$sample, function(x){sqrt(sample_size_correction(1/repeated_conds$known_dispersion[repeated_conds$sample == x]))})/sqrt(repeated_conds$known_dispersion * peptide_overdispersion[i])
+      #### studentize and compare to N(0,1) ####
       
-      normality_tests[i,] <- c(ks.test(z1[z1 >= 0], ptnorm, lower = 0)$p, ks.test(z2[z2 >= 0], ptnorm, lower = 0)$p, ks.test(z3[z3 >= 0], ptnorm, lower = 0)$p, ks.test(z4[z4 >= 0], ptnorm, lower = 0)$p)
+      z1 <- mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*ODmle) ,]
+      z2 <- mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*ODssadjust) ,]
+      ### oracle - truth ###
+      o1 <- mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*peptide_overdispersion[i]) ,]
+      o2 <- mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*peptide_overdispersion[i]) ,]
+      
+      normality_tests[i,] <- c(ks.test(z1[z1 >= 0], ptnorm, lower = 0)$p, ks.test(z2[z2 >= 0], ptnorm, lower = 0)$p, ks.test(o1[o1 >= 0], ptnorm, lower = 0)$p, ks.test(o2[o2 >= 0], ptnorm, lower = 0)$p)
       
       peptide_ODdiff[i,] <- c(c(ODest1, ODest2), length(repeated_conds[,1]))
     }
