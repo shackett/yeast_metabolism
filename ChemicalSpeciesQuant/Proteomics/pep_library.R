@@ -606,16 +606,18 @@ varianceGP <- function(){
   I <- 1000 # number of peptides, each with their own dispersion
   C <- 100 # number of conditions
   max_reps <- 3 # number of possible replicates (fewer will be present to model missing values)
-  CV_fold <- 10
+  #CV_fold <- 10
   
   ### knowns ###
-  known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.5), ncol = C*max_reps, nrow = I)
+  #known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.5), ncol = C*max_reps, nrow = I)
+  known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0), ncol = C*max_reps, nrow = I)
+  
   
   ### unknowns ###
   peptide_overdispersion <- rlnorm(I, 0, 1)  # this is the parameter that needs to be estimated
   total_dispersion <- known_sample_dispersion * (peptide_overdispersion %*% t(rep(1, C*max_reps)))
-  pmissingval <- rbeta(I, 2, 1)
-  #pmissingval <- rbeta(I, 10, 0.001)
+  #pmissingval <- rbeta(I, 2, 1)
+  pmissingval <- rbeta(I, 10, 0.001)
   sample_effects <- matrix(rnorm(I*C, 0, 1), ncol = C, nrow = I)
   
   ### input missing values ###
@@ -646,20 +648,16 @@ varianceGP <- function(){
       mock_data$fitted <- sapply(mock_data$sample, function(x){cond_est[names(cond_est) == x]})
   
       repeated_conds <- mock_data[mock_data$sample %in% names(table(mock_data$sample))[table(mock_data$sample) >= 2],]
-      repeated_conds$nreps <- sapply(repeated_conds$sample, function(x){table(repeated_conds$sample)[names(table(repeated_conds$sample)) == x]})
+      repeated_conds$nreps <- sapply(repeated_conds$sample, function(x) sum(repeated_conds$sample == x))
       
       ### MLE of dispersion
       
-      zstat <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion)
-      ODest1 <- var(zstat)        
-      ODest2 <- 1/(length(repeated_conds[,1])/sum(((repeated_conds$observed - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$known_dispersion))))
-      #ODest2 = mean(zstat^2)
-        
+      ODest1 <- mean(gls_model$resid^2 * repeated_conds$nreps/(repeated_conds$nreps - 1) * (1/mock_data$known_dispersion))
+      ODest2 <- mean(gls_model$resid^2 * sapply(repeated_conds$sample, function(x){sample_size_correction(1/repeated_conds$known_dispersion[repeated_conds$sample == x])}) * (1/mock_data$known_dispersion))
       
-      #normality_tests[i,] <- c(ks.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1), pnorm)$p,
       
       z1 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1)
-      z2 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest2)
+      z2 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(sapply(repeated_conds$sample, function(x){sample_size_correction(1/repeated_conds$known_dispersion[repeated_conds$sample == x])}))/sqrt(repeated_conds$known_dispersion * ODest2)
       z3 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * peptide_overdispersion[i])
       ### adjust for weight in unbiased correction
       z4 <- (repeated_conds$observed - repeated_conds$fitted)*sapply(repeated_conds$sample, function(x){sqrt(sample_size_correction(1/repeated_conds$known_dispersion[repeated_conds$sample == x]))})/sqrt(repeated_conds$known_dispersion * peptide_overdispersion[i])
@@ -672,6 +670,7 @@ varianceGP <- function(){
   cor(cbind(peptide_ODdiff[,1:2], peptide_overdispersion), use = "complete.obs")
   
   plot(log2(peptide_ODdiff[,2])~ log2(peptide_overdispersion), col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples], pch = 16)
+  
   
   plot((peptide_overdispersion - peptide_ODdiff[,1])/peptide_ODdiff[,1] ~ log2(peptide_ODdiff[,1]), pch = 16, cex = 0.5, col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples]) #fractional error in dispersion prediction
   plot((peptide_overdispersion - peptide_ODdiff[,1])/peptide_ODdiff[,1] ~ peptide_ODdiff$nquant_samples, pch = 16, cex = 0.5)
