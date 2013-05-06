@@ -553,39 +553,174 @@ output_list
 
 
 
-plot_proteinConnections <- function(overlapMat){
+plot_proteinConnections <- function(overlapMat, subsumedIDs = NULL){
   
   require("igraph")
   
+  graph_genes <- colnames(overlapMat)
+  subsumedIDsN <- c(1:length(graph_genes))[graph_genes %in% subsumedIDs]
+  
+  graph_genes_common <- unname(orf2common(graph_genes))
+  
   overlapMatWeights <- overlapMat/diag(overlapMat) 
+  colnames(overlapMatWeights) <- rownames(overlapMatWeights) <- graph_genes_common
+  
   prot_overlap_layout2 <- graph.adjacency(overlapMatWeights, weighted=T)
   
-  # Degree
-  V(prot_overlap_layout2)$degree <- degree(magallg)
-  # Betweenness centrality
-  V(prot_overlap_layout2)$btwcnt <- betweenness(magallg)
   
   # Set vertex attributes
   V(prot_overlap_layout2)$label <- V(prot_overlap_layout2)$name
   V(prot_overlap_layout2)$label.color <- rgb(0,0,.2,.6)
-  V(prot_overlap_layout2)$size <- 3
+  V(prot_overlap_layout2)$size <- diag(overlapMat)/8
   V(prot_overlap_layout2)$label.cex <- .3
   V(prot_overlap_layout2)$frame.color <- NA
-  V(prot_overlap_layout2)$color <- rgb(0,0,1,.5)
+  V(prot_overlap_layout2)$color <- rgb(0,0.5,0.5,.8)
+  
+  
+  V(prot_overlap_layout2)$label.color[subsumedIDsN] <- rgb(1,0,0,1)
   
   # Set edge attributes
   E(prot_overlap_layout2)$arrow.size <- 0
   
   # Set edge gamma according to edge weight
   egam <- (E(prot_overlap_layout2)$weight+.1)/max(E(prot_overlap_layout2)$weight+.1)
-  E(prot_overlap_layout2)$color <- rgb(.5,.5,0,egam)
+  E(prot_overlap_layout2)$color <- rgb(1,0,0,egam)
   
   prot_overlap_layout2 <- simplify(prot_overlap_layout2, remove.multiple=FALSE, remove.loops=TRUE)
   
   pdf("protOverlap.pdf")
-  plot(prot_overlap_layout2, main = "layout.kamada.kawai", layout=layout.kamada.kawai)
-  plot(prot_overlap_layout2, main = "layout.fruchterman.reingold", layout=layout.fruchterman.reingold)
+  graph_layout = layout.fruchterman.reingold(prot_overlap_layout2,niter=500,area=vcount(prot_overlap_layout2)^2.3,repulserad=vcount(prot_overlap_layout2)^3.2)
+  plot(prot_overlap_layout2, main = "Overlap of peptides", layout=graph_layout, vertex.label.dist=0.2, edge.width=2)
   dev.off()
 }
+
+
+
+##### simulations #######
+
+varianceGP <- function(){
+  
+  require(msm)
+  
+  #### generative process for peptide variance ####
+  I <- 1000 # number of peptides, each with their own dispersion
+  C <- 100 # number of conditions
+  max_reps <- 3 # number of possible replicates (fewer will be present to model missing values)
+  
+  ### knowns ###
+  known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.5), ncol = C*max_reps, nrow = I)
+  
+  ### unknowns ###
+  peptide_overdispersion <- rlnorm(I, 0, 1)  # this is the parameter that needs to be estimated
+  total_dispersion <- known_sample_dispersion * (peptide_overdispersion %*% t(rep(1, C*max_reps)))
+  pmissingval <- rbeta(I, 2, 1)
+  #pmissingval <- rbeta(I, 10, 0.001)
+  sample_effects <- matrix(rnorm(I*C, 0, 1), ncol = C, nrow = I)
+  
+  ### input missing values ###
+  for(i in 1:I){
+    missingVals <- rbinom(C*max_reps, 1, pmissingval[i]) == 0
+    total_dispersion[i,missingVals] <- NA
+    }
+  
+
+  normality_tests <- data.frame(KS_A = rep(NA, I), KS_B = NA, KS_oracle = NA, KS_oracle_Nadjust = NA)
+  peptide_ODdiff <- data.frame(A = rep(NA, I), B = NA, nquant_samples = NA)
+  
+  for(i in 1:I){
+    
+    mock_data = data.frame(sample = rep(1:C, each = max_reps), effect = rep(sample_effects[i,], each = max_reps), var = total_dispersion[i,], known_dispersion = known_sample_dispersion[i,])
+    mock_data <- mock_data[!is.na(mock_data$var),]
+    
+    
+    ### generate technical replicates ###
+    mock_data <- data.frame(sample = rep(1:C, times = n_tech_reps), effect = sample_effects[i,rep(1:C, times = n_tech_reps)], var = total_dispersion[i,rep(1:C, times = n_tech_reps)], known_dispersion = known_sample_dispersion[i,rep(1:C, times = n_tech_reps)])
+    mock_data$observed <- rnorm(length(mock_data[,1]), mock_data$effect, sqrt(mock_data$var))
+    
+    if(sum(table(mock_data$sample) >= 2) >= 5){
+      
+      gls_model <- gls(observed ~ factor(sample), weights = ~known_dispersion, data = mock_data)
+      
+      cond_est <-  summary(gls_model)$coef + ifelse(names(summary(gls_model)$coef) == "(Intercept)", 0, gls_model$coef[1]); names(cond_est) <- unique(mock_data$sample)
+      mock_data$fitted <- sapply(mock_data$sample, function(x){cond_est[names(cond_est) == x]})
+  
+      repeated_conds <- mock_data[mock_data$sample %in% names(table(mock_data$sample))[table(mock_data$sample) >= 2],]
+      repeated_conds$nreps <- sapply(repeated_conds$sample, function(x){table(repeated_conds$sample)[names(table(repeated_conds$sample)) == x]})
+      
+      zstat <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion)
+      ODest1 <- var(zstat)
+      ODest2 <- 1/(length(repeated_conds[,1])/sum(((repeated_conds$observed - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$known_dispersion))))
+      
+      #normality_tests[i,] <- c(ks.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1), pnorm)$p,
+      #ks.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest2), pnorm)$p,
+      #shapiro.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1))$p,
+      #shapiro.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest2))$p)
+      
+      z1 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1)
+      z2 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest2)
+      z3 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * peptide_overdispersion[i])
+      ### adjust for weight in unbiased correcti
+      z4 <- (repeated_conds$observed - repeated_conds$fitted)*sapply(repeated_conds$sample, function(x){sqrt(sample_size_correction(1/repeated_conds$known_dispersion[repeated_conds$sample == x]))})/sqrt(repeated_conds$known_dispersion * peptide_overdispersion[i])
+      
+      normality_tests[i,] <- c(ks.test(z1[z1 >= 0], ptnorm, lower = 0)$p, ks.test(z2[z2 >= 0], ptnorm, lower = 0)$p, ks.test(z3[z3 >= 0], ptnorm, lower = 0)$p, ks.test(z4[z4 >= 0], ptnorm, lower = 0)$p)
+      
+      peptide_ODdiff[i,] <- c(c(ODest1, ODest2), length(repeated_conds[,1]))
+    }
+  }
+  cor(peptide_ODdiff, peptide_overdispersion)
+  
+  
+  plot(log2(peptide_ODdiff[,2])~ log2(peptide_overdispersion), col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples], pch = 16)
+  plot(log2(peptide_ODdiff[,2]) ~ log2(peptide_ODdiff[,1]))
+}
+
+### normality test is uniform when known_sample_dispersion is constant 
+
+https://stat.ethz.ch/pipermail/r-help/2008-July/168762.html
+weighted.var2 <- function(x, w, na.rm = FALSE) {
+    if (na.rm) {
+        w <- w[i <- !is.na(x)]
+        x <- x[i]
+    }
+    sum.w <- sum(w)
+    (sum(w*x^2) * sum.w - sum(w*x)^2) / (sum.w^2 - sum(w^2))
+}
+
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+    if (na.rm) {
+        w <- w[i <- !is.na(x)]
+        x <- x[i]
+    }
+    sum.w <- sum(w)
+    sum.w2 <- sum(w^2)
+    mean.w <- sum(x * w) / sum(w)
+    (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
+na.rm)
+}
+
+sample_size_correction <- function(w) {
+    sum.w <- sum(w)
+    sum.w2 <- sum(w^2)
+    sum.w*(sum.w / (sum.w^2 - sum.w2)) 
+}
+
+
+weighted.var2(repeated_conds$observed[repeated_conds$sample == 1], repeated_conds$known_dispersion[repeated_conds$sample == 1])
+weighted.var(repeated_conds$observed[repeated_conds$sample == 1], 1:3)
+
+
+
+W = 1/repeated_conds$known_dispersion
+sum(W)^2 - sum(W^2)
+
+
+
+
+
+sum(1/W)
+
+
+
 
 
