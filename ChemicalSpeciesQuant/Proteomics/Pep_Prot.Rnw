@@ -760,6 +760,7 @@ bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c
 <<>>=
 
 save(list = ls(), file = "tmp.Rdata")
+load("tmp.Rdata")
 
 # remove outliers
 # fit SD(IC) or SD(SN)
@@ -769,7 +770,8 @@ save(list = ls(), file = "tmp.Rdata")
 point_estimates <- matrix(NA, ncol = n_c, nrow = n_p); rownames(point_estimates) <- rownames(abundMat); colnames(point_estimates) <- unique(proteomicsBlocking$Condition)
 precision_estimates <- point_estimates
 dispersion_adj <- rep(NA, n_p)
-dispersion_ks.test <- rep(NA, n_p)
+dispersion_ks.test2 <- dispersion_ks.test <- rep(NA, n_p)
+
 
 for(a_pep_n in 1:n_p){
   
@@ -782,37 +784,23 @@ for(a_pep_n in 1:n_p){
   peptide_model$var_fit = sapply(1:length(peptide_model[,1]), function(x){predict(var_spline_inst[[peptide_model$Instrument[x]]], log10(peptide_model$SN)[x])$y})
   peptide_model <- peptide_model[is.finite(peptide_model$var_fit),] #remove infinite variance because not informative
   
+  ### fitting condition-specific peptide abundance ###
   
   if(all(names(table(table(peptide_model$Condition))) <= 1)){
-  #if number of conditions == number of samples then regression is singular, so use measurements directly
-    
+    #if number of conditions == number of samples then regression is singular, so use measurements directly
     cond_est <- peptide_model$RA
     names(cond_est) <- peptide_model$Condition
-    
     }else{
-      
-     
-      
-      mixed_effects_model <- try(lme(RA ~ treatment_mat, weights = ~var_fit, data = peptide_model, random = ~ 1 | totalBlocking), silent = TRUE)
-          
-      if(class(mixed_effects_model) == "try-error"){
-        #use gls if lme fails to converge
-        #fit weighted-LS if the number of blocks + conditions is greater than the number of samples
-        gls_model <- gls(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model)
-        cond_est <-  summary(gls_model)$coef + ifelse(names(summary(gls_model)$coef) == "(Intercept)", 0, gls_model$coef[1]); names(cond_est) <- unique(peptide_model$Condition)
-        }else{
-          #the usual case - fit a mixed-effects model to estimate the relative abundance of proteins in each condition accounting for the blocking
-          cond_est <-  summary(mixed_effects_model)$coef$fixed + ifelse(names(summary(mixed_effects_model)$coef$fixed) == "(Intercept)", 0, mixed_effects_model$coef$fixed[1]); names(cond_est) <- unique(peptide_model$Condition)
-          }
-        }
-  
-  
+      gls_model <- gls(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model)
+      cond_est <-  summary(gls_model)$coef + ifelse(names(summary(gls_model)$coef) == "(Intercept)", 0, gls_model$coef[1]); names(cond_est) <- unique(peptide_model$Condition)
+      }
   peptide_model$fitted <- sapply(peptide_model$Condition, function(x){cond_est[names(cond_est) == x]})
   
   if(sum(table(peptide_model$Condition) >= 2) < 5 & all(peptide_model$outlier_type == "peptide")){
     next
     }
   
+  ### Adjusting the variance between
   if(sum(table(peptide_model$Condition) >= 2) >= 5){
     repeated_conds <- peptide_model[peptide_model$Condition %in% names(table(peptide_model$Condition))[table(peptide_model$Condition) >= 2],]
     repeated_conds$nreps <- sapply(repeated_conds$Condition, function(x){table(repeated_conds$Condition)[names(table(repeated_conds$Condition)) == x]})
@@ -821,13 +809,16 @@ for(a_pep_n in 1:n_p){
     Zscores <- (repeated_conds$RA - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$var_fit)
     ### Zscores/sd(Zscores) ~ N(0,1), so overdispersion of variance is by factor of var(Zscores)
     dispersion_adj[a_pep_n] <- var(Zscores)
-    
-    (repeated_conds$RA - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$var_fit*var(Zscores))
-    
     dispersion_ks.test[a_pep_n] <- ks.test(Zscores/sd(Zscores), pnorm)$p
     
-    #dispersion_adj[a_pep_n] <- length(repeated_conds[,1])/sum(((repeated_conds$RA - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$var_fit)))
-    } else{dispersion_adj[a_pep_n] <- 1}
+    #dispersion_adj[a_pep_n] 
+    dispersion_adj[a_pep_n] <- 1/(length(repeated_conds[,1])/sum(((repeated_conds$RA - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$var_fit))))
+    dispersion_ks.test2[a_pep_n] <- ks.test((repeated_conds$RA - repeated_conds$fitted)/sqrt(repeated_conds$var_fit*dispersion_adj[a_pep_n]), pnorm)$p
+      
+    
+    
+    
+  } else{dispersion_adj[a_pep_n] <- 1}
     
   peptide_model$precision_adj <- 1/(peptide_model$var_fit*dispersion_adj[a_pep_n])
   
@@ -840,6 +831,8 @@ for(a_pep_n in 1:n_p){
   precision_estimates[a_pep_n,] <- cond_summary$precision
   
 }
+
+hist(dispersion_ks.test, breaks = 50)
 
 ggplot(data.frame(dispersion = dispersion_adj), aes(x = dispersion)) + geom_bar(binwidth = 0.01) + scale_x_continuous(limits = c(0,10))
 ggplot(data.frame(dispersion = log2(dispersion_adj)), aes(x = dispersion)) + geom_bar(binwidth = 0.3)
