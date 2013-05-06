@@ -606,6 +606,7 @@ varianceGP <- function(){
   I <- 1000 # number of peptides, each with their own dispersion
   C <- 100 # number of conditions
   max_reps <- 3 # number of possible replicates (fewer will be present to model missing values)
+  CV_fold <- 10
   
   ### knowns ###
   known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.5), ncol = C*max_reps, nrow = I)
@@ -629,17 +630,17 @@ varianceGP <- function(){
   
   for(i in 1:I){
     
+    ### generate technical replicates ###
+    
     mock_data = data.frame(sample = rep(1:C, each = max_reps), effect = rep(sample_effects[i,], each = max_reps), var = total_dispersion[i,], known_dispersion = known_sample_dispersion[i,])
     mock_data <- mock_data[!is.na(mock_data$var),]
-    
-    
-    ### generate technical replicates ###
-    mock_data <- data.frame(sample = rep(1:C, times = n_tech_reps), effect = sample_effects[i,rep(1:C, times = n_tech_reps)], var = total_dispersion[i,rep(1:C, times = n_tech_reps)], known_dispersion = known_sample_dispersion[i,rep(1:C, times = n_tech_reps)])
     mock_data$observed <- rnorm(length(mock_data[,1]), mock_data$effect, sqrt(mock_data$var))
     
     if(sum(table(mock_data$sample) >= 2) >= 5){
       
+      ### fitted value is equal to the observations weighted by the inverse of their dispersion
       gls_model <- gls(observed ~ factor(sample), weights = ~known_dispersion, data = mock_data)
+      #weighted.mean(mock_data$observed[mock_data$sample == 2], 1/mock_data$known_dispersion[mock_data$sample == 2])
       
       cond_est <-  summary(gls_model)$coef + ifelse(names(summary(gls_model)$coef) == "(Intercept)", 0, gls_model$coef[1]); names(cond_est) <- unique(mock_data$sample)
       mock_data$fitted <- sapply(mock_data$sample, function(x){cond_est[names(cond_est) == x]})
@@ -647,19 +648,20 @@ varianceGP <- function(){
       repeated_conds <- mock_data[mock_data$sample %in% names(table(mock_data$sample))[table(mock_data$sample) >= 2],]
       repeated_conds$nreps <- sapply(repeated_conds$sample, function(x){table(repeated_conds$sample)[names(table(repeated_conds$sample)) == x]})
       
+      ### MLE of dispersion
+      
       zstat <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion)
-      ODest1 <- var(zstat)
+      ODest1 <- var(zstat)        
       ODest2 <- 1/(length(repeated_conds[,1])/sum(((repeated_conds$observed - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$known_dispersion))))
+      #ODest2 = mean(zstat^2)
+        
       
       #normality_tests[i,] <- c(ks.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1), pnorm)$p,
-      #ks.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest2), pnorm)$p,
-      #shapiro.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1))$p,
-      #shapiro.test((repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest2))$p)
       
       z1 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest1)
       z2 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * ODest2)
       z3 <- (repeated_conds$observed - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$known_dispersion * peptide_overdispersion[i])
-      ### adjust for weight in unbiased correcti
+      ### adjust for weight in unbiased correction
       z4 <- (repeated_conds$observed - repeated_conds$fitted)*sapply(repeated_conds$sample, function(x){sqrt(sample_size_correction(1/repeated_conds$known_dispersion[repeated_conds$sample == x]))})/sqrt(repeated_conds$known_dispersion * peptide_overdispersion[i])
       
       normality_tests[i,] <- c(ks.test(z1[z1 >= 0], ptnorm, lower = 0)$p, ks.test(z2[z2 >= 0], ptnorm, lower = 0)$p, ks.test(z3[z3 >= 0], ptnorm, lower = 0)$p, ks.test(z4[z4 >= 0], ptnorm, lower = 0)$p)
@@ -667,12 +669,18 @@ varianceGP <- function(){
       peptide_ODdiff[i,] <- c(c(ODest1, ODest2), length(repeated_conds[,1]))
     }
   }
-  cor(peptide_ODdiff, peptide_overdispersion)
-  
+  cor(cbind(peptide_ODdiff[,1:2], peptide_overdispersion), use = "complete.obs")
   
   plot(log2(peptide_ODdiff[,2])~ log2(peptide_overdispersion), col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples], pch = 16)
-  plot(log2(peptide_ODdiff[,2]) ~ log2(peptide_ODdiff[,1]))
+  
+  plot((peptide_overdispersion - peptide_ODdiff[,1])/peptide_ODdiff[,1] ~ log2(peptide_ODdiff[,1]), pch = 16, cex = 0.5, col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples]) #fractional error in dispersion prediction
+  plot((peptide_overdispersion - peptide_ODdiff[,1])/peptide_ODdiff[,1] ~ peptide_ODdiff$nquant_samples, pch = 16, cex = 0.5)
+  
 }
+
+
+
+
 
 ### normality test is uniform when known_sample_dispersion is constant 
 
