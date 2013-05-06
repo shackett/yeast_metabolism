@@ -644,17 +644,19 @@ varianceGP <- function(){
       mock_data[, fitted:=weighted.mean(observed, 1/known_dispersion), by=sample]
       mock_data[, nreps:=length(known_dispersion), by=sample]
       mock_data[, weight_nadjust:=sample_size_correction(1/known_dispersion), by=sample]
+      mock_data <- mock_data[mock_data$nreps >= 2,]
       
       ### MLE of dispersion
       ODmle <- mean(mock_data[, (observed - fitted)^2 * nreps/(nreps - 1) * (1/known_dispersion),])
       ODssadjust <- mean(mock_data[, (observed - fitted)^2 * weight_nadjust * (1/known_dispersion),])
       
-      #### compare sum of squares to chi-square(n) ####
+      z1 <- 
       
-      chisq_tests[i,] <- c(pchisq(sum((mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*ODmle) ,])^2), nrow(mock_data)),
-      pchisq(sum((mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*ODssadjust) ,])^2), nrow(mock_data)),
-      pchisq(sum((mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*peptide_overdispersion[i]) ,])^2), nrow(mock_data)),
-      pchisq(sum((mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*peptide_overdispersion[i]) ,])^2), nrow(mock_data)))
+        shapiro.test(mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*ODmle) ,])$p
+        shapiro.test(mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*ODssadjust) ,])$p
+      
+      
+      
       
       #### studentize and compare to N(0,1) ####
       
