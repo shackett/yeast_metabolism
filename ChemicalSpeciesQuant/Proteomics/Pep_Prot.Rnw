@@ -761,6 +761,7 @@ bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c
 
 library(data.table)
 library(ggplot2)
+library(reshape2)
 
 save(list = ls(), file = "tmp.Rdata")
 load("tmp.Rdata")
@@ -772,9 +773,7 @@ load("tmp.Rdata")
 
 point_estimates <- matrix(NA, ncol = n_c, nrow = n_p); rownames(point_estimates) <- rownames(abundMat); colnames(point_estimates) <- unique(proteomicsBlocking$Condition)
 precision_estimates <- point_estimates
-dispersion_adj <- rep(NA, n_p)
-dispersion_SW_test <- rep(NA, n_p)
-
+dispersion_table <- data.table(dispersion_adj = rep(NA, n_p), dispersion_SW_test = NA, log_dispersion_SD = NA)
 
 for(a_pep_n in 1:n_p){
   
@@ -799,18 +798,13 @@ for(a_pep_n in 1:n_p){
     repeated_conds[, nreps:=length(fitted), by=Condition]
     repeated_conds <- repeated_conds[repeated_conds[,nreps >= 2],]
     
-    dispersion_adj[a_pep_n] <- mean(repeated_conds[, (RA - fitted)^2 * nreps/(nreps - 1) * (1/var_fit),])
-    dispersion_SW_test[a_pep_n] <- shapiro.test(repeated_conds[, (RA - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(var_fit*dispersion_adj[a_pep_n]) ,])$p
+    dispersion_table$dispersion_adj[a_pep_n] <- mean(repeated_conds[, (RA - fitted)^2 * nreps/(nreps - 1) * (1/var_fit),])
+    dispersion_table$dispersion_SW_test[a_pep_n] <- shapiro.test(repeated_conds[, (RA - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(var_fit*dispersion_table$dispersion_adj[a_pep_n]) ,])$p
+    dispersion_table$log_dispersion_SD[a_pep_n] <- CV_dispersions(repeated_conds)
     
-    CV_dispersions(repeated_conds, 5)
+    } else{dispersion_table$dispersion_adj[a_pep_n] <- 1}
     
-  
-    
-    
-    
-    } else{dispersion_adj[a_pep_n] <- 1}
-    
-  peptide_model$precision_adj <- 1/(peptide_model$var_fit*dispersion_adj[a_pep_n])
+  peptide_model$precision_adj <- 1/(peptide_model$var_fit*dispersion_table$dispersion_adj[a_pep_n])
   
   cond_summary <- data.frame(condition = conditions, RA = NA, precision = NA)
   for(a_cond in 1:n_c){
@@ -822,26 +816,49 @@ for(a_pep_n in 1:n_p){
   
 }
 
-hist(dispersion_SW_test, breaks = 50)
+dispersion_table$nvals = rowSums(!is.na(abundMat))
+dispersion_table[, sample_fraction:= fraction_plot$label[fraction_plot$max >= nvals][1], by = nvals]
 
-ggplot(data.frame(dispersion = dispersion_adj), aes(x = dispersion)) + geom_bar(binwidth = 0.01) + scale_x_continuous(limits = c(0,10))
+hist(dispersion_table$dispersion_SW_test, breaks = 50)
 
-ggplot(data.frame(dispersion = log2(dispersion_adj)), aes(x = dispersion)) + geom_bar(binwidth = 0.3, fill = "RED")
+ggplot(dispersion_table, aes(x = log2(dispersion_adj))) + geom_bar(binwidth = 0.3, fill = "RED")
 ggplot(data.frame(dispersion = log2(dispersion_adj), nvals = rowSums(!is.na(abundMat))), aes(y = dispersion, x = nvals)) + geom_jitter(size = 0.5)
 
-
-
-dispersion_table <- data.table(pvalues = dispersion_SW_test, OD = dispersion_adj, nmeasurement = rowSums(!is.na(abundMat)))
 
 fraction_plot <- data.table(min = (seq(0, 1, by = 0.2)*n_e)[1:5], max = (seq(0, 1, by = 0.2)*n_e)[2:6], min_label = seq(0, 100, by = 20)[1:5], max_label = seq(0, 100, by = 20)[2:6])
 fraction_plot[,label:= paste(c(paste(c(min_label, max_label), collapse = "-"), "%"), collapse = ""),by = min]
 
-dispersion_table[, sample_fraction:= fraction_plot$label[fraction_plot$max >= nmeasurement][1], by = nmeasurement]
-ggplot(dispersion_table, aes(x = pvalues)) + facet_wrap(~ sample_fraction, ncol = 5) + geom_bar(binwidth = 0.05)
+ggplot(dispersion_table, aes(x = dispersion_SW_test)) + facet_wrap(~ sample_fraction, ncol = 5) + geom_bar(binwidth = 0.05)
            
 ggplot(dispersion_table[dispersion_table$OD != 1,], aes(x = factor(sample_fraction), y = log2(OD))) + geom_violin(scale = "count", fill = "darkgoldenrod1") + ggtitle("Overdispersion as fraction of missing values decreases")
 
-dispersion_table[, median(log2(OD), na.rm = TRUE), by = sample_fraction]
+dispersion_table[, median(log2(dispersion_adj), na.rm = TRUE), by = sample_fraction]
+
+#####
+
+dispersion_adj_df <- dispersion_table[!is.na(log_dispersion_SD),]
+
+ggplot(dispersion_adj_df, aes(x = log2(dispersion_adj), y = log_dispersion_SD, color = nvals)) + geom_point(size = 3)
+mean_spline <- smooth.spline(log2(dispersion_adj_df$dispersion_adj) ~ dispersion_adj_df$nvals, df = 3)
+
+plot(data = dispersion_adj_df, log2(dispersion_adj) ~ jitter(nvals), pch = 16, cex = 0.5)
+lines(predict(mean_spline, 1:n_e)$y ~ c(1:n_e), lwd = 3, col = "RED")
+
+dispersion_adj_df$centered_dispersion <- log2(dispersion_adj_df$dispersion_adj) - predict(mean_spline, dispersion_adj_df$nvals)$y
+plot(data = dispersion_adj_df, centered_dispersion ~ jitter(nvals), pch = 16, cex = 0.5)
+
+dispersion_adj_df[,lambda_est:=sapply(dispersion_adj_df[,centered_dispersion^2 - log_dispersion_SD^2,], function(x){max(0, x)}),]
+dispersion_adj_df[,shrunk_estimate:=lambda_est/(lambda_est + log_dispersion_SD)*centered_dispersion,]
+
+ggplot(dispersion_adj_df, aes(x = centered_dispersion, y = shrunk_estimate, col = nvals)) + geom_point()
+
+
+
+
+ggplot(dispersion_adj_df, aes(x = shrunk_estimate, y = log_dispersion_SD, color = nvals)) + geom_point(size = 3)
+
+
+
 
 ### set the mean of OD to 0 and enforce a constant sd  ####
 
