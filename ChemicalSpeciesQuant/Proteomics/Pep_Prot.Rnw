@@ -759,6 +759,9 @@ bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c
 
 <<>>=
 
+library(data.table)
+library(ggplot2)
+
 save(list = ls(), file = "tmp.Rdata")
 load("tmp.Rdata")
 
@@ -770,55 +773,42 @@ load("tmp.Rdata")
 point_estimates <- matrix(NA, ncol = n_c, nrow = n_p); rownames(point_estimates) <- rownames(abundMat); colnames(point_estimates) <- unique(proteomicsBlocking$Condition)
 precision_estimates <- point_estimates
 dispersion_adj <- rep(NA, n_p)
-dispersion_ks.test2 <- dispersion_ks.test <- rep(NA, n_p)
+dispersion_SW_test <- rep(NA, n_p)
 
 
 for(a_pep_n in 1:n_p){
   
-  peptide_model <- data.frame(RA = abundMat[a_pep_n,], proteomicsBlocking, totalBlocking = inst_block_level_joined, setBlocking = inst_set_level_joined, lightIC = log2(good_light[a_pep_n,]), heavyIC = log2(good_heavy[a_pep_n,]), averageIC = (log2(good_light[a_pep_n,]) + log2(good_heavy[a_pep_n,]))/2, SN = good_SN[a_pep_n,], outlier_type = outlier_type[a_pep_n,], index = 1:n_e)
+  peptide_model <- data.table(RA = abundMat[a_pep_n,], proteomicsBlocking, totalBlocking = inst_block_level_joined, setBlocking = inst_set_level_joined, lightIC = log2(good_light[a_pep_n,]), heavyIC = log2(good_heavy[a_pep_n,]), averageIC = (log2(good_light[a_pep_n,]) + log2(good_heavy[a_pep_n,]))/2, SN = good_SN[a_pep_n,], outlier_type = outlier_type[a_pep_n,], index = 1:n_e)
   peptide_model <- peptide_model[!is.na(peptide_model$RA),]
   peptide_model <- peptide_model[!(peptide_model$outlier_type %in% c("point", "block")),]
   
-  if(length(peptide_model[,1]) < n_e*quality_frac){next}
+  if(nrow(peptide_model) < n_e*quality_frac){next}
   
-  peptide_model$var_fit = sapply(1:length(peptide_model[,1]), function(x){predict(var_spline_inst[[peptide_model$Instrument[x]]], log10(peptide_model$SN)[x])$y})
+  peptide_model[, var_fit:=predict(var_spline_inst[[Instrument]], log10(SN))$y, by=index]
   peptide_model <- peptide_model[is.finite(peptide_model$var_fit),] #remove infinite variance because not informative
   
   ### fitting condition-specific peptide abundance ###
   
-  if(all(names(table(table(peptide_model$Condition))) <= 1)){
-    #if number of conditions == number of samples then regression is singular, so use measurements directly
-    cond_est <- peptide_model$RA
-    names(cond_est) <- peptide_model$Condition
-    }else{
-      gls_model <- gls(RA ~ factor(Condition), weights = ~var_fit, data = peptide_model)
-      cond_est <-  summary(gls_model)$coef + ifelse(names(summary(gls_model)$coef) == "(Intercept)", 0, gls_model$coef[1]); names(cond_est) <- unique(peptide_model$Condition)
-      }
-  peptide_model$fitted <- sapply(peptide_model$Condition, function(x){cond_est[names(cond_est) == x]})
+  peptide_model[, fitted:=weighted.mean(RA, 1/var_fit), by=Condition]
   
-  if(sum(table(peptide_model$Condition) >= 2) < 5 & all(peptide_model$outlier_type == "peptide")){
-    next
-    }
+  if(sum(table(peptide_model$Condition) >= 2) < 5 & all(peptide_model$outlier_type == "peptide")){next}
   
-  ### Adjusting the variance between
+  ### Determine the extent of peptide-level overdispersion ###
   if(sum(table(peptide_model$Condition) >= 2) >= 5){
-    repeated_conds <- peptide_model[peptide_model$Condition %in% names(table(peptide_model$Condition))[table(peptide_model$Condition) >= 2],]
-    repeated_conds$nreps <- sapply(repeated_conds$Condition, function(x){table(repeated_conds$Condition)[names(table(repeated_conds$Condition)) == x]})
-    #### inflate each residual by sqrt(nreps/(nreps - 1))
+    repeated_conds <- peptide_model
+    repeated_conds[, nreps:=length(fitted), by=Condition]
+    repeated_conds <- repeated_conds[repeated_conds[,nreps >= 2],]
+    
+    dispersion_adj[a_pep_n] <- mean(repeated_conds[, (RA - fitted)^2 * nreps/(nreps - 1) * (1/var_fit),])
+    dispersion_SW_test[a_pep_n] <- shapiro.test(repeated_conds[, (RA - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(var_fit*dispersion_adj[a_pep_n]) ,])$p
+    
+    CV_dispersions(repeated_conds, 5)
+    
   
-    Zscores <- (repeated_conds$RA - repeated_conds$fitted)*sqrt(repeated_conds$nreps/(repeated_conds$nreps - 1))/sqrt(repeated_conds$var_fit)
-    ### Zscores/sd(Zscores) ~ N(0,1), so overdispersion of variance is by factor of var(Zscores)
-    dispersion_adj[a_pep_n] <- var(Zscores)
-    dispersion_ks.test[a_pep_n] <- ks.test(Zscores/sd(Zscores), pnorm)$p
-    
-    #dispersion_adj[a_pep_n] 
-    dispersion_adj[a_pep_n] <- 1/(length(repeated_conds[,1])/sum(((repeated_conds$RA - repeated_conds$fitted)^2*(repeated_conds$nreps/(repeated_conds$nreps - 1))*(1/repeated_conds$var_fit))))
-    dispersion_ks.test2[a_pep_n] <- ks.test((repeated_conds$RA - repeated_conds$fitted)/sqrt(repeated_conds$var_fit*dispersion_adj[a_pep_n]), pnorm)$p
-      
     
     
     
-  } else{dispersion_adj[a_pep_n] <- 1}
+    } else{dispersion_adj[a_pep_n] <- 1}
     
   peptide_model$precision_adj <- 1/(peptide_model$var_fit*dispersion_adj[a_pep_n])
   
@@ -832,11 +822,43 @@ for(a_pep_n in 1:n_p){
   
 }
 
-hist(dispersion_ks.test, breaks = 50)
+hist(dispersion_SW_test, breaks = 50)
 
 ggplot(data.frame(dispersion = dispersion_adj), aes(x = dispersion)) + geom_bar(binwidth = 0.01) + scale_x_continuous(limits = c(0,10))
-ggplot(data.frame(dispersion = log2(dispersion_adj)), aes(x = dispersion)) + geom_bar(binwidth = 0.3)
 
+ggplot(data.frame(dispersion = log2(dispersion_adj)), aes(x = dispersion)) + geom_bar(binwidth = 0.3, fill = "RED")
+ggplot(data.frame(dispersion = log2(dispersion_adj), nvals = rowSums(!is.na(abundMat))), aes(y = dispersion, x = nvals)) + geom_jitter(size = 0.5)
+
+
+
+dispersion_table <- data.table(pvalues = dispersion_SW_test, OD = dispersion_adj, nmeasurement = rowSums(!is.na(abundMat)))
+
+fraction_plot <- data.table(min = (seq(0, 1, by = 0.2)*n_e)[1:5], max = (seq(0, 1, by = 0.2)*n_e)[2:6], min_label = seq(0, 100, by = 20)[1:5], max_label = seq(0, 100, by = 20)[2:6])
+fraction_plot[,label:= paste(c(paste(c(min_label, max_label), collapse = "-"), "%"), collapse = ""),by = min]
+
+dispersion_table[, sample_fraction:= fraction_plot$label[fraction_plot$max >= nmeasurement][1], by = nmeasurement]
+ggplot(dispersion_table, aes(x = pvalues)) + facet_wrap(~ sample_fraction, ncol = 5) + geom_bar(binwidth = 0.05)
+           
+ggplot(dispersion_table[dispersion_table$OD != 1,], aes(x = factor(sample_fraction), y = log2(OD))) + geom_violin(scale = "count", fill = "darkgoldenrod1") + ggtitle("Overdispersion as fraction of missing values decreases")
+
+dispersion_table[, median(log2(OD), na.rm = TRUE), by = sample_fraction]
+
+### set the mean of OD to 0 and enforce a constant sd  ####
+
+dispersion_adj_df <- data.table(dispersion = log2(dispersion_adj), nvals = rowSums(!is.na(abundMat)))
+dispersion_adj_df <- dispersion_adj_df[dispersion != 0,]
+
+mean_spline <- smooth.spline(dispersion_adj_df$dispersion ~ dispersion_adj_df$nvals, df = 3)
+sd_spline <- smooth.spline(abs(dispersion_adj_df$dispersion) ~ dispersion_adj_df$nvals, df = 3)
+
+plot(data = dispersion_adj_df, dispersion ~ jitter(nvals), pch = 16, cex = 0.5)
+lines(predict(mean_spline, 1:n_e)$y ~ c(1:n_e), lwd = 3, col = "RED")
+
+plot(data = dispersion_adj_df, abs(dispersion) ~ jitter(nvals), pch = 16, cex = 0.5)
+lines(predict(sd_spline, 1:n_e)$y ~ c(1:n_e), lwd = 3, col = "RED")
+
+
+######
 
 fittedPrec <- precision_estimates
 abundMat <- point_estimates

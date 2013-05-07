@@ -595,29 +595,55 @@ plot_proteinConnections <- function(overlapMat, subsumedIDs = NULL){
 }
 
 
+CV_dispersions <- function(repeated_conds, nCV = 5, nreps = 100){
+    ### peform K-fold cross-validation to determine how stable over-dispersion parameter estimation is.
+    ### When the sd of an OD value is approximately known, shrinkage can be employed
+    
+    cond_subset <- unique(repeated_conds$Condition)
+    cond_indeces <- c(rep(1:nCV, times = floor(length(cond_subset)/nCV)), (0:(length(cond_subset) %% nCV))[-1])
+    cond_subset <- data.table(cond_subset, sample_set = sample(cond_indeces))
+    
+    sd(sapply(1:nCV, function(n){
+      red_set <- repeated_conds[repeated_conds$Condition %in% cond_subset$cond_subset[cond_subset$sample_set != n],]
+      mean(red_set[, (RA - fitted)^2 * nreps/(nreps - 1) * (1/var_fit),])
+      }))
+    
+    sd(c(sapply(1:nreps, function(z){
+    cond_subset <- unique(repeated_conds$Condition)
+    cond_indeces <- c(rep(1:nCV, times = floor(length(cond_subset)/nCV)), (0:(length(cond_subset) %% nCV))[-1])
+    cond_subset <- data.table(cond_subset, sample_set = sample(cond_indeces))
+    
+    sapply(1:nCV, function(n){
+      red_set <- repeated_conds[repeated_conds$Condition %in% cond_subset$cond_subset[cond_subset$sample_set != n],]
+      mean(red_set[, (RA - fitted)^2 * nreps/(nreps - 1) * (1/var_fit),])
+      })})))
+
+
+    }
+
+
 
 ##### simulations #######
 
 varianceGP <- function(){
   
-  require(msm)
+  require(msm) #check why this is here
   require(data.table)
+  require(colorRamps)
   
   #### generative process for peptide variance ####
   I <- 1000 # number of peptides, each with their own dispersion
   C <- 100 # number of conditions
-  max_reps <- 3 # number of possible replicates (fewer will be present to model missing values)
+  max_reps <- 5 # number of possible replicates (fewer will be present to model missing values)
   
   ### knowns ###
-  #known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.5), ncol = C*max_reps, nrow = I)
-  known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.1), ncol = C*max_reps, nrow = I)
-  
+  known_sample_dispersion <- matrix(rlnorm(I*C*max_reps, 0, 0.5), ncol = C*max_reps, nrow = I)
   
   ### unknowns ###
   peptide_overdispersion <- rlnorm(I, 0, 1)  # this is the parameter that needs to be estimated
   total_dispersion <- known_sample_dispersion * (peptide_overdispersion %*% t(rep(1, C*max_reps)))
-  #pmissingval <- rbeta(I, 2, 1)
-  pmissingval <- rbeta(I, 10, 0.001)
+  pmissingval <- rbeta(I, 2, 1)
+  #pmissingval <- rbeta(I, 10, 0.001)
   sample_effects <- matrix(rnorm(I*C, 0, 1), ncol = C, nrow = I)
   
   ### input missing values ###
@@ -626,8 +652,7 @@ varianceGP <- function(){
     total_dispersion[i,missingVals] <- NA
     }
   
-  normality_tests <- data.frame(KS_A = rep(NA, I), KS_B = NA, KS_oracle = NA, KS_oracle_Nadjust = NA)
-  chisq_tests <- data.frame(CS_A = rep(NA, I), CS_B = NA, CS_oracle = NA, CS_oracle_Nadjust = NA)
+  normality_tests <- data.frame(KS_A = rep(NA, I), KS_B = NA)
   peptide_ODdiff <- data.frame(A = rep(NA, I), B = NA, nquant_samples = NA)
   
   for(i in 1:I){
@@ -650,87 +675,37 @@ varianceGP <- function(){
       ODmle <- mean(mock_data[, (observed - fitted)^2 * nreps/(nreps - 1) * (1/known_dispersion),])
       ODssadjust <- mean(mock_data[, (observed - fitted)^2 * weight_nadjust * (1/known_dispersion),])
       
-      z1 <- 
+      ### Test of normality for estimates using MLE.  A test for N(0, OD) is conservative due to the constrained L2 Norm 
       
-        shapiro.test(mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*ODmle) ,])$p
-        shapiro.test(mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*ODssadjust) ,])$p
+      normality_tests[i,] <- c(shapiro.test(mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*ODmle) ,])$p,
+      shapiro.test(mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*ODssadjust) ,])$p)
       
-      
-      
-      
-      #### studentize and compare to N(0,1) ####
-      
-      z1 <- mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*ODmle) ,]
-      z2 <- mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*ODssadjust) ,]
-      ### oracle - truth ###
-      o1 <- mock_data[, (observed - fitted) * sqrt(nreps/(nreps - 1)) * 1/sqrt(known_dispersion*peptide_overdispersion[i]) ,]
-      o2 <- mock_data[, (observed - fitted) * sqrt(mock_data$weight_nadjust) * 1/sqrt(known_dispersion*peptide_overdispersion[i]) ,]
-      
-      normality_tests[i,] <- c(ks.test(z1[z1 >= 0], ptnorm, lower = 0)$p, ks.test(z2[z2 >= 0], ptnorm, lower = 0)$p, ks.test(o1[o1 >= 0], ptnorm, lower = 0)$p, ks.test(o2[o2 >= 0], ptnorm, lower = 0)$p)
-      
-      peptide_ODdiff[i,] <- c(c(ODest1, ODest2), length(repeated_conds[,1]))
+      peptide_ODdiff[i,] <- c(c(ODmle, ODssadjust), nrow(mock_data))
     }
   }
-  cor(cbind(peptide_ODdiff[,1:2], peptide_overdispersion), use = "complete.obs")
+  peptide_ODdiff$actual <- peptide_ODdiff$peptide_overdispersion
+  list(shapiro = normality_tests, ODdiff = peptide_ODdiff)
+}  
+
+varianceGP_test <- function(n){
+
+ks_test_norm_fits <- matrix(NA, ncol = 2, nrow = n)
+
+ptm <- proc.time()
+for(k in 1:n){
+  shapiro_tests <- varianceGP()$shapiro
+  ks_test_norm_fits[k,] <- c(ks.test(shapiro_tests[,1], punif)$p, ks.test(shapiro_tests[,2], punif)$p)
+  }
+proc.time() - ptm
+
+cor(cbind(peptide_ODdiff[,1:2], peptide_overdispersion), use = "complete.obs")
   
-  plot(log2(peptide_ODdiff[,2])~ log2(peptide_overdispersion), col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples], pch = 16)
+plot(log2(peptide_ODdiff[,2])~ log2(peptide_overdispersion), col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples], pch = 16)
   
-  
-  plot((peptide_overdispersion - peptide_ODdiff[,1])/peptide_ODdiff[,1] ~ log2(peptide_ODdiff[,1]), pch = 16, cex = 0.5, col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples]) #fractional error in dispersion prediction
-  plot((peptide_overdispersion - peptide_ODdiff[,1])/peptide_ODdiff[,1] ~ peptide_ODdiff$nquant_samples, pch = 16, cex = 0.5)
+plot((peptide_overdispersion - peptide_ODdiff[,1])/peptide_ODdiff[,1] ~ log2(peptide_ODdiff[,1]), pch = 16, cex = 0.5, col = green2red(C*max_reps + 1)[peptide_ODdiff$nquant_samples]) #fractional error in dispersion prediction
+plot((peptide_overdispersion - peptide_ODdiff[,1])/peptide_ODdiff[,1] ~ peptide_ODdiff$nquant_samples, pch = 16, cex = 0.5)
   
 }
-
-
-
-
-
-### normality test is uniform when known_sample_dispersion is constant 
-
-https://stat.ethz.ch/pipermail/r-help/2008-July/168762.html
-weighted.var2 <- function(x, w, na.rm = FALSE) {
-    if (na.rm) {
-        w <- w[i <- !is.na(x)]
-        x <- x[i]
-    }
-    sum.w <- sum(w)
-    (sum(w*x^2) * sum.w - sum(w*x)^2) / (sum.w^2 - sum(w^2))
-}
-
-
-weighted.var <- function(x, w, na.rm = FALSE) {
-    if (na.rm) {
-        w <- w[i <- !is.na(x)]
-        x <- x[i]
-    }
-    sum.w <- sum(w)
-    sum.w2 <- sum(w^2)
-    mean.w <- sum(x * w) / sum(w)
-    (sum.w / (sum.w^2 - sum.w2)) * sum(w * (x - mean.w)^2, na.rm =
-na.rm)
-}
-
-sample_size_correction <- function(w) {
-    sum.w <- sum(w)
-    sum.w2 <- sum(w^2)
-    sum.w*(sum.w / (sum.w^2 - sum.w2)) 
-}
-
-
-weighted.var2(repeated_conds$observed[repeated_conds$sample == 1], repeated_conds$known_dispersion[repeated_conds$sample == 1])
-weighted.var(repeated_conds$observed[repeated_conds$sample == 1], 1:3)
-
-
-
-W = 1/repeated_conds$known_dispersion
-sum(W)^2 - sum(W^2)
-
-
-
-
-
-sum(1/W)
-
 
 
 
