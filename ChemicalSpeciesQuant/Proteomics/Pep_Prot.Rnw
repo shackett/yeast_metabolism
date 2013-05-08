@@ -770,6 +770,7 @@ load("tmp.Rdata")
 # fit SD(IC) or SD(SN)
 # fit a mixed-effect linear model with weights of SD(IC) to determine point estimates abundance
 # determine the extent of over-dispersion (plot across proteins)
+# shrink overdispersion based on sd(OD) through cross-validation
 
 point_estimates <- matrix(NA, ncol = n_c, nrow = n_p); rownames(point_estimates) <- rownames(abundMat); colnames(point_estimates) <- unique(proteomicsBlocking$Condition)
 precision_estimates <- point_estimates
@@ -816,23 +817,18 @@ for(a_pep_n in 1:n_p){
   
 }
 
+fraction_plot <- data.table(min = (seq(0, 1, by = 0.2)*n_e)[1:5], max = (seq(0, 1, by = 0.2)*n_e)[2:6], min_label = seq(0, 100, by = 20)[1:5], max_label = seq(0, 100, by = 20)[2:6])
+fraction_plot[,label:= paste(c(paste(c(min_label, max_label), collapse = "-"), "%"), collapse = ""),by = min]
+
 dispersion_table$nvals = rowSums(!is.na(abundMat))
 dispersion_table[, sample_fraction:= fraction_plot$label[fraction_plot$max >= nvals][1], by = nvals]
 
 hist(dispersion_table$dispersion_SW_test, breaks = 50)
 
-ggplot(dispersion_table, aes(x = log2(dispersion_adj))) + geom_bar(binwidth = 0.3, fill = "RED")
-ggplot(data.frame(dispersion = log2(dispersion_adj), nvals = rowSums(!is.na(abundMat))), aes(y = dispersion, x = nvals)) + geom_jitter(size = 0.5)
-
-
-fraction_plot <- data.table(min = (seq(0, 1, by = 0.2)*n_e)[1:5], max = (seq(0, 1, by = 0.2)*n_e)[2:6], min_label = seq(0, 100, by = 20)[1:5], max_label = seq(0, 100, by = 20)[2:6])
-fraction_plot[,label:= paste(c(paste(c(min_label, max_label), collapse = "-"), "%"), collapse = ""),by = min]
-
+#ggplot(dispersion_table, aes(x = log2(dispersion_adj))) + geom_bar(binwidth = 0.3, fill = "RED")
+#ggplot(data.frame(dispersion = log2(dispersion_adj), nvals = rowSums(!is.na(abundMat))), aes(y = dispersion, x = nvals)) + geom_jitter(size = 0.5)
 ggplot(dispersion_table, aes(x = dispersion_SW_test)) + facet_wrap(~ sample_fraction, ncol = 5) + geom_bar(binwidth = 0.05)
            
-ggplot(dispersion_table[dispersion_table$OD != 1,], aes(x = factor(sample_fraction), y = log2(OD))) + geom_violin(scale = "count", fill = "darkgoldenrod1") + ggtitle("Overdispersion as fraction of missing values decreases")
-
-dispersion_table[, median(log2(dispersion_adj), na.rm = TRUE), by = sample_fraction]
 
 #####
 
@@ -849,31 +845,16 @@ plot(data = dispersion_adj_df, centered_dispersion ~ jitter(nvals), pch = 16, ce
 
 dispersion_adj_df[,lambda_est:=sapply(dispersion_adj_df[,centered_dispersion^2 - log_dispersion_SD^2,], function(x){max(0, x)}),]
 dispersion_adj_df[,shrunk_estimate:=lambda_est/(lambda_est + log_dispersion_SD)*centered_dispersion,]
+dispersion_adj_df[,predicted_dispersion:=2^shrunk_estimate,]
 
 ggplot(dispersion_adj_df, aes(x = centered_dispersion, y = shrunk_estimate, col = nvals)) + geom_point()
 
+dispersion_shrinkageDF <- melt(dispersion_adj_df, measure.vars = c("dispersion_adj", "predicted_dispersion"), id.vars = c("nvals", "sample_fraction"))
 
+ggplot(dispersion_shrinkageDF, aes(y = log2(value), x = sample_fraction)) + facet_grid(~ variable) + geom_violin(scale = "count", fill = "RED")
 
-
-ggplot(dispersion_adj_df, aes(x = shrunk_estimate, y = log_dispersion_SD, color = nvals)) + geom_point(size = 3)
-
-
-
-
-### set the mean of OD to 0 and enforce a constant sd  ####
-
-dispersion_adj_df <- data.table(dispersion = log2(dispersion_adj), nvals = rowSums(!is.na(abundMat)))
-dispersion_adj_df <- dispersion_adj_df[dispersion != 0,]
-
-mean_spline <- smooth.spline(dispersion_adj_df$dispersion ~ dispersion_adj_df$nvals, df = 3)
-sd_spline <- smooth.spline(abs(dispersion_adj_df$dispersion) ~ dispersion_adj_df$nvals, df = 3)
-
-plot(data = dispersion_adj_df, dispersion ~ jitter(nvals), pch = 16, cex = 0.5)
-lines(predict(mean_spline, 1:n_e)$y ~ c(1:n_e), lwd = 3, col = "RED")
-
-plot(data = dispersion_adj_df, abs(dispersion) ~ jitter(nvals), pch = 16, cex = 0.5)
-lines(predict(sd_spline, 1:n_e)$y ~ c(1:n_e), lwd = 3, col = "RED")
-
+### adjust precision by 1/(ODcorrected/OD)
+precision_estimates[!is.na(dispersion_table$log_dispersion_SD),] <- precision_estimates[!is.na(dispersion_table$log_dispersion_SD),]/(dispersion_adj_df[,predicted_dispersion/dispersion_adj,] %*% t(rep(1, n_c)))
 
 ######
 

@@ -9,9 +9,9 @@ options(digits = 15)
 
 #prior_p_div <- exp(-1*qchisq(prior_bound, n_c))  ### this should probably be adjusted to the 
 n_pep_samples <- colSums(uniquePepMean != 0) 
-prior_bound <- 1 - 0.0001
+prior_bound <- 1 - 10^-9
 prior_p_div <- exp(-1*qchisq(prior_bound, n_pep_samples)) 
-
+prior_prot_sub <- exp(-1*qchisq(prior_bound, n_c)) 
 
 
 
@@ -105,11 +105,11 @@ while(continue_it){
     mixing_fract_inconsistent[peptide,sparse_mapping[peptide,]*alpha_pres == 1] <- solution
     }
   
-  #update mixing fractions based on weighted quadratic programming over each isolated bipartite graph
+  ### update mixing fractions based on weighted quadratic programming over each isolated bipartite graph ####
   for(graph_part in 1:length(subGraphs)){
     
     relProt <- colnames(sparse_mapping) %in% subGraphs[[graph_part]]
-    #remove invalid proteins from consideration (those with alpha = 0)
+    ### remove invalid proteins from consideration (those with alpha = 0)
     relProt[relProt] <- alpha_pres[relProt] == 1
     
     if(sum(relProt) <= 1){
@@ -124,8 +124,7 @@ while(continue_it){
     subPepPrec <- uniquePepPrecision[,relPep]
     subMap <- sparse_mapping[relPep, relProt]
     
-    #attempt 2
-    #find mixing proporitons for observed combination of peptide-protein matches
+    ### Find mixing proportions for observed combination of peptide-protein matches
     
     pepCombos <- apply(subMap, 1, function(x){paste(x, collapse = "")})
     
@@ -142,9 +141,9 @@ while(continue_it){
       precTotal <- 0
       
       for(pepEntries in c(1:length(subMap[,1]))[comboMatches]){
-        #protein trends weighted by peptide precisions and poriton of total mixing fraction for matched proteins in this peptide
+        ### protein trends weighted by peptide precisions and portion of total mixing fraction for matched proteins in this peptide
         protStack <- rbind(protStack, prot_abund[,relProt] * t(t(rep(1, n_c))) %*% t(subMap[pepEntries,]) * t(t(subPepPrec[,pepEntries])) %*% rep(1, length(matchedCombo)))
-        #peptide trends weighted by peptide precisions
+        ### peptide trends weighted by peptide precisions
         pepVec <- c(pepVec, subPepAbund[,pepEntries] * subPepPrec[,pepEntries])
         
         precTotal <- precTotal + sum(subPepPrec[,pepEntries])
@@ -236,7 +235,7 @@ while(continue_it){
         lneg <- lneg + sum((apply(prot_abund[,sparse_mapping[peptide,]*alpha_neg == 1]*matrix(neg_mixing, ncol = n_matches_neg, nrow = n_c, byrow = TRUE), 1, sum)
                             - uniquePepMean[,peptide])^2*uniquePepPrecision[,peptide]*(-1/2))
           }
-        if(lneg >= lpos + log(prior_p_div)){
+        if(lneg >= lpos + log(prior_prot_sub)){
           alpha_pres[protein] <- 0 
           mixing_fract[,protein] <- 0
         }
@@ -246,7 +245,7 @@ while(continue_it){
     }
   
 	#update complete data log-likelihood
-	new_log_lik <- sum(apply(-(1/2)*uniquePepPrecision*(((prot_abund %*% diag(alpha_pres) %*% t(mixing_fract)) - uniquePepMean)^2), 2, sum)*pi_fit + (1-pi_fit)*log(prior_p_div)) + sum(alpha_pres[subSumable == 1])*log(prior_p_div)
+	new_log_lik <- sum(apply(-(1/2)*uniquePepPrecision*(((prot_abund %*% diag(alpha_pres) %*% t(mixing_fract)) - uniquePepMean)^2), 2, sum)*pi_fit + (1-pi_fit)*log(prior_p_div)) + sum(alpha_pres[subSumable == 1])*log(prior_prot_sub)
   
 	param_track$alpha_pres[[t]] <- alpha_pres
   param_track$mixing_fract[[t]] <- as.matrix(mixing_fract)
@@ -278,7 +277,7 @@ while(continue_it){
   #plot(c(prot_abund) ~ c(prot_abund_over), cex = 0.5, pch = 16)
 }
 
-### for non-subsumable proteins - check to see if zero peptides carry weight - if so take the median abundance and the corresponding precision
+### for non-subsumable proteins - check to see if zero peptides carry weight - if so take the median abundance and the corresponding precision ####
 
 prot_abund_over <- prot_prec_over <- matrix(NA, ncol = n_prot, nrow = n_c)
 for(a_prot in c(1:n_prot)){
@@ -297,6 +296,17 @@ prot_abund[,alpha_pres == 1][,NinformedPeps == 0] <- prot_abund_over[,alpha_pres
 prot_prec[,alpha_pres == 1][,NinformedPeps == 0] <- prot_prec_over[,alpha_pres == 1][,NinformedPeps == 0]
 	
 
+### Rescue divergent peptides which have a high correlation with protein, but may be have innappropriately estimated precision or have a different offset between H/L than other peptides (e.g. degradation) ####
+
+comp_protein <- t(prot_abund %*% t(mixing_fract[pi_fit == 0,]))
+divergent_peptides <- t(uniquePepMean[,pi_fit == 0])
+comp_protein[comp_protein == 0] <- NA; divergent_peptides[divergent_peptides == 0] <- NA
+
+ppCor <- sapply(c(1:length(comp_protein[,1])), function(x){cor(comp_protein[x,], divergent_peptides[x,], use = "pairwise.complete.obs")})
+ppCor > 0.6
+
+cor(comp_protein[5,], divergent_peptides[5,], method = "spearman")
+
 ###
 
 max_state <- apply(mixing_fract, 1, which.max)
@@ -305,8 +315,9 @@ div_max <- pi_fit == 0
 #number of peptides not-conforming to some general protein trend
 table(div_max)
 
-
-
+missingValPrec <- data.table(divergent = div_max, precision = apply(uniquePepPrecision, 2, mean))
+ggplot(missingValPrec, aes(x = log2(precision))) + facet_wrap(~ divergent) + geom_bar()
+ggplot(missingValPrec, aes(y = log2(precision), x = factor(divergent))) + geom_violin()
 
 #plot the shared peptides across groups of proteins
 
