@@ -73,6 +73,7 @@ previous_it <- -Inf
 continue_it <- TRUE
 set_alpha <- FALSE # determines which proteins can be dropped at the time of convergence
 param_track <- list()
+param_track$mixing_fract[[1]] <- as.matrix(mixing_fract) #for some reason initializing with a sparse matrix doesn't work, but overwriting the first object with a sparse matrix makes the others behave
 
 t <- 1
 while(continue_it){
@@ -205,10 +206,11 @@ while(continue_it){
     #set parameters as the set with the highest likelihood
     
     param_track$alpha_pres[[which.max(whole_data_logL)]] -> alpha_pres
-    Matrix(param_track$mixing_fract[[which.max(whole_data_logL)]]) -> mixing_fract
+    #Matrix(param_track$mixing_fract[[which.max(whole_data_logL)]]) -> mixing_fract
+    param_track$mixing_fract[[which.max(whole_data_logL)]] -> mixing_fract
     param_track$prot_abund[[which.max(whole_data_logL)]] -> prot_abund
     param_track$pi_fit[[which.max(whole_data_logL)]] -> pi_fit
-    
+    print(paste(c("overwriting parameters with those from iteration", c(1:length(whole_data_logL))[which.max(whole_data_logL)]), collapse = " "))
     
     #update alpha - whether a protein is present, based on bayes factors - do this once upon initial convergence and then continue running
     
@@ -247,14 +249,15 @@ while(continue_it){
     print(paste(sum(alpha_pres == 0), "proteins were removed"))
     }
   
-	#update complete data log-likelihood
+	### update complete data log-likelihood
 	new_log_lik <- sum(apply(-(1/2)*uniquePepPrecision*(((prot_abund %*% Diagonal(n_prot, alpha_pres) %*% t(mixing_fract)) - uniquePepMean)^2), 2, sum)*pi_fit + (1-pi_fit)*log(prior_p_div)) + sum(alpha_pres[subSumable == 1])*log(prior_prot_sub)
   
-	param_track$alpha_pres[[t]] <- alpha_pres
-  param_track$mixing_fract[[t]] <- as.matrix(mixing_fract)
+  ### Store parameter sets corresponding to the likelihood at each iteration
+  
+  param_track$alpha_pres[[t]] <- alpha_pres
+  param_track$mixing_fract[[t]] <- mixing_fract#as.matrix(mixing_fract)
   param_track$prot_abund[[t]] <- prot_abund
   param_track$pi_fit[[t]] <- pi_fit
-  
   
   #check for convergence
 	
@@ -271,10 +274,11 @@ while(continue_it){
       t <- t + 1
       
       param_track$alpha_pres[[which.max(whole_data_logL)]] -> alpha_pres
-      Matrix(param_track$mixing_fract[[which.max(whole_data_logL)]]) -> mixing_fract
+      #Matrix(param_track$mixing_fract[[which.max(whole_data_logL)]]) -> mixing_fract
+      param_track$mixing_fract[[which.max(whole_data_logL)]] -> mixing_fract
       param_track$prot_abund[[which.max(whole_data_logL)]] -> prot_abund
       param_track$pi_fit[[which.max(whole_data_logL)]] -> pi_fit
-      
+      print(paste(c("overwriting parameters with those from iteration", c(1:length(whole_data_logL))[which.max(whole_data_logL)]), collapse = " "))
       print("done")
     }
     }else{
@@ -284,6 +288,26 @@ while(continue_it){
   	  previous_it <- new_log_lik
   	}
 }
+
+### Rescue divergent peptides which have a high correlation with protein, but may be have innappropriately estimated precision or have a different offset between H/L than other peptides (e.g. degradation) ####
+ 
+comp_protein <- t(prot_abund %*% t(mixing_fract[pi_fit == 0,]))
+divergent_peptides <- t(uniquePepMean[,pi_fit == 0])
+comp_protein[comp_protein == 0] <- NA; divergent_peptides[divergent_peptides == 0] <- NA
+
+ppCor <- sapply(c(1:length(comp_protein[,1])), function(x){cor(comp_protein[x,], divergent_peptides[x,], use = "pairwise.complete.obs")})
+pi_fit[pi_fit == 0][ppCor > 0.6] <- 1
+
+print(paste(c("Rescued", sum(ppCor > 0.6), "divergent peptides which were moderately correlated with protein"), collapse = " "))
+
+# Recalculate protein trends and precision with newly included peptides #
+
+prot_abund = ((uniquePepMean*uniquePepPrecision) %*% Diagonal(n_p, pi_fit) %*% mixing_fract)/(uniquePepPrecision %*% Diagonal(n_p, pi_fit) %*% mixing_fract)
+prot_abund <- as.matrix(Matrix(prot_abund, sparse = FALSE))
+prot_abund[is.nan(prot_abund)] <- 0
+
+prot_prec <- uniquePepPrecision %*% Diagonal(n_p, pi_fit) %*% mixing_fract
+	
 
 ### for non-subsumable proteins - check to see if zero peptides carry weight - if so take the median abundance and the corresponding precision ####
 
@@ -297,33 +321,19 @@ for(a_prot in c(1:n_prot)){
   prot_prec_over[,a_prot] <- bestPepPrec
 }
 
-print(paste(c(sum(NinformedPeps == 0), "proteins reset to most representatitve peptide"), collapse = " "))
 
-NinformedPeps <- colSums(mixing_fract[,alpha_pres == 1])
-table(NinformedPeps) #number of overwritten proteins
+NinformedPeps <- colSums(mixing_fract[pi_fit == 1, alpha_pres == 1])
+print(paste(c(sum(NinformedPeps == 0), "proteins reset to most representatitve peptide"), collapse = " "))
 
 prot_abund[,alpha_pres == 1][,NinformedPeps == 0] <- prot_abund_over[,alpha_pres == 1][,NinformedPeps == 0]
 prot_prec[,alpha_pres == 1][,NinformedPeps == 0] <- prot_prec_over[,alpha_pres == 1][,NinformedPeps == 0]
 	
 
-### Rescue divergent peptides which have a high correlation with protein, but may be have innappropriately estimated precision or have a different offset between H/L than other peptides (e.g. degradation) ####
- 
-comp_protein <- t(prot_abund %*% t(mixing_fract[pi_fit == 0,]))
-divergent_peptides <- t(uniquePepMean[,pi_fit == 0])
-comp_protein[comp_protein == 0] <- NA; divergent_peptides[divergent_peptides == 0] <- NA
-
-ppCor <- sapply(c(1:length(comp_protein[,1])), function(x){cor(comp_protein[x,], divergent_peptides[x,], use = "pairwise.complete.obs")})
-ppCor > 0.6
-
-cor(comp_protein[5,], divergent_peptides[5,], method = "spearman")
 
 ###
 
 max_state <- apply(mixing_fract, 1, which.max)
 div_max <- pi_fit == 0
-
-#number of peptides not-conforming to some general protein trend
-table(div_max)
 
 missingValPrec <- data.table(divergent = div_max, precision = apply(uniquePepPrecision, 2, mean))
 ggplot(missingValPrec, aes(x = log2(precision))) + facet_wrap(~ divergent) + geom_bar()
@@ -342,6 +352,8 @@ names(likdiff) <- rownames(mixing_fract)
 
 
 likdiff_df <- data.frame(likelihood = likdiff, matched = ifelse(likdiff >= 0, "Protein-match", "Divergent-trend"))
+likdiff_df$matched[likdiff_df$matched == "Divergent-trend"][pi_fit[likdiff_df$matched == "Divergent-trend"] == 1] <- "Correlatioin-overwrite"
+
 likdiff_df$likelihood[likdiff_df$likelihood <= -400] <- -400
 
 
