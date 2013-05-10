@@ -237,11 +237,34 @@ comp_by_cond$intacellularMolarity = (comp_by_cond$moles_per_cell * 10^-12)/(t(t(
 
 
 
-
-
 comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$actualDR) #moles/L-hr 
 
 comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$VolFrac_mean/1000 #moles/L culture
 
 save(comp_by_cond, chemostatInfo, file = "boundaryFluxes.Rdata")
+
+
+########### Boundary fluxes from nutrient uptake or metabolite excretion ############
+
+SPM <- read.delim("Media/measuredNutrients.tsv")
+NMR <- read.delim("Media/mediaComposition_NMR.tsv")
+nutrientFile <- read.delim("../Yeast_genome_scale/Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u")) #molar concentration of nutrients
+
+mediaSummary <- NULL
+
+### Nutrient not present here will be solely bounded by mediaConcentration*DR
+
+### phosphate uptake
+SPM$condition <- factor(SPMtmp$condition, levels = chemostatInfo$condition)
+SPM <- SPM[order(SPM$condition),]
+SPM_out <- data.frame(condition = SPM$condition, specie = "phosphate", change = SPM$phosphateUptake, sd = SPM$phosphateSD, lb = 0, ub = SPM$ceiling)
+mediaSummary <- rbind(mediaSummary, SPM_out)
+
+### NMR data - glucose -> EtOH, Ac, glycerol 
+
+SPM$condition %in% chemostatInfo$condition
+
+
+
+
 

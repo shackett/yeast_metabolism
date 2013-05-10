@@ -1,9 +1,10 @@
 #library("rNMR")
+setwd("/Users/Sean/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Media")
+
 options(stringsAsFactors = FALSE)
 library(reshape2)
 library(gplots)
 library(ggplot2)
-
 
 ### Convert bruker files to UCSF format - select the highest level folder 
 cf()
@@ -20,7 +21,7 @@ write.table(roiTable, "RoiTable.tsv", sep = "\t", col.names = TRUE, row.names = 
 
 ### Describe the NMR samples ####
 
-NMRsummary <- read.delim("effluentQuant_roiSummary.txt")
+NMRsummary <- read.delim("effluentQuant_vz_roiSummary.txt")
 NMRsamples <- NMRsummary$File
 NMRsamples <- unname(sapply(sapply(NMRsamples, function(x){strsplit(x, '2013_04_27_')[[1]][2]}), function(x){strsplit(x, '.ucsf')[[1]][1]}))
 NMRsamples <- unname(sapply(NMRsamples, function(x){sub('ref_', 'p0.05H', x)}))
@@ -33,24 +34,28 @@ NMRsample_table$DR <- NMRsample_table$limitation <- NA
 
 NMRsample_table$limitation[NMRsample_table$is_sample] <- sapply(NMRsample_table$SampleType[NMRsample_table$is_sample], function(x){strsplit(x, '[0-9.]+')[[1]][1]})
 NMRsample_table$DR[NMRsample_table$is_sample] <- sapply(NMRsample_table$SampleType[NMRsample_table$is_sample], function(x){regmatches(x, regexpr('[0-9.]{4}', x))})
-  
+
+
+
 ### Create a matrix of NMR data ####
 
 NMRmatrix <- as.matrix(NMRsummary[,-1])
 rownames(NMRmatrix) <- rownames(NMRsample_table)
+colnames(NMRmatrix)[grep('Glucose',colnames(NMRmatrix))] = 'Glucose'
+colnames(NMRmatrix)[grep('Ethanol',colnames(NMRmatrix))] = 'Ethanol'
+colnames(NMRmatrix)[grep('Glycerol',colnames(NMRmatrix))] = 'Glycerol'
 
 
-
-heatmap.2(cor(NMRmatrix[,-2]))
-heatmap.2(log2(NMRmatrix), Rowv = FALSE)
+heatmap.2(cor(NMRmatrix[,-1]))
+heatmap.2(log2(NMRmatrix[,-1]), Rowv = FALSE)
 
 ### Regression of standard peak areas onto known concentration ####
 
-NMRstandards <- data.frame(name = NMRsample_table[grep('std', NMRsample_table[,1]),], grep('std', NMRsample_table[,1]))
+NMRstandards <- data.frame(name = NMRsample_table[grep('std', NMRsample_table[,1]),], grep('std', NMRsample_table[,1]))[,c(1,2,6)]
 colnames(NMRstandards) <- c("SampleType", "Rep", "Index")
 NMRstandards$relative_conc = as.numeric(sapply(NMRstandards$SampleType, function(x){strsplit(x, 'xstd')[[1]]}))
 
-standard_conc <- c(Glucose = 122, Ethanol = 244, Acetate = 10) #concentrations of 1x standard (mM)
+standard_conc <- c(Glucose = 122, Ethanol = 244, Acetate = 10, Glycerol = 10) #concentrations of 1x standard (mM)
 
 NMRstandardConc <- NMRmatrix[NMRstandards$Index,colnames(NMRmatrix) %in% names(standard_conc)]
 plot(NMRmatrix[c(1:length(NMRmatrix[,1]))[-NMRstandards$Index],colnames(NMRmatrix) %in% names(standard_conc)][,3])
@@ -64,7 +69,7 @@ for(i in 1:length(NMRstandardConc[1,])){
 
 ### for ethanol a linear model is sufficient, while for acetate and glucose a quadratic fit is needed
 
-standard_fit_degree <- c(Glucose = 3, Ethanol = 2, Acetate = 3)
+standard_fit_degree <- c(Glucose = 3, Ethanol = 2, Acetate = 3, Glycerol = 3)
 standard_fit_lm <- list()
 
 for(i in colnames(NMRstandardConc)){
@@ -135,5 +140,5 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
 NMRbarplot <- ggplot(NMR_point_estimate, aes(x = factor(condition), y = estimate, fill = factor(limitation))) + facet_grid(peak ~ ., scale = "free_y") + barplot_theme
 NMRbarplot + geom_bar(stat = "identity") + ggtitle("Concentration of metabolites (and unknowns) in chemostat effluent") + scale_fill_brewer(palette = "Set2") + 
   geom_errorbar(aes(ymin = lb, ymax = ub)) + scale_x_discrete("Chemostat condition") + scale_y_continuous("Concentration (mM)")
-ggsave("mediaComposition.pdf", width = 14, height = 17)
+ggsave("mediaComposition.pdf", width = 14, height = 22)
 write.table(NMR_point_estimate, "mediaComposition_NMR.tsv", sep = "\t", row.names = FALSE, col.names = TRUE, quote = F)
