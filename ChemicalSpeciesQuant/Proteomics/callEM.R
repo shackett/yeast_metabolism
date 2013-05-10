@@ -206,7 +206,6 @@ while(continue_it){
     #set parameters as the set with the highest likelihood
     
     param_track$alpha_pres[[which.max(whole_data_logL)]] -> alpha_pres
-    #Matrix(param_track$mixing_fract[[which.max(whole_data_logL)]]) -> mixing_fract
     param_track$mixing_fract[[which.max(whole_data_logL)]] -> mixing_fract
     param_track$prot_abund[[which.max(whole_data_logL)]] -> prot_abund
     param_track$pi_fit[[which.max(whole_data_logL)]] -> pi_fit
@@ -274,7 +273,6 @@ while(continue_it){
       t <- t + 1
       
       param_track$alpha_pres[[which.max(whole_data_logL)]] -> alpha_pres
-      #Matrix(param_track$mixing_fract[[which.max(whole_data_logL)]]) -> mixing_fract
       param_track$mixing_fract[[which.max(whole_data_logL)]] -> mixing_fract
       param_track$prot_abund[[which.max(whole_data_logL)]] -> prot_abund
       param_track$pi_fit[[which.max(whole_data_logL)]] -> pi_fit
@@ -310,25 +308,36 @@ prot_prec <- uniquePepPrecision %*% Diagonal(n_p, pi_fit) %*% mixing_fract
 	
 
 ### for non-subsumable proteins - check to see if zero peptides carry weight - if so take the median abundance and the corresponding precision ####
+## overright a protein using the peptide with the highest correlation to the median profile
+## for missing values, overwrite by the median and corresponding precision
 
-prot_abund_over <- prot_prec_over <- matrix(NA, ncol = n_prot, nrow = n_c)
-for(a_prot in c(1:n_prot)){
+NinformedPeps <- colSums(mixing_fract[pi_fit == 1, alpha_pres == 1])
+print(paste(c(sum(NinformedPeps == 0), "proteins reset to most representative peptide"), collapse = " "))
+
+prot_overwrites <- c(1:n_prot)[alpha_pres == 1][NinformedPeps == 0]
+
+prot_abund_over <- prot_prec_over <- matrix(NA, ncol = length(prot_overwrites), nrow = n_c)
+index_overwrite <- rep(NA, length(prot_overwrites))
+for(a_prot in prot_overwrites){
   condMed <- apply(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c), 1, median) #across all matched peptides which has the median relative abundance
+  condMetPrec <- sapply(1:n_c, function(acond){
+    min_dist <- signif(abs(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[acond,] - condMed[acond]), 6)
+    1/mean(1/matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[acond,][min_dist == min(min_dist)]) #inverse variance of the mean
+    })
   bestPepMatch <- matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #use correlation between each peptide and median vector to determine which peptide is most representatitive
   bestPepPrec <- matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #the above peptides precisio
-  bestPepMatch[bestPepMatch == 0] <- bestPepPrec[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
+  bestPepMatch[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
+  bestPepPrec[bestPepMatch == 0] <- condMetPrec[bestPepMatch == 0]
+  
   prot_abund_over[,a_prot] <- bestPepMatch
   prot_prec_over[,a_prot] <- bestPepPrec
+  index_overwrite[a_prot] <- c(1:n_p)[sparse_mapping[,a_prot] == 1][which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))]
 }
 
 
-NinformedPeps <- colSums(mixing_fract[pi_fit == 1, alpha_pres == 1])
-print(paste(c(sum(NinformedPeps == 0), "proteins reset to most representatitve peptide"), collapse = " "))
-
 prot_abund[,alpha_pres == 1][,NinformedPeps == 0] <- prot_abund_over[,alpha_pres == 1][,NinformedPeps == 0]
 prot_prec[,alpha_pres == 1][,NinformedPeps == 0] <- prot_prec_over[,alpha_pres == 1][,NinformedPeps == 0]
-	
-
+pi_fit[index_overwrite[alpha_pres == 1][NinformedPeps == 0]] <- 1
 
 ###
 
