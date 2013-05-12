@@ -3,6 +3,10 @@ source("pep_library.R")
 matrix_fxn()
 load("EMimport.Rdata")
 library(limSolve)
+library(data.table)
+library(ggplot2)
+library(reshape2)
+options(stringsAsFactors = F)
 
 options(digits = 15)
 
@@ -127,7 +131,7 @@ while(continue_it){
     subPepAbund <- uniquePepMean[,relPep]
     subPepPrec <- uniquePepPrecision[,relPep]
     subMap <- sparse_mapping[relPep, relProt]
-    
+    #mixing_fract[relPep, relProt]
     ### Find mixing proportions for observed combination of peptide-protein matches
     
     pepCombos <- apply(subMap, 1, function(x){paste(x, collapse = "")})
@@ -198,6 +202,8 @@ while(continue_it){
           mixing_fract[relPep, relProt][comboMatches,matchedCombo == 1] <- t(t(rep(1, sum(comboMatches)))) %*% pi_prop
         }
       }
+    #for peptides which are uncontested set mixing fraction at 1 - this corrects for the point when some peptides become unambiguous after degenerate peptides are removed 
+    mixing_fract[relPep, relProt][rowSums(sparse_mapping[relPep, relProt]) == 1,] <- sparse_mapping[relPep, relProt][rowSums(sparse_mapping[relPep, relProt]) == 1,]
   }  
     
     
@@ -286,6 +292,9 @@ while(continue_it){
   	  previous_it <- new_log_lik
   	}
 }
+save(list = ls(), file = "tmp2.Rdata")
+#load("tmp.Rdata")
+
 
 ### Rescue divergent peptides which have a high correlation with protein, but may be have innappropriately estimated precision or have a different offset between H/L than other peptides (e.g. degradation) ####
  
@@ -294,9 +303,9 @@ divergent_peptides <- t(uniquePepMean[,pi_fit == 0])
 comp_protein[comp_protein == 0] <- NA; divergent_peptides[divergent_peptides == 0] <- NA
 
 ppCor <- sapply(c(1:length(comp_protein[,1])), function(x){cor(comp_protein[x,], divergent_peptides[x,], use = "pairwise.complete.obs")})
-pi_fit[pi_fit == 0][ppCor > 0.6] <- 1
+pi_fit[pi_fit == 0][ppCor > 0.6 & !is.na(ppCor)] <- 1
 
-print(paste(c("Rescued", sum(ppCor > 0.6), "divergent peptides which were moderately correlated with protein"), collapse = " "))
+print(paste(c("Rescued", sum(ppCor > 0.6 & !is.na(ppCor)), "divergent peptides which were moderately correlated with protein"), collapse = " "))
 
 # Recalculate protein trends and precision with newly included peptides #
 
@@ -311,34 +320,43 @@ prot_prec <- uniquePepPrecision %*% Diagonal(n_p, pi_fit) %*% mixing_fract
 ## overright a protein using the peptide with the highest correlation to the median profile
 ## for missing values, overwrite by the median and corresponding precision
 
+#index_check <- (1:n_p)[rowSums(mixing_fract) == min(rowSums(mixing_fract))]
+#index_check2 <- colnames(sparse_mapping)[colSums(sparse_mapping[index_check,]) != 0]
+
 NinformedPeps <- colSums(mixing_fract[pi_fit == 1, alpha_pres == 1])
+
 print(paste(c(sum(NinformedPeps == 0), "proteins reset to most representative peptide"), collapse = " "))
 
 prot_overwrites <- c(1:n_prot)[alpha_pres == 1][NinformedPeps == 0]
+#table(sparse_mapping[,prot_overwrites])
+#pi_fit[sparse_mapping[,prot_overwrites] == 1]
+#mixing_fract[sparse_mapping[,prot_overwrites] == 1,prot_overwrites]
 
-prot_abund_over <- prot_prec_over <- matrix(NA, ncol = length(prot_overwrites), nrow = n_c)
-index_overwrite <- rep(NA, length(prot_overwrites))
-for(a_prot in prot_overwrites){
-  condMed <- apply(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c), 1, median) #across all matched peptides which has the median relative abundance
-  condMetPrec <- sapply(1:n_c, function(acond){
-    min_dist <- signif(abs(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[acond,] - condMed[acond]), 6)
-    1/mean(1/matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[acond,][min_dist == min(min_dist)]) #inverse variance of the mean
+if(length(prot_overwrites) != 0){
+
+  prot_abund_over <- prot_prec_over <- matrix(NA, ncol = length(prot_overwrites), nrow = n_c)
+  index_overwrite <- rep(NA, length(prot_overwrites))
+  for(a_prot in prot_overwrites){
+    condMed <- apply(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c), 1, median) #across all matched peptides which has the median relative abundance
+    condMetPrec <- sapply(1:n_c, function(acond){
+      min_dist <- signif(abs(matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[acond,] - condMed[acond]), 6)
+      1/mean(1/matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[acond,][min_dist == min(min_dist)]) #inverse variance of the mean
     })
-  bestPepMatch <- matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #use correlation between each peptide and median vector to determine which peptide is most representatitive
-  bestPepPrec <- matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #the above peptides precisio
-  bestPepMatch[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
-  bestPepPrec[bestPepMatch == 0] <- condMetPrec[bestPepMatch == 0]
+    bestPepMatch <- matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #use correlation between each peptide and median vector to determine which peptide is most representatitive
+    bestPepPrec <- matrix(uniquePepPrecision[,sparse_mapping[,a_prot] == 1], nrow = n_c)[,which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))] #the above peptides precisio
+    bestPepMatch[bestPepMatch == 0] <- condMed[bestPepMatch == 0]
+    bestPepPrec[bestPepMatch == 0] <- condMetPrec[bestPepMatch == 0]
+    
+    prot_abund_over[,a_prot == prot_overwrites] <- bestPepMatch
+    prot_prec_over[,a_prot == prot_overwrites] <- bestPepPrec
+    index_overwrite[a_prot == prot_overwrites] <- c(1:n_p)[sparse_mapping[,a_prot] == 1][which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))]
+  }
   
-  prot_abund_over[,a_prot] <- bestPepMatch
-  prot_prec_over[,a_prot] <- bestPepPrec
-  index_overwrite[a_prot] <- c(1:n_p)[sparse_mapping[,a_prot] == 1][which.max(cor(condMed, matrix(uniquePepMean[,sparse_mapping[,a_prot] == 1], nrow = n_c)))]
+  prot_abund[,alpha_pres == 1][,NinformedPeps == 0] <- prot_abund_over
+  prot_prec[,alpha_pres == 1][,NinformedPeps == 0] <- prot_prec_over
+  pi_fit[index_overwrite] <- 1
+  mixing_fract[index_overwrite, prot_overwrites] <- 1
 }
-
-
-prot_abund[,alpha_pres == 1][,NinformedPeps == 0] <- prot_abund_over[,alpha_pres == 1][,NinformedPeps == 0]
-prot_prec[,alpha_pres == 1][,NinformedPeps == 0] <- prot_prec_over[,alpha_pres == 1][,NinformedPeps == 0]
-pi_fit[index_overwrite[alpha_pres == 1][NinformedPeps == 0]] <- 1
-
 ###
 
 max_state <- apply(mixing_fract, 1, which.max)
@@ -361,14 +379,14 @@ names(likdiff) <- rownames(mixing_fract)
 
 
 likdiff_df <- data.frame(likelihood = likdiff, matched = ifelse(likdiff >= 0, "Protein-match", "Divergent-trend"))
-likdiff_df$matched[likdiff_df$matched == "Divergent-trend"][pi_fit[likdiff_df$matched == "Divergent-trend"] == 1] <- "Correlatioin-overwrite"
+likdiff_df$matched[likdiff_df$matched == "Divergent-trend"][pi_fit[likdiff_df$matched == "Divergent-trend"] == 1] <- "Correlation-overwrite"
 
 likdiff_df$likelihood[likdiff_df$likelihood <= -400] <- -400
 
 
 library(ggplot2)
 likdiff_plot <- ggplot(likdiff_df, aes(x = likelihood, fill = matched))
-likdiff_plot + geom_histogram()
+likdiff_plot + geom_histogram(binwidth = 5)
 
 
 #### are mixing fraction for proteins with more than 1 overlapping peptide comparable #####
@@ -406,7 +424,7 @@ mixingFracPlot + geom_boxplot(aes(x = factor(Pair), y = FractionB, fill = Shared
   scale_x_discrete('Protein pairs with more than 3 overlapping peptides') + scale_y_continuous('Mixing proprotion of second protein of pair', expand = c(0.005,0.005)) +
   geom_point(data = consistent_est, aes(x = factor(Pair), y = FractionB), size = 3, colour = I('chartreuse')) + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) + hex_theme
 
-library(reshape)
+
 
 ambigProteinPatterns <- NULL
 for(pairs in 31:40){
