@@ -4,7 +4,10 @@ setwd("~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant")
 options(stringsAsFactors = FALSE)
 
 library(ggplot2)
-library(reshape)
+library(gplots)
+library(reshape2)
+library(data.table)
+
 
 ### Default composition function ####
 
@@ -241,7 +244,11 @@ comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, leng
 
 comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$VolFrac_mean/1000 #moles/L culture
 
-save(comp_by_cond, chemostatInfo, file = "boundaryFluxes.Rdata")
+
+
+
+
+
 
 
 ########### Boundary fluxes from nutrient uptake or metabolite excretion ############
@@ -249,6 +256,7 @@ save(comp_by_cond, chemostatInfo, file = "boundaryFluxes.Rdata")
 SPM <- read.delim("Media/measuredNutrients.tsv")
 NMR <- read.delim("Media/mediaComposition_NMR.tsv")
 nutrientFile <- read.delim("../Yeast_genome_scale/Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u")) #molar concentration of nutrients
+nutrientFileConv <- data.frame(mediaName = colnames(nutrientFile)[-1], shortName = c("n", "p", "c", "L", "u"))
 
 mediaSummary <- NULL
 
@@ -257,14 +265,79 @@ mediaSummary <- NULL
 ### phosphate uptake
 SPM$condition <- factor(SPMtmp$condition, levels = chemostatInfo$condition)
 SPM <- SPM[order(SPM$condition),]
-SPM_out <- data.frame(condition = SPM$condition, specie = "phosphate", change = SPM$phosphateUptake, sd = SPM$phosphateSD, lb = 0, ub = SPM$ceiling)
+SPM_out <- data.frame(condition = SPM$condition, specie = "phosphate", change = SPM$phosphateUptake, sd = SPM$phosphateSD, lb = 0, ub = SPM$ceiling, type = "uptake")
 mediaSummary <- rbind(mediaSummary, SPM_out)
 
 ### NMR data - glucose -> EtOH, Ac, glycerol 
+speciesOfInterest <- data.frame(NMRname = c("Glucose", "Ethanol", "Acetate", "Glycerol"), modelName = c("D-glucose", "ethanol", "acetate", "glycerol"), type = c("uptake", rep("excretion", 3)))
 
-SPM$condition %in% chemostatInfo$condition
+for(a_specie_n in 1:length(speciesOfInterest[,1])){
+  NMR_data_subset <- NMR[(NMR$peak == speciesOfInterest$NMRname[a_specie_n]) & NMR$condition %in% chemostatInfo$condition,]
+  NMR_data_subset$condition <- factor(NMR_data_subset$condition, levels = chemostatInfo$condition)
+  NMR_data_subset <- NMR_data_subset[order(NMR_data_subset$condition),]
+  
+  if(speciesOfInterest$type[a_specie_n] == "uptake"){
+    mediaComp <- nutrientFile[nutrientFile$X == speciesOfInterest$modelName[a_specie_n],-1]
+    upper_bound <- unname(unlist(sapply(as.character(NMR_data_subset$condition), function(x){mediaComp[names(mediaComp) == nutrientFileConv$mediaName[nutrientFileConv$shortName == strsplit(x, '')[[1]][1]]]})))
+    NMR_out <- data.frame(condition = NMR_data_subset$condition, specie = speciesOfInterest$modelName[a_specie_n], change = (upper_bound - NMR_data_subset$estimate/1000), sd = NMR_data_subset$se/1000, lb = 0, ub = upper_bound, type = "uptake")
+    
+  }else{
+    NMR_out <- data.frame(condition = NMR_data_subset$condition, specie = speciesOfInterest$modelName[a_specie_n], change = NMR_data_subset$estimate/1000, sd = NMR_data_subset$se/1000, lb = 0, ub = Inf, type = "excretion")
+    }
+  
+  mediaSummary <- rbind(mediaSummary, NMR_out)
+  }
+mediaSummary <- data.table(mediaSummary)
+
+boundary_ele_comp <- mediaSummary[,modelMetComp[modelMetComp$name == specie,][1,],by = specie]
+boundary_ele_comp[boundary_ele_comp$specie == "D-glucose",]$C <- 6; boundary_ele_comp[boundary_ele_comp$specie == "D-glucose",]$H <- 12; boundary_ele_comp[boundary_ele_comp$specie == "D-glucose",]$O <- 6
+boundary_ele_comp[is.na(boundary_ele_comp)] <- 0
+boundary_ele_comp <- boundary_ele_comp[,-grep('Fe|K|Na|R', colnames(boundary_ele_comp)),with = F]
+
+boundary_ele_comp$MW <- rowSums(boundary_ele_comp[,atomicMasses$element,with = F] * rep(1, nrow(boundary_ele_comp)) %*% t(atomicMasses$mass))
+
+mediaSummary$density <- sapply(1:nrow(mediaSummary), function(x){
+  mediaSummary$change[x] * boundary_ele_comp$MW[boundary_ele_comp$specie == mediaSummary$specie[x]]
+  })
 
 
 
+
+#grams per L of anabolic components
+cellularComponents <- comp_by_cond$cultureMolarity[compositionFile_Extended$Class != "Energy Balance",] * as.numeric(compositionFile_Extended$MW[compositionFile_Extended$Class != "Energy Balance"]) %*% t(rep(1, ncol(comp_by_cond$cultureMolarity[compositionFile_Extended$Class != "Energy Balance",])))
+cellularComponents <- cellularComponents[!(rownames(cellularComponents) %in% c("ATP", "GTP")),]
+cellularDF <- melt(t(cellularComponents))
+colnames(cellularDF) <- c("condition", "metabolite", "density")
+cellularDF$specie <- sapply(cellularDF$metabolite, function(x){
+  compositionFile$Class[compositionFile$MetName == x]
+  })
+cellularDF <- cellularDF[!is.nan(cellularDF$density),]
+
+cellularDFmelt <- melt(acast(cellularDF, condition ~ specie, value.var  = "density", fun.aggregate = sum))
+colnames(cellularDFmelt) <- c("condition", "specie", "density")
+cellularDFmelt$type <- "biomass"
+cellularDFmelt <- data.table(cellularDFmelt)
+cellularDFmelt$condition <- as.character(cellularDFmelt$condition); cellularDFmelt$specie <- as.character(cellularDFmelt$specie)
+
+jointCompSummary <- rbind(mediaSummary[,list(condition, specie, density, type),], cellularDFmelt)
+jointCompSummary[,Limitation := chemostatInfo$limitation[chemostatInfo$condition == condition], by = condition]
+jointCompSummary[,DR := chemostatInfo$DRgoal[chemostatInfo$condition == condition], by = condition]
+jointCompSummary <- jointCompSummary[!(jointCompSummary$condition %in% c("p0.05H1", "p0.05H2")),]
+
+jointCompSummary$type <- factor(jointCompSummary$type, levels = c("uptake", "excretion", "biomass"))
+
+barplot_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "white"), legend.position = "bottom", 
+  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), legend.key.width = unit(3, "line"), axis.text.x = element_text(angle = 90), strip.background = element_rect(fill = "darkgoldenrod1"))
+
+
+class_comp_plot <- ggplot(jointCompSummary, aes(y = density, x = type, fill = factor(specie))) + barplot_theme + facet_grid(Limitation ~ DR, scales = "free_y") + scale_fill_discrete(name = "Class", guide = guide_legend(nrow = 3))
+class_comp_plot + geom_bar(colour = "black", stat = "identity") + scale_y_continuous("Density (g/L)", expand = c(0.1, 0.1)) + scale_x_discrete("Type")
+ggsave("speciesUtilization.pdf", height = 20, width = 14)
+
+
+#class_comp_plot <- ggplot(mediaSummary, aes(y = density, factor(type), fill = factor(specie))) + pie_theme + scale_fill_brewer(name = "Class", palette = "Set1") + facet_wrap(~ condition)
+#class_comp_plot + geom_bar(colour = "black", stat = "identity")
+
+save(comp_by_cond, chemostatInfo, mediaSummary, file = "boundaryFluxes.Rdata")
 
 
