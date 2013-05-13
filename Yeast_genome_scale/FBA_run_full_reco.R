@@ -68,7 +68,7 @@ if(file.exists("yeast_stoi.R")){
 
 named_stoi <- stoiMat
 rownames(named_stoi) <- metIDtoSpec(rownames(named_stoi))
-rxn_search(named_stoi, 'mannan', is_rxn = FALSE)
+rxn_search(named_stoi, 'glycerol', is_rxn = FALSE)
 
 #### For reactions where proteins match multiple KEGG reactions, manually choose which is the proper match ####
 if(!file.exists("manualKEGGrxns.Rdata")){
@@ -429,9 +429,7 @@ save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, co
 
 
 
-
-
-growth_rate <- data.frame(limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], growth = NA)
+growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], growth = NA)
 flux_vectors <- list()
   
 ######################## Set up the equality and inequality constriants for FBA ################
@@ -683,6 +681,8 @@ if(QPorLP == "QP"){
     
     flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
     
+    growth_rate$growth[treatment] <- collapsedFlux[names(collapsedFlux) == "composition"]
+    
     }  
   }  
 
@@ -745,15 +745,11 @@ print(plot(fluxMat_per_cellVol[row_check,] ~ chemostatInfo$actualDR[1:n_c], pch 
 ###### output fluxes so that they can be visualzied using S. cerevisae cellular overview #####
 
 choice_conditions <- names(flux_vectors)[grep(0.05, names(flux_vectors))]
-cond_rownames <- unique(unlist(sapply(choice_conditions, function(treatment){
-names(flux_vectors[[c(1:length(flux_vectors))[names(flux_vectors) == treatment]]]) 
-})))
+cond_rownames <- names(flux_vectors[[1]]$flux)
 cond_flux <- matrix(NA, ncol = length(choice_conditions), nrow = length(cond_rownames)); rownames(cond_flux) <- cond_rownames; colnames(cond_flux) <- choice_conditions
 
-
 for(cond in choice_conditions){
-  one_flux <- flux_vectors[[c(1:length(flux_vectors))[names(flux_vectors) == cond]]]
-  cond_flux[sapply(names(one_flux), function(name_match){c(1:length(cond_rownames))[cond_rownames == name_match]}), choice_conditions == cond] <- unname(one_flux)
+  cond_flux[,colnames(cond_flux) == cond] <- flux_vectors[[c(1:length(flux_vectors))[names(flux_vectors) == cond]]]$flux
   }
 cond_flux <- cond_flux[rowSums(cond_flux != 0) != 0,]
 
@@ -782,9 +778,9 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
       }
     }
   #flux relative to biomass objective
-  comp_outputDF[,-1] <- comp_outputDF[,-1]/(t(t(rep(1, length(comp_outputDF[,1])))) %*% sapply(choice_conditions, function(cmatch){growth_rate$growth[rownames(growth_rate) == cmatch]}))
+  comp_outputDF[,-1] <- comp_outputDF[,-1]/(t(t(rep(1, length(comp_outputDF[,1])))) %*% sapply(choice_conditions, function(cmatch){growth_rate$growth[growth_rate$cond == cmatch]}))
     #max(abs(range(comp_outputDF[,-1])))
-  colnames(comp_outputDF) <- paste("$", colnames(comp_outputDF), sep = "")
+  colnames(comp_outputDF)[1] <- paste("$", colnames(comp_outputDF)[1], sep = "")
   
   #visualizing which reactions carry flux in a given condition
   ternary_outputDF <- comp_outputDF; ternary_outputDF[,-1][ternary_outputDF[,-1] < 0] <- -1; ternary_outputDF[,-1][ternary_outputDF[,-1] > 0] <- 1
