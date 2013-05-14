@@ -160,7 +160,7 @@ comp_by_cond$moles_per_cell[compositionFile$Class != "Energy Balance",] <- comp_
 # calculate the maintenance flux from dry weight and polymerization costs from molarity
 
 # maintenance flux - relative to DW
-maintFlux <- 0.0001 * colSums(comp_by_cond$grams_per_cell)
+maintFlux <- 0.0001 * colSums(comp_by_cond$grams_per_cell) #1 mmole per gDW/hr
 maintVec <- c(1, -1, -1); names(maintVec) <- c("ATP", "ADP", "phosphate")
 
 maintMatrix <- maintVec %*% t(maintFlux/chemostatInfo$actualDR) #divide out the dilution rate so that when culture concentration is multiplied by DR in FBA_run_full_reco.R, this adjustment is canceled leaving flux per hr
@@ -202,31 +202,16 @@ composition_part <- composition_part[,colnames(composition_part) != "NA"]
 composition_part$name <- factor(composition_part$name, levels = compositionFile$AltName)
 composition_part <- composition_part[order(composition_part$name),]
 
-energy_balance <- t(comp_by_cond$moles_per_cell) %*% as.matrix(composition_part[,-1])
-colnames(energy_balance) <- colnames(composition_part)[-1]
-
-for(maint_cmpd in rownames(maintMatrix)){
-  if(maint_cmpd %in% colnames(energy_balance)){
-    energy_balance[,colnames(energy_balance) == maint_cmpd] <- maintMatrix[rownames(maintMatrix) == maint_cmpd,] + energy_balance[,colnames(energy_balance) == maint_cmpd]
-    }
-}
-
-added_cmpds <- data.frame(maintMatrix[!(rownames(maintMatrix) %in% colnames(energy_balance)),])
-colnames(added_cmpds) <- rownames(maintMatrix)[!(rownames(maintMatrix) %in% colnames(energy_balance))]
-
-energy_balance <- cbind(energy_balance, added_cmpds)
-
-### add energetic balances back into composition fxn
-comp_by_cond$moles_per_cell[rownames(comp_by_cond$moles_per_cell) %in% colnames(energy_balance),] <- comp_by_cond$moles_per_cell[rownames(comp_by_cond$moles_per_cell) %in% colnames(energy_balance),] + t(energy_balance[,colnames(energy_balance) %in% compositionFile$AltName])
-
-comp_by_cond$moles_per_cell <- rbind(comp_by_cond$moles_per_cell, t(energy_balance[,!(colnames(energy_balance) %in% compositionFile$AltName)]))
+### integrate these costs of polymerization directly into FBA rather than smooshing them together
+### save composition_part to comp_by_cond before output
 
 
+comp_by_cond$moles_per_cell <- rbind(comp_by_cond$moles_per_cell, maintMatrix)
 
 ### rewrite compositionFile so that added species in polymerization cost have appropriate names in FBA model
-added_cmpds <- data.frame(MetName = colnames(energy_balance[,!(colnames(energy_balance) %in% compositionFile$AltName)]), StoiCoef = NA, AltName = colnames(energy_balance[,!(colnames(energy_balance) %in% compositionFile$AltName)]), Class = "Energy Balance", Abbreviated = colnames(energy_balance[,!(colnames(energy_balance) %in% compositionFile$AltName)]), Polymerization_Cost = NA, MW = NA, weightPerUn = NA)
+added_cmpds <- data.frame(MetName = rownames(maintMatrix), StoiCoef = NA, AltName = rownames(maintMatrix), Class = "Maintenance ATP hydrolysis", Abbreviated = rownames(maintMatrix), Polymerization_Cost = NA, MW = NA, weightPerUn = NA)
 compositionFile_Extended = data.frame(t(cbind(t(compositionFile), t(added_cmpds))))
-write.table(compositionFile_Extended, file = "../Yeast_comp_energy.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
+#write.table(compositionFile_Extended, file = "../Yeast_comp_energy.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
 
 
 
@@ -304,8 +289,7 @@ mediaSummary$density <- sapply(1:nrow(mediaSummary), function(x){
 
 
 #grams per L of anabolic components
-cellularComponents <- comp_by_cond$cultureMolarity[compositionFile_Extended$Class != "Energy Balance",] * as.numeric(compositionFile_Extended$MW[compositionFile_Extended$Class != "Energy Balance"]) %*% t(rep(1, ncol(comp_by_cond$cultureMolarity[compositionFile_Extended$Class != "Energy Balance",])))
-cellularComponents <- cellularComponents[!(rownames(cellularComponents) %in% c("ATP", "GTP")),]
+cellularComponents <- comp_by_cond$cultureMolarity[compositionFile_Extended$Class != "Maintenance ATP hydrolysis",] * as.numeric(compositionFile_Extended$MW[compositionFile_Extended$Class != "Maintenance ATP hydrolysis"]) %*% t(rep(1, ncol(comp_by_cond$cultureMolarity[compositionFile_Extended$Class != "Maintenance ATP hydrolysis",])))
 cellularDF <- melt(t(cellularComponents))
 colnames(cellularDF) <- c("condition", "metabolite", "density")
 cellularDF$specie <- sapply(cellularDF$metabolite, function(x){
@@ -338,6 +322,20 @@ ggsave("speciesUtilization.pdf", height = 20, width = 14)
 #class_comp_plot <- ggplot(mediaSummary, aes(y = density, factor(type), fill = factor(specie))) + pie_theme + scale_fill_brewer(name = "Class", palette = "Set1") + facet_wrap(~ condition)
 #class_comp_plot + geom_bar(colour = "black", stat = "identity")
 
+### for matching biomass fluxes which species should be combined into a single variance category ####
+compositionFile_Extended$varCategory <- NA
+compositionFile_Extended$varCategory[compositionFile_Extended$Class == "Amino Acid"] <- "AA flux"
+compositionFile_Extended$varCategory[grep('Carbohydrates', compositionFile_Extended$Class)] <- "sugar polymer flux"
+compositionFile_Extended$varCategory[grep('d[A-Z]TP', compositionFile_Extended$MetName)] <- "dNTP flux"
+compositionFile_Extended$varCategory[grep('[A-Z]TP', compositionFile_Extended$MetName)] <- "NTP flux"
+compositionFile_Extended$varCategory[grep('Cell Wall Steroids', compositionFile_Extended$Class)] <- "steroid flux"
+compositionFile_Extended$varCategory[grep('Sulfate', compositionFile_Extended$MetName)] <- "sulfate flux"
+compositionFile_Extended$varCategory[grep('Maintenance ATP hydrolysis', compositionFile_Extended$Class)] <- "Maintenance ATP hydrolysis"
+
+### Final output -> FBA_run ####
+
+comp_by_cond$compositionFile <- compositionFile_Extended
+comp_by_cond$biomassExtensionE <- composition_part
 save(comp_by_cond, chemostatInfo, mediaSummary, file = "boundaryFluxes.Rdata")
 
 
