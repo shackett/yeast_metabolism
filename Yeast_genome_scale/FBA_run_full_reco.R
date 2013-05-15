@@ -1,6 +1,7 @@
 #### Libraries ####
 library(gplots)
 library(ggplot2)
+library(data.table)
 
 #### Options ####
 
@@ -40,7 +41,7 @@ compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsA
 
 #### Load files describing boundary conditions and reaction reversibility from ecoli ####
 metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
-compositionFile <- read.delim("../Yeast_comp_energy.txt")
+#compositionFile <- read.delim("../Yeast_comp_energy.txt") #energy required to assimilate biomass components
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
@@ -66,9 +67,9 @@ if(file.exists("yeast_stoi.R")){
   load("yeast_stoi.R")
 } else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
 
-named_stoi <- stoiMat
-rownames(named_stoi) <- metIDtoSpec(rownames(named_stoi))
-rxn_search(named_stoi, 'glycerol', is_rxn = FALSE)
+#named_stoi <- stoiMat
+#rownames(named_stoi) <- metIDtoSpec(rownames(named_stoi))
+#rxn_search(named_stoi, 'glycerol', is_rxn = FALSE)
 
 #### For reactions where proteins match multiple KEGG reactions, manually choose which is the proper match ####
 if(!file.exists("manualKEGGrxns.Rdata")){
@@ -138,20 +139,52 @@ reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.
 treatment_par <- list()
 n_c <- 25
 for(i in 1:n_c){
-  #define nutrient uptake rates (using maximal available for now)
-  treatment_par[[chemostatInfo$condition[i]]][["nutrients"]] <- data.frame(nutrient = rownames(nutrientFile), conc_per_t = nutrientFile[,colnames(nutrientFile) == nutrientCode$nutrient[nutrientCode$shorthand == chemostatInfo$limitation[i]]]*chemostatInfo$actualDR[i])
+  #define nutrient uptake and excretion rate - soft matches on (using maximal available for now)
+  #measured_bounds <- data.frame(nutrient = rownames(nutrientFile), conc_per_t = nutrientFile[,colnames(nutrientFile) == nutrientCode$nutrient[nutrientCode$shorthand == chemostatInfo$limitation[i]]]*chemostatInfo$actualDR[i])
+  
+  measured_bounds <- mediaSummary[mediaSummary$condition == chemostatInfo$condition[i],]
+  measured_bounds <- rbind(measured_bounds, data.frame(condition = chemostatInfo$condition[i], specie = rownames(nutrientFile)[!(rownames(nutrientFile) %in% measured_bounds$specie)], change = NA, sd = NA, lb = 0, 
+     ub = nutrientFile[,colnames(nutrientFile) == nutrientCode$nutrient[nutrientCode$shorthand == chemostatInfo$limitation[i]]][!(rownames(nutrientFile) %in% measured_bounds$specie)], type = "uptake", density = NA))
+  # adjust boundary flux SD to a minimum of 1/100 * rate (values lower than this are because of excessive similarity of drawn replicates # a hierarchical model would deal with this  better
+  measured_bounds$sd[!is.na(measured_bounds$change)][measured_bounds$sd[!is.na(measured_bounds$change)] < measured_bounds$change[!is.na(measured_bounds$change)]/100] <- measured_bounds$change[!is.na(measured_bounds$change)][measured_bounds$sd[!is.na(measured_bounds$change)] < measured_bounds$change[!is.na(measured_bounds$change)]/100]
+  
+  # multiply steady-state concentrations by DR to get the uptake/excretion rates
+  measured_bounds$change <- measured_bounds$change*chemostatInfo$actualDR[i]
+  measured_bounds$sd <- measured_bounds$sd*chemostatInfo$actualDR[i]
+  measured_bounds$lb <- measured_bounds$lb*chemostatInfo$actualDR[i]
+  measured_bounds$ub <- measured_bounds$ub*chemostatInfo$actualDR[i]
+  
+  treatment_par[[chemostatInfo$condition[i]]][["nutrients"]] <- measured_bounds
   
   #define ura3 and leu2 auxotrophies
   if(chemostatInfo$limitation[i] == "L"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID))}
   if(chemostatInfo$limitation[i] == "u"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))}
   if(chemostatInfo$limitation[i] %in% c("c", "p", "n")){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- NA}
   
-  #define observed fluxes per culture volume #eventually scale to the intracellular volume where these fluxes occur
-  treatment_par[[chemostatInfo$condition[i]]][["boundaryFlux"]] = -1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$condition[i]]*chemostatInfo$actualDR[i]
+  #define observed fluxes per culture volume #perhaps eventually scale to the intracellular volume where these fluxes occur
+  biomass_match <- data.frame(specie = comp_by_cond$compositionFile$MetName, AltName = comp_by_cond$compositionFile$AltName,change = unname(-1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$condition[i]]*chemostatInfo$actualDR[i]))
+  biomass_list <- list()
   
+  for(component in unique(comp_by_cond$compositionFile$varCategory)){
+    principal_costs <- biomass_match[comp_by_cond$compositionFile$varCategory %in% component,]
+    
+    if(component == "Maintenance ATP hydrolysis"){
+      total_costs <- principal_costs
+      }else{
+        #costs of monomer assimilation incorporated into biomass flux
+        energetic_costs <- as.matrix(comp_by_cond$biomassExtensionE[comp_by_cond$biomassExtensionE$name %in% principal_costs$AltName,-1])
+        energetic_costs_aggregate <- t(principal_costs$change) %*% energetic_costs; colnames(energetic_costs_aggregate) <- colnames(comp_by_cond$biomassExtensionE)[-1]
+        total_costs <- rbind(principal_costs, data.frame(specie = colnames(energetic_costs_aggregate), AltName = colnames(energetic_costs_aggregate), change = t(unname(energetic_costs_aggregate)))[energetic_costs_aggregate != 0,])
+      }
+    biomass_list[[component]]$exchange = total_costs
+    biomass_list[[component]]$SD = 1/20
+  }
   
+  treatment_par[[chemostatInfo$condition[i]]][["boundaryFlux"]] = biomass_list
   }
 possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID)), as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID)))
+
+
 
 
 #### During LP should the similarity of shadow prices across the nutrient landscape be investigated ####
@@ -215,7 +248,9 @@ boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$
 
 ## extract the IDs of excreted metabolites ##
 
-excreted <- c("acetate", "ethanol", "succinate(2-)", "(R)-lactate", "L-alanine", "L-glutamate")
+
+
+excreted <- unique(mediaSummary$specie[mediaSummary$type == "excretion"])
 
 resource_matches <- lapply(excreted, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -227,7 +262,7 @@ excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$
 
 ## extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass ##
 
-sinks <- compositionFile$AltName
+sinks <- comp_by_cond$compositionFile$AltName
 
 resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -425,11 +460,16 @@ co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
-save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, compositionFile, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
+save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
 
 
+if(QPorLP == "LP"){
+  growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], growth = NA)
+  }
+if(QPorLP == "QP"){
+  growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], L2 = NA)
+  }
 
-growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], growth = NA)
 flux_vectors <- list()
   
 ######################## Set up the equality and inequality constriants for FBA ################
@@ -459,30 +499,53 @@ colnames(S_rxns_split) <- stoiRxSplit$rxDesignation
 
 ##### Stoichiometry and bounds of boundary fluxes #######
 
-## Nutrient Influx & Unconstrained Chemical Influx ##
+## Unconstrained Chemical Influx - e.g. water, gases ##
 
-influx_rxns <- sapply(c(boundary_met$SpeciesID, freeExchange_met$SpeciesID), function(id){c(1:length(metabolites))[metabolites == id]})
+free_rxns <- sapply(freeExchange_met$SpeciesID, function(id){c(1:length(metabolites))[metabolites == id]})
 
-influxS <- matrix(0, ncol = length(influx_rxns), nrow = length(metabolites))
-for(i in 1:length(influx_rxns)){
-  influxS[influx_rxns[i],i] <- 1
+freeS <- matrix(0, ncol = length(free_rxns), nrow = length(metabolites))
+for(i in 1:length(free_rxns)){
+  freeS[free_rxns[i],i] <- 1
 }
 
-influxSplit <- data.frame(rxDesignation = c(paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
-      reaction = paste(c(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName), c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)), "boundary"), direction = rep(c("F", "R"), each = length(c(boundary_met$SpeciesName, freeExchange_met$SpeciesName)))
-)
+freeSplit <- data.frame(rxDesignation = c(paste(paste(c(freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
+      reaction = paste(c(freeExchange_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), direction = rep(c("F", "R"), each = length(freeExchange_met$SpeciesName))
+      )
 
-influxS_split <- cbind(influxS, influxS)
-colnames(influxS_split) <- influxSplit$rxDesignation
+freeS_split <- cbind(freeS, freeS)
+colnames(freeS_split) <- freeSplit$rxDesignation
+
+
+## Nutrient Influx ##
+
+nutrient_rxns <- sapply(boundary_met$SpeciesID, function(id){c(1:length(metabolites))[metabolites == id]})
+nutrientS <- matrix(0, ncol = length(nutrient_rxns), nrow = length(metabolites))
+for(i in 1:length(nutrient_rxns)){
+  nutrientS[nutrient_rxns[i],i] <- 1
+}
+
+nutrientSplit <- data.frame(rxDesignation = c(paste(c(boundary_met$SpeciesName), "boundary_offset"), paste(c(boundary_met$SpeciesName), "boundary_match")), 
+      reaction = paste(c(boundary_met$SpeciesName, boundary_met$SpeciesName), "boundary"), direction = "F")
+
+nutrientS_split <- cbind(nutrientS, nutrientS)
+colnames(nutrientS_split) <- nutrientSplit$rxDesignation
+
+
 
 ## Excreted Metabolite Efflux - non-negative ##
 
 efflux_rxns <- sapply(excreted_met$SpeciesID, function(id){c(1:length(metabolites))[metabolites == id]})
-
 effluxS <- matrix(0, ncol = length(efflux_rxns), nrow = length(metabolites))
 for(i in 1:length(efflux_rxns)){
   effluxS[efflux_rxns[i],i] <- -1
 }
+
+effluxS_split <- cbind(effluxS, effluxS)
+
+effluxSplit <- data.frame(rxDesignation = c(paste(c(excreted_met$SpeciesName), "boundary_offset"), paste(c(excreted_met$SpeciesName), "boundary_match")), 
+      reaction = paste(c(excreted_met$SpeciesName, excreted_met$SpeciesName), "boundary"), direction = "F")
+
+
 
 ## Composition fxn ##
 
