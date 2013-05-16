@@ -262,7 +262,9 @@ excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$
 
 ## extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass ##
 
-sinks <- comp_by_cond$compositionFile$AltName
+sinks <- unique(c(comp_by_cond$compositionFile$AltName, colnames(comp_by_cond$biomassExtensionE)))
+
+####### START ##### - add me to sinks: comp_by_cond$biomassExtensionE
 
 resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -270,6 +272,8 @@ comp_met <- NULL
 for(x in 1:length(sinks)){
   comp_met <- rbind(comp_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "cytoplasm"],])
 }
+
+
 
 ## freely exchanging metabolites through extracellular compartment ##
 
@@ -508,12 +512,12 @@ for(i in 1:length(free_rxns)){
   freeS[free_rxns[i],i] <- 1
 }
 
-freeSplit <- data.frame(rxDesignation = c(paste(paste(c(freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
+freeRxSplit <- data.frame(rxDesignation = c(paste(paste(c(freeExchange_met$SpeciesName), "boundary"), "F", sep = '_'), paste(paste(c(freeExchange_met$SpeciesName), "boundary"), "R", sep = '_')), 
       reaction = paste(c(freeExchange_met$SpeciesName, freeExchange_met$SpeciesName), "boundary"), direction = rep(c("F", "R"), each = length(freeExchange_met$SpeciesName))
       )
 
 freeS_split <- cbind(freeS, freeS)
-colnames(freeS_split) <- freeSplit$rxDesignation
+colnames(freeS_split) <- freeRxSplit$rxDesignation
 
 
 ## Nutrient Influx ##
@@ -524,11 +528,11 @@ for(i in 1:length(nutrient_rxns)){
   nutrientS[nutrient_rxns[i],i] <- 1
 }
 
-nutrientSplit <- data.frame(rxDesignation = c(paste(c(boundary_met$SpeciesName), "boundary_offset"), paste(c(boundary_met$SpeciesName), "boundary_match")), 
-      reaction = paste(c(boundary_met$SpeciesName, boundary_met$SpeciesName), "boundary"), direction = "F")
+nutrientRxSplit <- data.frame(rxDesignation = c(paste(c(boundary_met$SpeciesName), "boundary_offset"), paste(c(boundary_met$SpeciesName), "boundary_match_F"), paste(c(boundary_met$SpeciesName), "boundary_match_R")), 
+      reaction = rep(paste(c(boundary_met$SpeciesName), "boundary"), times = 3), direction = c(rep("F", length(nutrient_rxns)*2), rep("R", length(nutrient_rxns))))
 
-nutrientS_split <- cbind(nutrientS, nutrientS)
-colnames(nutrientS_split) <- nutrientSplit$rxDesignation
+nutrientS_split <- cbind(nutrientS, nutrientS, nutrientS)
+colnames(nutrientS_split) <- nutrientRxSplit$rxDesignation
 
 
 
@@ -540,23 +544,48 @@ for(i in 1:length(efflux_rxns)){
   effluxS[efflux_rxns[i],i] <- -1
 }
 
-effluxS_split <- cbind(effluxS, effluxS)
+effluxRxSplit <- data.frame(rxDesignation = c(paste(c(excreted_met$SpeciesName), "boundary_offset"), paste(c(excreted_met$SpeciesName), "boundary_match_F"), paste(c(excreted_met$SpeciesName), "boundary_match_R")), 
+      reaction = rep(paste((excreted_met$SpeciesName), "boundary"), times = 3), direction = c(rep("F", length(efflux_rxns)*2), rep("R", length(efflux_rxns))))
 
-effluxSplit <- data.frame(rxDesignation = c(paste(c(excreted_met$SpeciesName), "boundary_offset"), paste(c(excreted_met$SpeciesName), "boundary_match")), 
-      reaction = paste(c(excreted_met$SpeciesName, excreted_met$SpeciesName), "boundary"), direction = "F")
-
+effluxS_split <- cbind(effluxS, effluxS, effluxS)
+colnames(effluxS_split) <- effluxRxSplit$rxDesignation
 
 
 ## Composition fxn ##
 
-compVec <- rep(0, times = length(metabolites)) #overwritten in each condition
+## generate a conversion matrix between each variance categories components and their indecies ##
 
-sinkStoi <- cbind(effluxS, compVec); colnames(sinkStoi) <- c(paste(excreted_met$SpeciesName, "boundary"), "composition")
-sinkSplit <- data.frame(rxDesignation = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), reaction = c(paste(excreted_met$SpeciesName, "boundary"), "composition"), direction = "F")
+biomassS <- matrix(0, ncol = length(unique(comp_by_cond$compositionFile$varCategory)), nrow = length(metabolites))
 
-S <- cbind(S_rxns_split, influxS_split, sinkStoi)
+biomassRxSplit <- data.frame(rxDesignation = c(paste(c(unique(comp_by_cond$compositionFile$varCategory)), "comp_offset"), paste(c(unique(comp_by_cond$compositionFile$varCategory)), "comp_match_F"), paste(c(unique(comp_by_cond$compositionFile$varCategory)), "comp_match_R")), 
+      reaction = rep(paste((unique(comp_by_cond$compositionFile$varCategory)), "composition"), times = 3), direction = c(rep("F", length(biomassS[1,])*2), rep("R", length(biomassS[1,]))))
 
-Sinfo <- rbind(stoiRxSplit, influxSplit, sinkSplit)
+biomassConv <- list()
+for(a_rxn in biomassRxSplit$rxDesignation){
+  biomassConv[[a_rxn]]$varCategory <- strsplit(a_rxn, split = ' comp')[[1]][1]
+  category_species <- treatment_par[[1]][["boundaryFlux"]][[biomassConv[[a_rxn]]$varCategory]]$exchange$AltName
+  category_species <- sapply(category_species, function(x){comp_met[comp_met$SpeciesName == x,]$SpeciesID[1]}) 
+  met_row <- sapply(unname(category_species), function(x){c(1:length(metabolites))[metabolites == x] })
+
+  conversionMat <- matrix(0, ncol = length(met_row), nrow = length(metabolites))
+  for(j in 1:length(met_row)){
+    conversionMat[met_row[j],j] <- 1
+    }
+  
+  biomassConv[[a_rxn]]$conversionMatrix <- conversionMat
+
+  }
+
+biomassS_split <- cbind(biomassS, biomassS, biomassS)
+colnames(biomassS_split) <- biomassRxSplit$rxDesignation
+
+
+
+
+
+S <- cbind(S_rxns_split, freeS_split, nutrientS_split, effluxS_split, biomassS_split)
+
+Sinfo <- rbind(stoiRxSplit, freeRxSplit, nutrientRxSplit, effluxRxSplit, biomassRxSplit)
 
 S <- S * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #invert stoichiometry for backwards flux
 
@@ -569,16 +598,51 @@ Fzero <- rep(0, times = length(S[,1]))
 
 ## previous splitting of reversible reactions, allows restriction of each reaction's flux to be either non-negative or non-positive (depending on constrained direction) ##
 
-directG <- diag(ifelse(Sinfo$direction == "F", 1, -1))
+#directG <- diag(ifelse(Sinfo$direction == "F", 1, -1))
 
 ## bounding maximum nutrient uptake rates ##
 
+influxG <- sapply(unique(nutrientRxSplit$reaction), function(rxchoose){
+  foo <- rep(0, length(Sinfo[,1]))
+  index_match <- c(1:length(Sinfo[,1]))[Sinfo$reaction == rxchoose]
+  foo[index_match] <- ifelse(Sinfo$direction[index_match] == "F", 1, -1)
+  foo
+  }) ### the rhs of these bounds are the maximal uptake rates, and the sense is <=
 
-influxG <- t(sapply(c(1:length(Sinfo[,1]))[Sinfo$rxDesignation %in% paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_')], function(rxchoose){
-  foo <- rep(0, length(Sinfo[,1])); foo[rxchoose] <- -1; foo
-}))
+## since for the gurobi setup nutrient fluxes were split into 3 fluxes in order to accomidate the QP without an offset setup, the linear combination of uptake fluxes should instead be bounded
+## this is difficult to do with this solver so instead for each molecule of a nutrient that is taken up an additional 'bookkeeping nutrient' will also be taken up.  The efflux of this bookkeeping
+## nutrient through a single reaction can then be bounded by the empirical maximum nutrient influx rate, maintenance of global flux balance will enforce that the sum of actual nutrient influxes can't be higher
+## than that of the directly bounded bookkeeping nutrient efflux
 
-Gtot <- rbind(directG, influxG)
+trackingS <- matrix(0, ncol =  length(S[1,]), nrow = length(unique(nutrientRxSplit$reaction)))
+rownames(trackingS) <- paste(unique(nutrientRxSplit$reaction), "_bookkeeping", sep = "")
+
+for(arxn in unique(nutrientRxSplit$reaction)){
+  trackingS[rownames(trackingS) == paste(arxn, "_bookkeeping", sep = ""), Sinfo$reaction == arxn] <- ifelse(Sinfo$direction[Sinfo$reaction == arxn] == "F", 1, -1)
+  }
+
+## add in a reaction which siphons off each bookkeeping nutrient
+
+S <- rbind(S, trackingS)
+
+bookkeepingRx <- data.frame(rxDesignation = paste(unique(nutrientRxSplit$reaction), "_bookkeeping", sep = ""),
+    reaction = paste(unique(nutrientRxSplit$reaction), "_bookkeeping", sep = ""), direction = "F")
+
+bookkeepingS <- matrix(0, ncol = length(unique(nutrientRxSplit$reaction)), nrow = length(S[,1]))
+colnames(bookkeepingS) <- bookkeepingRx$rxDesignation
+
+for(arxn in unique(nutrientRxSplit$reaction)){
+  
+  bookkeepingS[rownames(trackingS) == paste(arxn, "_bookkeeping", sep = ""), Sinfo$reaction == arxn] <- ifelse(Sinfo$direction[Sinfo$reaction == arxn] == "F", 1, -1)
+  }
+
+rownames(trackingS) <- paste(unique(nutrientRxSplit$reaction), "_bookkeeping", sep = "")
+
+
+
+
+
+#Gtot <- rbind(directG, t(influxG))
   
 ########### Linear programming to maximize growth given nutrient availability and calculate dual solution / shadow prices #######################
 
@@ -702,11 +766,12 @@ if(QPorLP == "QP"){
 
   flux_elevation_factor <- 1000 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
   
-  qpModel$A <- S
+  qpModel$A <- rbind(S, t(influxG))
   qpModel$rhs <- Fzero #flux balance
-  qpModel$sense <- rep("=", times = length(S[,1])) #flux balance
-  qpModel$lb <- c(rep(0, times = length(S[1,])-1), 1) # all fluxes greater than zero - previous splitting of reversible reactions is consistent with this
-  qpModel$lb <- flux_elevation_factor*qpModel$lb
+  qpModel$sense <- c(rep("=", times = length(S[,1])), rep("<=", times = length(influxG[,1]))) #flux balance
+  qpModel$lb <- rep(0, times = length(S[1,]))
+  #qpModel$lb <- c(rep(0, times = length(S[1,])-1), 1) # all fluxes greater than zero - previous splitting of reversible reactions is consistent with this
+  #qpModel$lb <- flux_elevation_factor*qpModel$lb
   
   flux_penalty <- 1
   #qpModel$Q <- diag(c(rep(flux_penalty, length(S[1,]) - 1), 1))
