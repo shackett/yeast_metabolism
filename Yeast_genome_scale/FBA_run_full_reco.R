@@ -769,9 +769,10 @@ if(QPorLP == "QP"){
   qpModel$ub <- rep(Inf , times = length(S[1,])) #overwrite bookkeeping fluxes with empirical maximum rates
   
   flux_penalty <- 1
-  qpModel$Q <- diag(length(S[1,]))
+  qpModel$Q <- diag(rep(0, length(S[1,]))) #min t(v)Qv
   qpModel$obj <- rep(1, length(S[1,])) #min c * v where v >= 0 to 
   
+  qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
   
   #qpModel$objcon <- c(rep(0, length(S[1,])))
   #qpModel$objcon <- c(rep(0, length(S[1,]) - 1), -1) # all fluxes besides composition should be minimized to reduce feutality
@@ -813,11 +814,9 @@ if(QPorLP == "QP"){
     
     ## input the precision of each media specie - uptake and excretion ##
     
-    
-    
-    
-    
-    
+    for(nutrientSpec in treatment_par[[treatment]]$nutrients$specie){
+      matchedSpecies$Precision[matchedSpecies$reaction == paste(nutrientSpec, "boundary")] <- (1/treatment_par[[treatment]]$nutrients$sd[treatment_par[[treatment]]$nutrients$specie == nutrientSpec])^2
+      }
     
     stacked_comp_offset <- rbind(matchedSpecies[,1:4], cond_boundary_rxns[,1:4])
     
@@ -836,40 +835,33 @@ if(QPorLP == "QP"){
     }
     #qpModel$A[rowSums(qpModel$A[,stacked_comp_offset$index] != 0) != 0,stacked_comp_offset$index]
     
+    ## correct precisions for flux elevation factor
+    matchedSpecies$Precision / flux_elevation_factor^2
     
+    ## for some species, no precision estimate is provided because they weren't directly measured.
+    ##  By enforcing some arbitrary penalty on these reactions the unbounded stoichiometrically equivalent 'offset fluxes' should carry flux
+    matchedSpecies$Precision[is.na(matchedSpecies$Precision)] <- 1
     
-    
-    cond_Qcoeff <- rep(0, nrow(Sinfo))
-    cond_Abiomass_override
-    
-    
-    # Q = 1/var
-    
-    
-    
-    
-    
-    qpModel$A
-    
-    treatment_par[[treatment]]
-    
-    
-    compVec <- rep(0, times = length(metabolites))
-    for(i in 1:length(comp_met$SpeciesID)){
-      compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- treatment_par[[treatment]]$"boundaryFlux"[i] 
-    }  
-    qpModel$A[,length(S[1,])] <- compVec # rates of anabolic fluxes are overwritten by condition-specific ones
-    
-    #test increase in bounds
-    
+    diag(qpModel$Q)[matchedSpecies$index] <- matchedSpecies$Precision
     
     
     solvedModel <- gurobi(qpModel, qpparams)
+    
+    
     
     collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
       frindices <- c(1:length(Sinfo[,1]))[Sinfo$reaction == frcombo]
       sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * solvedModel$x[frindices]/flux_elevation_factor)
     })
+    
+    constrainedFlux <- data.frame(Sinfo[grep('match|book', Sinfo$rxDesignation),], flux = solvedModel$x[grep('match|book', Sinfo$rxDesignation)], match = diag(qpModel$Q)[grep('match|book', Sinfo$rxDesignation)],
+    lb = qpModel$lb[grep('match|book', Sinfo$rxDesignation)], ub = qpModel$ub[grep('match|book', Sinfo$rxDesignation)])
+    constrainedFlux$penalty <- constrainedFlux$flux^2 * constrainedFlux$match
+    
+    
+    sum(solvedModel$x*qpModel$obj)
+    sum(t(solvedModel$x) %*% qpModel$Q %*% t(t(solvedModel$x)))
+    
     
     flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
     
