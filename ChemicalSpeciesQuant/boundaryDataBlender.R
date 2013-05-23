@@ -65,6 +65,8 @@ ggsave(file = "default_composition.pdf", height = 15, width = 15)
 
 ########### Chemostat specific information ###########
 
+library(data.table)
+
 chemostatInfo <- read.table("BulkComposition/chemostatDRmisc.tsv", sep = "\t", header = TRUE) #VolFrac_mean - uL cellular vol per mL media
 
 comp_by_cond <- list()
@@ -73,6 +75,15 @@ colnames(tmp) <- chemostatInfo$condition; rownames(tmp) <- compositionFile$MetNa
 comp_by_cond$moles_per_cell <- comp_by_cond$grams_per_cell <- tmp
 
 n_c <- length(chemostatInfo[,1])
+
+sampleInfo <- read.table("BulkComposition/sampleInfo.txt", sep = "\t", header = TRUE) ## dry weight from culture
+sampleInfo <- sampleInfo[sapply(sampleInfo$Sample, function(x){c(1:length(sampleInfo[,1]))[conditions$condition %in% x]}),]
+
+chemostatInfo[,1] %chin% sampleInfo[,1]
+sampleInfo[chmatch(sampleInfo$Sample, chemostatInfo$condition),]
+
+((sampleInfo$DryWeight / sampleInfo$homog_weight)/sampleInfo$cultureV)
+
 
 ##### Total Protein ######
 
@@ -201,6 +212,7 @@ composition_part <- composition_part[,colnames(composition_part) != "NA"]
 
 composition_part$name <- factor(composition_part$name, levels = compositionFile$AltName)
 composition_part <- composition_part[order(composition_part$name),]
+composition_part$name <- as.character(composition_part$name)
 
 ### integrate these costs of polymerization directly into FBA rather than smooshing them together
 ### save composition_part to comp_by_cond before output
@@ -326,8 +338,8 @@ ggsave("speciesUtilization.pdf", height = 20, width = 14)
 compositionFile_Extended$varCategory <- NA
 compositionFile_Extended$varCategory[compositionFile_Extended$Class == "Amino Acid"] <- "AA flux"
 compositionFile_Extended$varCategory[grep('Carbohydrates', compositionFile_Extended$Class)] <- "sugar polymer flux"
-compositionFile_Extended$varCategory[grep('d[A-Z]TP', compositionFile_Extended$MetName)] <- "dNTP flux"
-compositionFile_Extended$varCategory[grep('[A-Z]TP', compositionFile_Extended$MetName)] <- "NTP flux"
+compositionFile_Extended$varCategory[grep('^d[A-Z]TP', compositionFile_Extended$MetName)] <- "dNTP flux"
+compositionFile_Extended$varCategory[grep('^[A-Z]TP', compositionFile_Extended$MetName)] <- "NTP flux"
 compositionFile_Extended$varCategory[grep('Cell Wall Steroids', compositionFile_Extended$Class)] <- "steroid flux"
 compositionFile_Extended$varCategory[grep('Sulfate', compositionFile_Extended$MetName)] <- "sulfate flux"
 compositionFile_Extended$varCategory[grep('Maintenance ATP hydrolysis', compositionFile_Extended$Class)] <- "Maintenance ATP hydrolysis"
