@@ -177,8 +177,15 @@ for(i in 1:n_c){
         total_costs <- rbind(principal_costs, data.frame(specie = colnames(energetic_costs_aggregate), AltName = colnames(energetic_costs_aggregate), change = t(unname(energetic_costs_aggregate)))[energetic_costs_aggregate != 0,])
       }
     biomass_list[[component]]$exchange = total_costs
-    biomass_list[[component]]$SD = 1/20
-  }
+    
+    # define the accuracy of a constraint in terms of the coefficient of variation - sd over mean
+    if(component %in% colnames(comp_by_cond$CV_table)){
+      biomass_list[[component]]$SD = as.numeric(subset(comp_by_cond$CV_table, comp_by_cond$CV_table$condition == chemostatInfo$condition[i], component))
+      }else{
+        biomass_list[[component]]$SD = 1/5
+      }
+    }
+  
   
   treatment_par[[chemostatInfo$condition[i]]][["boundaryFlux"]] = biomass_list
   }
