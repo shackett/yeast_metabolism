@@ -145,8 +145,6 @@ for(i in 1:n_c){
   measured_bounds <- mediaSummary[mediaSummary$condition == chemostatInfo$condition[i],]
   measured_bounds <- rbind(measured_bounds, data.frame(condition = chemostatInfo$condition[i], specie = rownames(nutrientFile)[!(rownames(nutrientFile) %in% measured_bounds$specie)], change = NA, sd = NA, lb = 0, 
      ub = nutrientFile[,colnames(nutrientFile) == nutrientCode$nutrient[nutrientCode$shorthand == chemostatInfo$limitation[i]]][!(rownames(nutrientFile) %in% measured_bounds$specie)], type = "uptake", density = NA))
-  # adjust boundary flux SD to a minimum of 1/100 * rate (values lower than this are because of excessive similarity of drawn replicates # a hierarchical model would deal with this  better
-  measured_bounds$sd[!is.na(measured_bounds$change)][measured_bounds$sd[!is.na(measured_bounds$change)] < measured_bounds$change[!is.na(measured_bounds$change)]/100] <- measured_bounds$change[!is.na(measured_bounds$change)][measured_bounds$sd[!is.na(measured_bounds$change)] < measured_bounds$change[!is.na(measured_bounds$change)]/100]
   
   # multiply steady-state concentrations by DR to get the uptake/excretion rates
   measured_bounds$change <- measured_bounds$change*chemostatInfo$actualDR[i]
@@ -271,7 +269,6 @@ excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$
 
 sinks <- unique(c(comp_by_cond$compositionFile$AltName, colnames(comp_by_cond$biomassExtensionE)))
 
-####### START ##### - add me to sinks: comp_by_cond$biomassExtensionE
 
 resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -472,6 +469,8 @@ reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
 save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
+
+##### output files ####
 
 
 if(QPorLP == "LP"){
@@ -781,6 +780,12 @@ if(QPorLP == "QP"){
   qpModel$obj <- rep(flux_penalty, length(S[1,])) #min c * v where v >= 0 to 
   qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
   
+  ### QP-specific output_files ###
+  
+  residual_flux_stack <- NULL
+  
+  
+  ### iterate through conditions and optimize the fit of fluxes to boundary and biomass conditions ###
   
   for(treatment in 1:n_c){
     
@@ -791,7 +796,6 @@ if(QPorLP == "QP"){
     cond_nutrients$index <- sapply(paste(cond_nutrients$specie, "boundary_bookkeeping"), function(x){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == x]})
     
     cond_bound[cond_nutrients$index] <- cond_nutrients$ub #maximal nutrient fluxes set as [nutrient]*DR
-    cond_bound <- cond_bound*flux_elevation_factor
     
     qpModel$ub <- cond_bound #hard bound the maximal flux through each reaction - Inf except for nutrient absorption
     
@@ -804,7 +808,6 @@ if(QPorLP == "QP"){
       cond_boundary_rxns$rate[cond_boundary_rxns$reaction == paste(nutrient, "boundary")] <- treatment_par[[treatment]]$nutrients$change[treatment_par[[treatment]]$nutrients$specie == nutrient]
       }
     cond_boundary_rxns$rate[cond_boundary_rxns$reaction %in% paste(unique(comp_by_cond$compositionFile$varCategory), "composition")] <- 1
-    cond_boundary_rxns$rate <- cond_boundary_rxns$rate * flux_elevation_factor
     
     qpModel$lb[cond_boundary_rxns$index][!is.na(cond_boundary_rxns$rate)] <- cond_boundary_rxns$rate[!is.na(cond_boundary_rxns$rate)]
     qpModel$lb[cond_boundary_rxns$index][is.na(cond_boundary_rxns$rate)] <- 0
@@ -834,7 +837,7 @@ if(QPorLP == "QP"){
         
         comp_replacement <- data.frame(treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$exchange, biomassConv[[biomassSpecRx]])
         
-        qpModel$A[comp_replacement$conversion.index,stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- comp_replacement$change
+        qpModel$A[comp_replacement$conversion.index,stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- comp_replacement$change*ifelse(sum(grep('_R$', biomassSpecRx)) != 0, -1, 1)
         
         }
     }
@@ -849,6 +852,8 @@ if(QPorLP == "QP"){
     
     diag(qpModel$Q)[matchedSpecies$index] <- matchedSpecies$Precision
     
+    qpModel$lb <- qpModel$lb * flux_elevation_factor
+    qpModel$ub <- qpModel$ub * flux_elevation_factor
     
     solvedModel <- gurobi(qpModel, qpparams)
     
@@ -859,18 +864,38 @@ if(QPorLP == "QP"){
       sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * solvedModel$x[frindices]/flux_elevation_factor)
     })
     
+    # display contributions to L2 penalty 
     constrainedFlux <- data.frame(Sinfo[grep('match|book', Sinfo$rxDesignation),], flux = solvedModel$x[grep('match|book', Sinfo$rxDesignation)], Var = diag(qpModel$Q)[grep('match|book', Sinfo$rxDesignation)],
     lb = qpModel$lb[grep('match|book', Sinfo$rxDesignation)], ub = qpModel$ub[grep('match|book', Sinfo$rxDesignation)])
     constrainedFlux$penalty <- constrainedFlux$flux^2 * constrainedFlux$Var
     
+    # deviations between allowable fluxes and empirical fluxes
+    residualFlux <- data.table(reactions = names(collapsedFlux[grep('[boundary|composition]$', names(collapsedFlux))]), net_flux = unname(collapsedFlux[grep('[boundary|composition]$', names(collapsedFlux))]))
     
-    sum(solvedModel$x*qpModel$obj)
-    sum(t(solvedModel$x) %*% qpModel$Q %*% t(t(solvedModel$x)))
+    experimental_flux <- rep(0, nrow(residualFlux))
+    experimental_flux[chmatch(cond_boundary_rxns$reaction[!is.na(cond_boundary_rxns$rate)], residualFlux$reaction)] <- cond_boundary_rxns$rate[!is.na(cond_boundary_rxns$rate)]
+    
+    residualFlux$experimental <- experimental_flux
+    
+    experimental_precision <- sapply(residualFlux$reaction, function(x){
+      matchedSpecies$Precision[matchedSpecies$reaction == x][1]
+    })
+    experimental_precision[experimental_precision == 1] <- NA
+    residualFlux$sd <- 1/sqrt(experimental_precision * flux_elevation_factor^2)
+    residualFlux[,resid_st := (experimental - net_flux)/sd,]
+    
+    
+    #range(qpModel$A %*% solvedModel$x)
+    
+    growth_rate$L1[treatment] <- sum(solvedModel$x*qpModel$obj)
+    growth_rate$L2[treatment] <- sum(t(solvedModel$x) %*% qpModel$Q %*% t(t(solvedModel$x)))
     
     
     flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
+    flux_vectors[[names(treatment_par)[treatment]]]$"constraints" <- constrainedFlux
+    flux_vectors[[names(treatment_par)[treatment]]]$"residual" <- residualFlux
     
-    growth_rate$growth[treatment] <- collapsedFlux[names(collapsedFlux) == "composition"]
+    residual_flux_stack <- rbind(residual_flux_stack, cbind(condition = chemostatInfo$condition[treatment], residualFlux))
     
     }  
   }  
