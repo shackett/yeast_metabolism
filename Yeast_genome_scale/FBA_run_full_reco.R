@@ -478,7 +478,7 @@ if(QPorLP == "LP"){
   growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], growth = NA)
   }
 if(QPorLP == "QP"){
-  growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], L2 = NA)
+  growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], L1 = NA, L2 = NA)
   }
 
 flux_vectors <- list()
@@ -765,9 +765,9 @@ if(QPorLP == "QP"){
   #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so #a symbolic link was necessary to get gurobi to find its C++ code
 
   qpModel <- list()
-  qpparams <- list(Presolve=2)
+  qpparams <- list(Presolve=2, OptimalityTol = 10^-9, FeasibilityTol = 10^-9, BarConvTol = 10^-16)
 
-  flux_elevation_factor <- 1000 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
+  flux_elevation_factor <- 100000 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
   
   qpModel$A <- S
   qpModel$rhs <- Fzero #flux balance
@@ -775,14 +775,12 @@ if(QPorLP == "QP"){
   qpModel$lb <- rep(0, times = length(S[1,])) #all fluxes are greater than zero
   qpModel$ub <- rep(Inf , times = length(S[1,])) #overwrite bookkeeping fluxes with empirical maximum rates
   
-  flux_penalty <- 1
   qpModel$Q <- diag(rep(0, length(S[1,]))) #min t(v)Qv
-  qpModel$obj <- rep(1, length(S[1,])) #min c * v where v >= 0 to 
   
+  flux_penalty <- 0.00001
+  qpModel$obj <- rep(flux_penalty, length(S[1,])) #min c * v where v >= 0 to 
   qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
   
-  #qpModel$objcon <- c(rep(0, length(S[1,])))
-  #qpModel$objcon <- c(rep(0, length(S[1,]) - 1), -1) # all fluxes besides composition should be minimized to reduce feutality
   
   for(treatment in 1:n_c){
     
@@ -843,7 +841,7 @@ if(QPorLP == "QP"){
     #qpModel$A[rowSums(qpModel$A[,stacked_comp_offset$index] != 0) != 0,stacked_comp_offset$index]
     
     ## correct precisions for flux elevation factor
-    matchedSpecies$Precision / flux_elevation_factor^2
+    matchedSpecies$Precision <- matchedSpecies$Precision / flux_elevation_factor^2
     
     ## for some species, no precision estimate is provided because they weren't directly measured.
     ##  By enforcing some arbitrary penalty on these reactions the unbounded stoichiometrically equivalent 'offset fluxes' should carry flux
@@ -861,9 +859,9 @@ if(QPorLP == "QP"){
       sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * solvedModel$x[frindices]/flux_elevation_factor)
     })
     
-    constrainedFlux <- data.frame(Sinfo[grep('match|book', Sinfo$rxDesignation),], flux = solvedModel$x[grep('match|book', Sinfo$rxDesignation)], match = diag(qpModel$Q)[grep('match|book', Sinfo$rxDesignation)],
+    constrainedFlux <- data.frame(Sinfo[grep('match|book', Sinfo$rxDesignation),], flux = solvedModel$x[grep('match|book', Sinfo$rxDesignation)], Var = diag(qpModel$Q)[grep('match|book', Sinfo$rxDesignation)],
     lb = qpModel$lb[grep('match|book', Sinfo$rxDesignation)], ub = qpModel$ub[grep('match|book', Sinfo$rxDesignation)])
-    constrainedFlux$penalty <- constrainedFlux$flux^2 * constrainedFlux$match
+    constrainedFlux$penalty <- constrainedFlux$flux^2 * constrainedFlux$Var
     
     
     sum(solvedModel$x*qpModel$obj)
