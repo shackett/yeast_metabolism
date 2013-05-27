@@ -2,6 +2,7 @@
 library(gplots)
 library(ggplot2)
 library(data.table)
+library(reshape2)
 
 #### Options ####
 
@@ -129,11 +130,6 @@ for(rxN in 1:length(thermAnnotate[,1])){
   }
 reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
 
-
-
-
-
-
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
 
 treatment_par <- list()
@@ -180,7 +176,7 @@ for(i in 1:n_c){
     if(component %in% colnames(comp_by_cond$CV_table)){
       biomass_list[[component]]$SD = as.numeric(subset(comp_by_cond$CV_table, comp_by_cond$CV_table$condition == chemostatInfo$condition[i], component))
       }else{
-        biomass_list[[component]]$SD = 1/5
+        biomass_list[[component]]$SD = 1/50
       }
     }
   
@@ -189,13 +185,10 @@ for(i in 1:n_c){
   }
 possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID)), as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID)))
 
-
-
-
 #### During LP should the similarity of shadow prices across the nutrient landscape be investigated ####
 
 if(generatePhPP){
-  #### If Phenotypic phase plane analysis (PhPP) is being performed, establish which condititions will be compared ####
+  ## If Phenotypic phase plane analysis (PhPP) is being performed, establish which condititions will be compared ##
   # which nutrients will be compared in a pairwise manner
   nutrientComp <- c("ammonium", "phosphate", "D-glucose")
   maxNutrientConc <- sapply(c(1:length(nutrientFile[,1])), function(x){nutrientFile[x, apply(nutrientFile, 1, which.max)[x]]})
@@ -229,9 +222,6 @@ if(generatePhPP){
     PhPPcond$gradient[[a_pairN]] <- cbind(nutLattice, invariantNut)
   }
 }
-
-
-
 
 #### Determine the compartmentation of each reaction ####
 
@@ -292,7 +282,8 @@ for(x in 1:length(free_flux)){
 
 
 skip_me = TRUE
-######### Confirm mass balance of reactions ############
+
+#### Confirm mass balance of reactions ############
 if(skip_me == FALSE){
 
 met_chebi <- unlist(sapply(metabolites, metToCHEBI))
@@ -421,9 +412,7 @@ rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
 #chem_form[chem_form$ID %in% met_chebi,]
 #rxnparFile[grep("7814", rxnparFile[,3]),]
 
-
-
-#### Search for un-balanced rxns ######
+#### Search for rxns with only products or reactants ####
 
 is.unbalanced <- rep(NA, times = length(stoiMat[1,]))
 
@@ -432,8 +421,6 @@ for(i in 1:length(stoiMat[1,])){
 	}
 
 rem.unbalanced <- colnames(stoiMat)[is.unbalanced]
-
-
 
 #### Remove generic reactions - those which are not mass balanced or are generalizations of a class of species ####
 
@@ -455,7 +442,7 @@ for(l in 1:length(labelz)){
 
 rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
 
-
+stoiMat[,rxn_search(named_stoi, "growth", is_rxn = T, index = T)]
 
 
 #look for rxns that produce CO2 and make them irreversible
@@ -468,9 +455,9 @@ co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
-save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
+#save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
 
-##### output files ####
+#### output files ####
 
 
 if(QPorLP == "LP"){
@@ -482,10 +469,13 @@ if(QPorLP == "QP"){
 
 flux_vectors <- list()
   
+
 ######################## Set up the equality and inequality constriants for FBA ################
 
 #remove reactions which are defective 
 S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(rem.unbalanced, rem.aggregate))]
+
+colnames(stoiMat)
 
 #split reactions which can carry forward and reverse flux into two identical reactions
 validrxns <- reversibleRx[reversibleRx$rx %in% colnames(S_rxns),]
@@ -677,7 +667,7 @@ if(QPorLP == "LP"){
     auxoIndecies <- c(1:length(Sinfo[,1]))[Sinfo$reaction %in% possibleAuxotrophies]
     set.bounds(lpObj, upper = ifelse(Sinfo[auxoIndecies,]$reaction %in% treatment_par[[treatment]]$auxotrophies, 0, Inf), columns = auxoIndecies)
     
-    ###### Determine flux distributions and growth rate - jointly maximizing growth and minimizing #########
+    ## Determine flux distributions and growth rate - jointly maximizing growth and minimizing ##
     
     flux_penalty = 0.001 # resistance on fluxes to minimize feutality
     
@@ -696,7 +686,7 @@ if(QPorLP == "LP"){
     
     flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
     
-    ###### Determine shadow prices ######
+    ## Determine shadow prices ##
     
     costFxn = c(rep(0, times = length(S[1,]) -1), -1)
     set.objfn(lpObj, costFxn)
@@ -756,7 +746,7 @@ for(i in 1:n_c){
   fluxMat[,i] <- flux_vectors[[i]]$flux
   }
 
-###########
+########### Quadratic programming to match nutrient uptake/excretion rates and produce biomass ####
 
 if(QPorLP == "QP"){
 
@@ -764,9 +754,11 @@ if(QPorLP == "QP"){
   #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so #a symbolic link was necessary to get gurobi to find its C++ code
 
   qpModel <- list()
-  qpparams <- list(Presolve=2, OptimalityTol = 10^-9, FeasibilityTol = 10^-9, BarConvTol = 10^-16)
+  #qpparams <- list(Presolve=2, OptimalityTol = 10^-9, FeasibilityTol = 10^-9, BarConvTol = 10^-16)
+  qpparams <- list(OptimalityTol = 10^-9, FeasibilityTol = 10^-9, BarConvTol = 10^-16)
 
-  flux_elevation_factor <- 100000 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
+  
+  flux_elevation_factor <- 1000 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
   
   qpModel$A <- S
   qpModel$rhs <- Fzero #flux balance
@@ -776,7 +768,7 @@ if(QPorLP == "QP"){
   
   qpModel$Q <- diag(rep(0, length(S[1,]))) #min t(v)Qv
   
-  flux_penalty <- 0.00001
+  flux_penalty <- 0.001
   qpModel$obj <- rep(flux_penalty, length(S[1,])) #min c * v where v >= 0 to 
   qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
   
@@ -857,12 +849,18 @@ if(QPorLP == "QP"){
     
     solvedModel <- gurobi(qpModel, qpparams)
     
+    qpModel$A[rowSums(qpModel$A[,grep('AA', colnames(qpModel$A))] != 0) != 0,grep('AA', colnames(qpModel$A))]
+    
+    
     
     
     collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
       frindices <- c(1:length(Sinfo[,1]))[Sinfo$reaction == frcombo]
       sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * solvedModel$x[frindices]/flux_elevation_factor)
     })
+    
+    # set fluxes below 10^-10 to zero, hist(log10(collapsedFlux)) indicates that there are many fluxes which are non-zero because of failure to round to zero
+    collapsedFlux[abs(collapsedFlux) < 10^-10] <- 0
     
     # display contributions to L2 penalty 
     constrainedFlux <- data.frame(Sinfo[grep('match|book', Sinfo$rxDesignation),], flux = solvedModel$x[grep('match|book', Sinfo$rxDesignation)], Var = diag(qpModel$Q)[grep('match|book', Sinfo$rxDesignation)],
@@ -897,8 +895,54 @@ if(QPorLP == "QP"){
     
     residual_flux_stack <- rbind(residual_flux_stack, cbind(condition = chemostatInfo$condition[treatment], residualFlux))
     
+    ### Compare the elemental composition of all boundary constraints ### 
+    
+    modelMetComp <- read.table("../ChemicalSpeciesQuant/stoiMetsComp.tsv", header = TRUE)
+    
+    boundary_label <- data.frame(reaction = residualFlux$reactions, color = NA)
+    boundary_label$color[grep('boundary', boundary_label$reaction)] <- brewer.pal(length(grep('boundary', boundary_label$reaction)), "Set3")
+    boundary_label$color[grep('composition', boundary_label$reaction)] <- brewer.pal(length(grep('composition', boundary_label$reaction)), "Pastel1")
+    
+    boundary_stoichiometry <- qpModel$A[,sapply(residualFlux$reactions, function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
+    boundary_stoichiometry <- boundary_stoichiometry[rowSums(boundary_stoichiometry != 0) != 0,]
+    boundary_stoichiometry <- boundary_stoichiometry[grep('bookkeeping', rownames(boundary_stoichiometry), invert = T),] 
+    
+    boundary_elements <- convert_to_elemental(boundary_stoichiometry, modelMetComp)
+    
+    rownames(boundary_stoichiometry) <- boundary_elements$name
+    ele_df <- NULL
+    for(an_ele in c("C", "H", "N", "O", "P", "S")){
+      an_ele_df <- data.frame(reactions = residualFlux$reactions, element = an_ele, netFlux = residualFlux$net_flux * t(boundary_stoichiometry) %*% boundary_elements[,colnames(boundary_elements) == an_ele],
+      experimentalFlux = residualFlux$experimental * t(boundary_stoichiometry) %*% boundary_elements[,colnames(boundary_elements) == an_ele])
+      
+      an_ele_df$exchange <- ifelse(an_ele_df$netFlux <= 0, "Product", "Reactant") 
+      an_ele_df$netFlux <- an_ele_df$netFlux * ifelse(an_ele_df$netFlux < 0, -1, 1) 
+      an_ele_df$experimentalFlux <- an_ele_df$experimentalFlux * ifelse(an_ele_df$experimentalFlux < 0, -1, 1) 
+      
+      ele_df <- rbind(ele_df, an_ele_df)
+      }
+    ele_df$exchange <- factor(ele_df$exchange, levels = c("Reactant", "Product"))
+    ele_df$color <- boundary_label$color[chmatch(ele_df$reactions, boundary_label$reaction)]
+    
+    ele_df_melt <- melt(ele_df, id.vars = c("reactions", "element", "exchange", "color"))
+    
+    barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "bottom", 
+      panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), legend.key.width = unit(3, "line"),
+      strip.background = element_rect(fill = "coral1"))
+    
+    #ggplot(ele_df, aes(x = factor(1), y = netFlux, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 4), labels = boundary_label$reaction, breaks = boundary_label$color)
+    #ggplot(ele_df, aes(x = exchange, y = experimentalFlux, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 4), labels = boundary_label$reaction, breaks = boundary_label$color)
+    
+    ggplot(ele_df_melt, aes(x = exchange, y = value, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ variable + exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 4), labels = boundary_label$reaction, breaks = boundary_label$color)
+    
+    
+    
     }  
   }  
+
+
+
+
 
 rxNames <- data.frame(reactionID = unique(Sinfo$reaction), Name = unique(Sinfo$reaction))
 rxNames$Name[grep('r_[0-9]+', rxNames$Name)] = unname(rxnIDtoEnz(rxNames$Name[grep('r_[0-9]+', rxNames$Name)]))
@@ -914,11 +958,25 @@ fluxMat <- fluxMat[rowSums(fluxMat) != 0,]
 
 fluxMat_per_cellVol <- fluxMat / t(t(rep(1, length(fluxMat[,1])))) %*% chemostatInfo$VolFrac_mean[1:n_c] # moles per h*mL cell volume
 
+####
+
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "top", 
+  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line")) 
+
+
+ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(condition), y = resid_st*-1)) + facet_wrap(~ reactions, ncol = 2) + geom_bar(stat = "identity") + barplot_theme + scale_y_continuous("predicted - experimental flux / sd(experimental") + ggtitle("Fit of 
+ggsave("flux_residuals.pdf", width = 8, height = 20)
+  
+residual_flux_melted <- dcast(residual_flux_stack, formula = reactions ~ condition, value.var = "resid_st")
+  residual_flux_stack$resid_st
+
+residual_flux_stack[residual_flux_stack[,2] == "AA flux composition",]
 
 ### for now only look at reactions which carry flux in >= 80% of conditions
 rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 
+heatmap.2(fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c)), trace = "none", Colv = F)
 
 
 flux_summary <- list()
@@ -929,7 +987,8 @@ flux_summary$ceulluarFluxes = fluxMat_per_cellVol
 save(flux_summary, file = "fluxSummaryQP.Rdata")
 
 
-heatmap.2(fluxMat_per_cellVol / (t(t(apply(abs(fluxMat[rowSums(fluxMat_per_cellVol) != 0,]), 1, mean))) %*% rep(1, n_c)), trace = "none")
+heatmap.2(fluxMat_per_cellVol / (t(t(apply(abs(fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol) != 0,]), 1, mean))) %*% rep(1, n_c)), trace = "none")
+
 
 row_check <- 100
 for(row_check in 1:100){
@@ -992,8 +1051,8 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
       }
     }
   #flux relative to biomass objective
-  comp_outputDF[,-1] <- comp_outputDF[,-1]/(t(t(rep(1, length(comp_outputDF[,1])))) %*% sapply(choice_conditions, function(cmatch){growth_rate$growth[growth_rate$cond == cmatch]}))
-    #max(abs(range(comp_outputDF[,-1])))
+  #comp_outputDF[,-1] <- comp_outputDF[,-1]/(t(t(rep(1, length(comp_outputDF[,1])))) %*% sapply(choice_conditions, function(cmatch){growth_rate$growth[growth_rate$cond == cmatch]}))
+  #max(abs(range(comp_outputDF[,-1])))
   colnames(comp_outputDF)[1] <- paste("$", colnames(comp_outputDF)[1], sep = "")
   
   #visualizing which reactions carry flux in a given condition
