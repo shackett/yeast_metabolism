@@ -758,7 +758,15 @@ if(QPorLP == "QP"){
   qpparams <- list(OptimalityTol = 10^-9, FeasibilityTol = 10^-9, BarConvTol = 10^-16)
 
   
-  flux_elevation_factor <- 1000 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
+  #flux_elevation_factor <- 10^9 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
+  #flux_penalty <- 10^-6
+  
+  #flux_elevation_factor <- 10^9 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
+  #flux_penalty <- 1/flux_elevation_factor
+  
+  flux_elevation_factor <- 1000
+  flux_penalty <- 1/flux_elevation_factor
+ # flux_penalty <- 0.001
   
   qpModel$A <- S
   qpModel$rhs <- Fzero #flux balance
@@ -768,9 +776,8 @@ if(QPorLP == "QP"){
   
   qpModel$Q <- diag(rep(0, length(S[1,]))) #min t(v)Qv
   
-  flux_penalty <- 0.001
-  qpModel$obj <- rep(flux_penalty, length(S[1,])) #min c * v where v >= 0 to 
-  qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
+  #qpModel$obj <- rep(flux_penalty, length(S[1,])) #min c * v where v >= 0 to 
+  #qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
   
   ### QP-specific output_files ###
   
@@ -849,9 +856,7 @@ if(QPorLP == "QP"){
     
     solvedModel <- gurobi(qpModel, qpparams)
     
-    qpModel$A[rowSums(qpModel$A[,grep('AA', colnames(qpModel$A))] != 0) != 0,grep('AA', colnames(qpModel$A))]
-    
-    
+    ### outputs ###
     
     
     collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
@@ -863,9 +868,9 @@ if(QPorLP == "QP"){
     collapsedFlux[abs(collapsedFlux) < 10^-10] <- 0
     
     # display contributions to L2 penalty 
-    constrainedFlux <- data.frame(Sinfo[grep('match|book', Sinfo$rxDesignation),], flux = solvedModel$x[grep('match|book', Sinfo$rxDesignation)], Var = diag(qpModel$Q)[grep('match|book', Sinfo$rxDesignation)],
+    constrainedFlux <- data.frame(Sinfo[grep('match|book', Sinfo$rxDesignation),], flux = solvedModel$x[grep('match|book', Sinfo$rxDesignation)], Prec = diag(qpModel$Q)[grep('match|book', Sinfo$rxDesignation)],
     lb = qpModel$lb[grep('match|book', Sinfo$rxDesignation)], ub = qpModel$ub[grep('match|book', Sinfo$rxDesignation)])
-    constrainedFlux$penalty <- constrainedFlux$flux^2 * constrainedFlux$Var
+    constrainedFlux$penalty <- constrainedFlux$flux^2 * constrainedFlux$Prec
     
     # deviations between allowable fluxes and empirical fluxes
     residualFlux <- data.table(reactions = names(collapsedFlux[grep('[boundary|composition]$', names(collapsedFlux))]), net_flux = unname(collapsedFlux[grep('[boundary|composition]$', names(collapsedFlux))]))
