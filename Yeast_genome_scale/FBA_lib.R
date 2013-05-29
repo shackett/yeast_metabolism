@@ -115,6 +115,149 @@ output
 }
 
 
+convert_to_elemental <- function(redStoi, modelMetComp){
+  # convert a stoichiometric matrix (with named columns) and "S" IDs as rownames to their elemental constituents
+  require(data.table)
+  
+  redStoi <- boundary_stoichiometry
+  specieEle <- modelMetComp[chmatch(rownames(redStoi), modelMetComp$ID),]
+  
+  specieEle[specieEle$name == "(1->3)-beta-D-glucan", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5) #one oxygen shared bc of condensation
+  specieEle[specieEle$name == "glycogen", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5)
+  specieEle[specieEle$name == "mannan", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5)
+  specieEle[specieEle$name == "D-glucose", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 12, 6)
+  specieEle[is.na(specieEle)] <- 0
+  specieEle[,-c(1:2)] <- apply(specieEle[,-c(1:2)], c(1,2), as.numeric)
+  specieEle <- specieEle[,c(TRUE, TRUE, colSums(specieEle[,-c(1:2)]) != 0)]
+  
+  atomicMasses <- data.frame(element = c("C", "H", "N", "O", "P", "S"), mass = c(12.0107, 1.00794, 14.00674, 15.9994, 30.973761, 32.066))
+  
+  if(all(atomicMasses$element == colnames(specieEle[,-c(1,2)]))){
+    specieEle$MW <- t(t(specieEle[,-c(1,2)])) %*% t(t(c(atomicMasses[,2])))
+    specieEle
+    }else{
+      print("atomicMasses are mismatched, additional elemental masses need to be included")
+      }
+  
+  }
+
+
+
+trackMetConversion <- function(trackedMet, allRxns = FALSE){
+  
+  ## for a metabolite of interest, seperate reactions which carry flux consuming or producing it into each compartment and display a summary ##
+  if(allRxns){
+    flux <- collapsedFlux
+    }else{
+    flux <- collapsedFlux[collapsedFlux != 0]
+    }
+  
+  reducedStoi <- matrix(0, ncol = length(flux), nrow = nrow(stoiMat))
+  rownames(reducedStoi) <- rownames(stoiMat)
+  colnames(reducedStoi) <- names(flux)
+  
+  # add model stoichiometry
+  index_match <- chmatch(names(flux), colnames(stoiMat))
+  reducedStoi[,!is.na(index_match)] <- stoiMat[,index_match[!is.na(index_match)]]
+  
+  boundaryStoi <- qpModel$A[,sapply(names(flux)[is.na(index_match)], function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
+  boundaryStoi <- boundaryStoi[(rownames(boundaryStoi) %in% rownames(stoiMat)),] #remove bookkeeping flux
+  reducedStoi[,is.na(index_match)] <- boundaryStoi
+  
+  metNames <- metIDtoSpec(rownames(reducedStoi))
+  
+  print(paste("Species Matched :", paste(unique(unname(metNames[grep(trackedMet, metNames)])), collapse = "/")))
+  
+  if(length(grep(trackedMet, metNames)) == 1){
+    involvedRxns <- reducedStoi[,reducedStoi[grep(trackedMet, metNames),] != 0]
+    }else{
+      involvedRxns <- reducedStoi[,colSums(reducedStoi[grep(trackedMet, metNames),] != 0) != 0]
+      }
+  
+  
+  reactionNames <- data.frame(ID = colnames(involvedRxns), reaction = rxnIDtoEnz(colnames(involvedRxns)), compartment = unname(rxnIDtoSGD(colnames(involvedRxns))[,1]))
+  reactionNames$compartment[is.na(reactionNames$compartment)] <- "boundary"
+  
+  # balance within individual compartments
+  compartment_balance <- as.data.frame(matrix(0, ncol = length(grep(trackedMet, metNames)), nrow = length(unique(reactionNames$compartment))))
+  rownames(compartment_balance) <- unique(reactionNames$compartment)
+  colnames(compartment_balance) <- mapply(function(x,y){paste(x, y)}, x = metNames[grep(trackedMet, metNames)], y = compFile$compName[chmatch(rxnFile$Compartment[rxnFile$Compartment != "exchange"][chmatch(rownames(reducedStoi)[grep(trackedMet, metNames)], rxnFile$Metabolite[rxnFile$Compartment != "exchange"])], compFile$compID)])
+  
+  #visualize each compartment seperately
+  for(a_compartment in unique(reactionNames$compartment)){
+    comp_name <- ifelse(sum(grep('^c_', a_compartment)) == 1, compFile$compName[compFile$compID == a_compartment], a_compartment)
+    as.matrix(reducedStoi[grep(trackedMet, metNames),])
+    if(length(grep(trackedMet, metNames)) == 1){
+      comp_fluxes <- cbind(reactionNames[reactionNames$compartment == a_compartment,], flux = flux[reducedStoi[grep(trackedMet, metNames),] != 0][reactionNames$compartment == a_compartment], stoi = NA, effect = NA)
+      }else{
+        comp_fluxes <- cbind(reactionNames[reactionNames$compartment == a_compartment,], flux = flux[colSums(reducedStoi[grep(trackedMet, metNames),] != 0) != 0][reactionNames$compartment == a_compartment], stoi = NA, effect = NA)
+        }
+    
+    comp_stoi <- involvedRxns[,reactionNames$compartment == a_compartment]
+    
+    if(a_compartment == "boundary" | nrow(comp_fluxes) == 1){
+      print(toupper(a_compartment))
+      print(comp_fluxes)
+      if(nrow(comp_fluxes) == 1){
+        compartment_balance[rownames(compartment_balance) == a_compartment,] <- (comp_stoi * comp_fluxes$flux)[grep(trackedMet, metNames)]
+        }else{
+          compartment_balance[rownames(compartment_balance) == a_compartment,] <- (comp_stoi %*% comp_fluxes$flux)[grep(trackedMet, metNames)]
+          }
+      next  
+    }
+    
+    compartment_balance[rownames(compartment_balance) == a_compartment,] <- (comp_stoi %*% comp_fluxes$flux)[grep(trackedMet, metNames)]
+    
+    for(a_rxn in 1:nrow(comp_fluxes)){
+      
+      rxnStoi <- comp_stoi[comp_stoi[,a_rxn] != 0,a_rxn]*ifelse(comp_fluxes$flux[a_rxn] >= 0, 1, -1)
+      speciesNames <- metIDtoSpec(names(rxnStoi))
+      rxnDir <- reversibleRx$reversible[reversibleRx$rx == comp_fluxes$ID[a_rxn]]
+      
+      metOfInterest <- unname(rxnStoi)[grep(trackedMet, speciesNames)]
+      
+      if(all(metOfInterest < 0)){
+        comp_fluxes$effect[a_rxn] <- "consumed"
+        }else if(all(metOfInterest > 0)){
+          comp_fluxes$effect[a_rxn] <- "produced"
+          }else{
+            comp_fluxes$effect[a_rxn] <- "exchanged"
+            }
+      
+      if(rxnDir == 1){rxnDir <- " -> "}
+      if(rxnDir == 0){rxnDir <- " <=> "}
+      if(rxnDir == -1){rxnDir <- " <- "}
+      
+      substrate_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi < 0])), function(x){
+        tmp <- (rxnStoi[rxnStoi < 0] * -1)[x]
+        if(tmp == 1){tmp <- ''}
+        paste(tmp, speciesNames[rxnStoi < 0][x])
+      }), collapse = ' + ')
+      
+      product_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi > 0])), function(x){
+        tmp <- (rxnStoi[rxnStoi > 0])[x]
+        if(tmp == 1){tmp <- ''}
+        paste(tmp, speciesNames[rxnStoi > 0][x])
+      }), collapse = ' + ')
+      
+      comp_fluxes$stoi[a_rxn] = paste(substrate_prep, rxnDir, product_prep)
+    }
+    
+    comp_fluxes <- comp_fluxes[order(comp_fluxes$effect, abs(comp_fluxes$flux), decreasing = T),]
+    comp_fluxes$flux <- abs(comp_fluxes$flux)
+    
+    print(toupper(comp_name))
+    writeLines('\n')
+    
+    for(a_change in c("produced", "consumed", "exchanged")){
+      print(comp_fluxes[comp_fluxes$effect == a_change,])
+      }
+    writeLines('\n\n\n')
+  }
+  print(compartment_balance)
+}
+
+
 eval_mets <- function(query_met, grep_it = FALSE){
 	#find all of the reactions that a greped or exact matched metabolite participates in and then get all of the other metabolites also in those reactions
 	if(grep_it == TRUE){
@@ -166,6 +309,90 @@ reaction_info <- function(rxnName){
   rxList$stoichiometry = paste(substrate_prep, rxnDir, product_prep)
   rxList$thermo = reversibleRx[reversibleRx$rx == rxnName,]
   rxList  
+  }  
+
+
+reaction_info_FBGA <- function(rxnName){
+  
+  require(gplots)
+  
+  #### similar to reaction_info but using a run_rxn file and dumping output as flat text
+  rxnInfo <- run_rxn$rxnSummary
+  
+  rxnStoi <- rxnInfo$rxnStoi
+  speciesNames <- unname(sapply(names(rxnStoi), function(x){rxnInfo$metNames[names(rxnInfo$metNames) == x]}))
+  speciesName_lengths <- sapply(speciesNames, function(x){length(strsplit(x, '')[[1]])})
+    
+  rxnDir <- 0 #the rxn directionality was not transmitted
+  if(rxnDir == 1){rxnDir <- " -> "}
+  if(rxnDir == 0){rxnDir <- " <=> "}
+  if(rxnDir == -1){rxnDir <- " <- "}
+    
+  substrate_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi < 0])), function(x){
+    tmp <- (rxnStoi[rxnStoi < 0] * -1)[x]
+    if(tmp == 1){tmp <- ''}
+    paste(tmp, speciesNames[rxnStoi < 0][x])
+  }), collapse = ' + ')
+    
+  product_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi > 0])), function(x){
+    tmp <- (rxnStoi[rxnStoi > 0])[x]
+    if(tmp == 1){tmp <- ''}
+    paste(tmp, speciesNames[rxnStoi > 0][x])
+  }), collapse = ' + ')
+  
+  if(length(strsplit(paste(substrate_prep, rxnDir, product_prep), "")[[1]]) > 60){
+    
+    if(length(strsplit(substrate_prep, "")[[1]]) > 60){
+      substrates <- strsplit(substrate_prep, '\\+')[[1]]
+      sub_long <- which.max(speciesName_lengths[rxnStoi < 0])
+      
+      substrates <- c(substrates[-sub_long], substrates[sub_long])
+      substrate_re <- NULL
+      for(i in 1:length(substrates)){
+        if(i < length(substrates) - 1){
+          substrate_re <- c(substrate_re, substrates[i], " +")
+        }else if(i == length(substrates) - 1){
+          substrate_re <- c(substrate_re, substrates[i], " +\n")
+        }else{
+          substrate_re <- c(substrate_re, substrates[i])
+        }
+      }
+      substrate_prep <- paste(substrate_re, collapse = "")
+      }
+    
+    if(length(strsplit(product_prep, "")[[1]]) > 60){
+      
+      products <- strsplit(product_prep, '\\+')[[1]]
+      prod_long <- which.max(speciesName_lengths[rxnStoi > 0])
+      
+      products <- c(products[-prod_long], products[prod_long])
+      products_re <- NULL
+      for(i in 1:length(products)){
+        if(i < length(products) - 1){
+          products_re <- c(products_re, products[i], " +")
+        }else if(i == length(products) - 1){
+          products_re <- c(products_re, products[i], " +\n")
+        }else{
+          products_re <- c(products_re, products[i])
+        }
+      }
+      product_prep <- paste(products_re, collapse = "")
+      }
+    
+    rxn_stoi <- paste(substrate_prep, "\n\t", rxnDir, product_prep)
+    }else{
+    rxn_stoi <- paste(substrate_prep, rxnDir, product_prep)
+    }
+  rxn_stoi <- gsub(' +', ' ', rxn_stoi)
+  rxn_stoi <- gsub('^ ', '', rxn_stoi)
+  rxn_stoi <- gsub(' $', '', rxn_stoi)
+  rxn_stoi <- gsub('\n ', '\n', rxn_stoi)
+  
+  textplot(paste(c(rxnInfo$reaction,
+      rxnInfo$genes,
+      rxn_stoi,             
+      paste(strsplit(rxnInfo$pathway, split = "__")[[1]], collapse = "\n")), collapse = "\n\n")
+      , cex = 3, valign = "top", halign = "left")
   }  
 
 
