@@ -3,6 +3,7 @@ library(gplots)
 library(ggplot2)
 library(data.table)
 library(reshape2)
+library(RColorBrewer)
 
 #### Options ####
 
@@ -776,6 +777,7 @@ if(QPorLP == "QP"){
   
   qpModel$Q <- diag(rep(0, length(S[1,]))) #min t(v)Qv
   
+  qpModel$obj <- rep(1, length(S[1,]))
   #qpModel$obj <- rep(flux_penalty, length(S[1,])) #min c * v where v >= 0 to 
   #qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
   
@@ -837,6 +839,12 @@ if(QPorLP == "QP"){
         comp_replacement <- data.frame(treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$exchange, biomassConv[[biomassSpecRx]])
         
         qpModel$A[comp_replacement$conversion.index,stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- comp_replacement$change*ifelse(sum(grep('_R$', biomassSpecRx)) != 0, -1, 1)
+        
+        if(sum(grep('_R$', biomassSpecRx))){
+          qpModel$ub[stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- 0.5
+          }else if(sum(grep('_F$', biomassSpecRx))){
+            qpModel$ub[stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- 1.5
+            }
         
         }
     }
@@ -906,7 +914,7 @@ if(QPorLP == "QP"){
     
     boundary_label <- data.frame(reaction = residualFlux$reactions, color = NA)
     boundary_label$color[grep('boundary', boundary_label$reaction)] <- brewer.pal(length(grep('boundary', boundary_label$reaction)), "Set3")
-    boundary_label$color[grep('composition', boundary_label$reaction)] <- brewer.pal(length(grep('composition', boundary_label$reaction)), "Pastel1")
+    boundary_label$color[grep('composition', boundary_label$reaction)] <- brewer.pal(length(grep('composition', boundary_label$reaction)), "Pastel2")
     
     boundary_stoichiometry <- qpModel$A[,sapply(residualFlux$reactions, function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
     boundary_stoichiometry <- boundary_stoichiometry[rowSums(boundary_stoichiometry != 0) != 0,]
@@ -938,12 +946,109 @@ if(QPorLP == "QP"){
     #ggplot(ele_df, aes(x = factor(1), y = netFlux, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 4), labels = boundary_label$reaction, breaks = boundary_label$color)
     #ggplot(ele_df, aes(x = exchange, y = experimentalFlux, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 4), labels = boundary_label$reaction, breaks = boundary_label$color)
     
-    ggplot(ele_df_melt, aes(x = exchange, y = value, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ variable + exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 4), labels = boundary_label$reaction, breaks = boundary_label$color)
+    ggplot(ele_df_melt, aes(x = exchange, y = value, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ variable + exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 5), labels = boundary_label$reaction, breaks = boundary_label$color)
     
     
     
     }  
   }  
+reaction_info('r_0126')
+trackedMet = '^NAD\\(\\+\\)'
+
+trackMetConversion('acetate$')
+trackMetConversion('ergosta-5,7,24\\(28\\)-trien-3beta-ol')
+
+
+trackMetConversion <- function(trackedMet){
+  
+  ## for a metabolite of interest, seperate reactions which carry flux consuming or producing it into each compartment and display a summary ##
+  flux <- collapsedFlux[collapsedFlux != 0]
+  
+  reducedStoi <- matrix(0, ncol = length(flux), nrow = nrow(stoiMat))
+  rownames(reducedStoi) <- rownames(stoiMat)
+  colnames(reducedStoi) <- names(flux)
+  
+  # add model stoichiometry
+  index_match <- chmatch(names(flux), colnames(stoiMat))
+  reducedStoi[,!is.na(index_match)] <- stoiMat[,index_match[!is.na(index_match)]]
+  
+  boundaryStoi <- qpModel$A[,sapply(names(flux)[is.na(index_match)], function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
+  boundaryStoi <- boundaryStoi[(rownames(boundaryStoi) %in% rownames(stoiMat)),] #remove bookkeeping flux
+  reducedStoi[,is.na(index_match)] <- boundaryStoi
+  
+  metNames <- metIDtoSpec(rownames(reducedStoi))
+  
+  print(paste("Species Matched :", paste(unique(unname(metNames[grep(trackedMet, metNames)])), collapse = "/")))
+  
+  involvedRxns <- reducedStoi[,colSums(reducedStoi[grep(trackedMet, metNames),] != 0) != 0]
+  
+  reactionNames <- data.frame(ID = colnames(involvedRxns), reaction = rxnIDtoEnz(colnames(involvedRxns)), compartment = unname(rxnIDtoSGD(colnames(involvedRxns))[,1]))
+  reactionNames$compartment[is.na(reactionNames$compartment)] <- "boundary"
+  
+  #visualize each compartment seperately
+  for(a_compartment in unique(reactionNames$compartment)){
+    comp_name <- ifelse(sum(grep('^c_', a_compartment)) == 1, compFile$compName[compFile$compID == a_compartment], a_compartment)
+    
+    comp_fluxes <- cbind(reactionNames[reactionNames$compartment == a_compartment,], flux = flux[colSums(reducedStoi[grep(trackedMet, metNames),] != 0) != 0][reactionNames$compartment == a_compartment], stoi = NA, effect = NA)
+    comp_stoi <- involvedRxns[,reactionNames$compartment == a_compartment]
+    
+    if(a_compartment == "boundary" | nrow(comp_fluxes) == 1){
+      print(toupper(a_compartment))
+      print(comp_fluxes)
+      next  
+    }
+    
+    for(a_rxn in 1:nrow(comp_fluxes)){
+      
+      rxnStoi <- comp_stoi[comp_stoi[,a_rxn] != 0,a_rxn]*ifelse(comp_fluxes$flux[a_rxn] > 0, 1, -1)
+      speciesNames <- metIDtoSpec(names(rxnStoi))
+      rxnDir <- reversibleRx$reversible[reversibleRx$rx == comp_fluxes$ID[a_rxn]]
+      
+      metOfInterest <- unname(rxnStoi)[grep(trackedMet, speciesNames)]
+      
+      if(all(metOfInterest < 0)){
+        comp_fluxes$effect[a_rxn] <- "consumed"
+        }else if(all(metOfInterest > 0)){
+          comp_fluxes$effect[a_rxn] <- "produced"
+          }else{
+            comp_fluxes$effect[a_rxn] <- "exchanged"
+            }
+      
+      if(rxnDir == 1){rxnDir <- " -> "}
+      if(rxnDir == 0){rxnDir <- " <=> "}
+      if(rxnDir == -1){rxnDir <- " <- "}
+      
+      substrate_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi < 0])), function(x){
+        tmp <- (rxnStoi[rxnStoi < 0] * -1)[x]
+        if(tmp == 1){tmp <- ''}
+        paste(tmp, speciesNames[rxnStoi < 0][x])
+      }), collapse = ' + ')
+      
+      product_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi > 0])), function(x){
+        tmp <- (rxnStoi[rxnStoi > 0])[x]
+        if(tmp == 1){tmp <- ''}
+        paste(tmp, speciesNames[rxnStoi > 0][x])
+      }), collapse = ' + ')
+      
+      comp_fluxes$stoi[a_rxn] = paste(substrate_prep, rxnDir, product_prep)
+    }
+    
+    comp_fluxes <- comp_fluxes[order(comp_fluxes$effect, abs(comp_fluxes$flux), decreasing = T),]
+    comp_fluxes$flux <- abs(comp_fluxes$flux)
+    
+    print(toupper(comp_name))
+    writeLines('\n')
+    
+    for(a_change in c("produced", "consumed", "exchanged")){
+      print(comp_fluxes[comp_fluxes$effect == a_change,])
+      }
+    writeLines('\n\n\n')
+  }
+}
+
+
+
+
 
 
 
@@ -969,7 +1074,7 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
   panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line")) 
 
 
-ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(condition), y = resid_st*-1)) + facet_wrap(~ reactions, ncol = 2) + geom_bar(stat = "identity") + barplot_theme + scale_y_continuous("predicted - experimental flux / sd(experimental") + ggtitle("Fit of 
+ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(condition), y = resid_st*-1)) + facet_wrap(~ reactions, ncol = 2, scale = "free_y") + geom_bar(stat = "identity") + barplot_theme + scale_y_continuous("predicted - experimental flux / sd(experimental") + ggtitle("Fit of experimental and optimized flux")
 ggsave("flux_residuals.pdf", width = 8, height = 20)
   
 residual_flux_melted <- dcast(residual_flux_stack, formula = reactions ~ condition, value.var = "resid_st")
@@ -978,8 +1083,8 @@ residual_flux_melted <- dcast(residual_flux_stack, formula = reactions ~ conditi
 residual_flux_stack[residual_flux_stack[,2] == "AA flux composition",]
 
 ### for now only look at reactions which carry flux in >= 80% of conditions
-rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
-fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
+#rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
+#fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 
 heatmap.2(fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c)), trace = "none", Colv = F)
 
@@ -993,6 +1098,10 @@ save(flux_summary, file = "fluxSummaryQP.Rdata")
 
 
 heatmap.2(fluxMat_per_cellVol / (t(t(apply(abs(fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol) != 0,]), 1, mean))) %*% rep(1, n_c)), trace = "none")
+
+
+high_flux <- order(rowSums(abs(fluxMat_per_cellVol)), decreasing = T)
+rownames(fluxMat_per_cellVol)[high_flux][1:50]
 
 
 row_check <- 100
