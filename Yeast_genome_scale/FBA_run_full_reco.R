@@ -278,7 +278,7 @@ for(x in 1:length(sinks)){
 
 ## freely exchanging metabolites through extracellular compartment ##
 
-free_flux <- c("carbon dioxide", "oxygen", "water")
+free_flux <- c("carbon dioxide", "oxygen", "water", "H+")
 
 resource_matches <- lapply(free_flux, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -482,7 +482,6 @@ flux_vectors <- list()
 #remove reactions which are defective 
 S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(rem.unbalanced, rem.aggregate))]
 
-colnames(stoiMat)
 
 #split reactions which can carry forward and reverse flux into two identical reactions
 validrxns <- reversibleRx[reversibleRx$rx %in% colnames(S_rxns),]
@@ -882,36 +881,29 @@ if(QPorLP == "QP"){
     
     #balanceStoi <- data.frame(specie = c("s_0446", "s_0400", "s_1207"), stoi = c(1, -1, -1))
     #balanceStoi <- data.frame(specie = c("s_1087", "s_1082", "s_0764_b"), stoi = c(1, -1, -1))
-    balanceStoi <- data.frame(specie = c("s_1096", "s_1091", "s_0764_b"), stoi = c(1, -1, -1))
+    #balanceStoi <- data.frame(specie = c("s_1096", "s_1091", "s_0764_b"), stoi = c(1, -1, -1))
     
+    #z <- loosenFlux(balanceStoi)
     
-    
-    balanceVec <- rep(0, times = nrow(loose_model$A))
-    balanceVec[chmatch(balanceStoi$specie, rownames(loose_model$A))] <- balanceStoi$stoi
-    
-    loose_model <- qpModel
-    loose_model$A <- cbind(loose_model$A, balanceVec)
-    loose_model$lb <- c(loose_model$lb, -Inf)
-    loose_model$ub <- c(loose_model$ub, Inf)
-    loose_model$Q <- diag(c(diag(loose_model$Q), 0))
-    loose_model$obj <- c(loose_model$obj, 0)
-    
-    solvedModel <- gurobi(loose_model, qpparams)
-    
-    if(solvedModel$status == "NUMERIC"){
-      growth_rate$L1[treatment] <- NA
-      growth_rate$L2[treatment] <- NA
-      next
-      }
+    #if(solvedModel$status == "NUMERIC"){
+    #  growth_rate$L1[treatment] <- NA
+    #  growth_rate$L2[treatment] <- NA
+    #  next
+    #  }
     ##
     
-    #solvedModel <- gurobi(qpModel, qpparams)
+    ### Force flux through a reaction to evaluate where it might be plugged up ###
     
-    #metIDtoSpec(rownames(qpModel$A)[order(solvedModel$pi, decreasing = T)][1:100])
-    #solvedModel$pi[order(solvedModel$pi, decreasing = T)][1:10]
+    #FF <- data.frame(rx = 'r_0745_F', flux = 1e1) #complex I ETC
+    #solvedModel <- forcedFlux(FF)
     
     
     
+    solvedModel <- gurobi(qpModel, qpparams)
+    
+    # which reactions can carry flux #
+    #z <- maxFlux()
+   
     ### outputs ###
     
     
@@ -946,12 +938,12 @@ if(QPorLP == "QP"){
     
     #range(qpModel$A %*% solvedModel$x)
     
-    growth_rate$L1[treatment] <- sum(solvedModel$x*loose_model$obj)
-    growth_rate$L2[treatment] <- sum(t(solvedModel$x) %*% loose_model$Q %*% t(t(solvedModel$x)))
+    #growth_rate$L1[treatment] <- sum(solvedModel$x*loose_model$obj)
+    #growth_rate$L2[treatment] <- sum(t(solvedModel$x) %*% loose_model$Q %*% t(t(solvedModel$x)))
     
     
-    #growth_rate$L1[treatment] <- sum(solvedModel$x*qpModel$obj)
-    #growth_rate$L2[treatment] <- sum(t(solvedModel$x) %*% qpModel$Q %*% t(t(solvedModel$x)))
+    growth_rate$L1[treatment] <- sum(solvedModel$x*qpModel$obj)
+    growth_rate$L2[treatment] <- sum(t(solvedModel$x) %*% qpModel$Q %*% t(t(solvedModel$x)))
     
     
     flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
@@ -965,7 +957,9 @@ if(QPorLP == "QP"){
     modelMetComp <- read.table("../ChemicalSpeciesQuant/stoiMetsComp.tsv", header = TRUE)
     
     boundary_label <- data.frame(reaction = residualFlux$reactions, color = NA)
-    boundary_label$color[grep('boundary', boundary_label$reaction)] <- brewer.pal(length(grep('boundary', boundary_label$reaction)), "Set3")
+    
+    boundary_label$color[boundary_label$reaction %in% paste(free_flux, "boundary")] <- brewer.pal(sum(boundary_label$reaction %in% paste(free_flux, "boundary")), "Dark2")
+    boundary_label$color[is.na(boundary_label$color)][grep('boundary', boundary_label$reaction[is.na(boundary_label$color)])] <- brewer.pal(length(grep('boundary', boundary_label$reaction[is.na(boundary_label$color)])), "Set3")
     boundary_label$color[grep('composition', boundary_label$reaction)] <- brewer.pal(length(grep('composition', boundary_label$reaction)), "Pastel2")
     
     boundary_stoichiometry <- qpModel$A[,sapply(residualFlux$reactions, function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
@@ -992,42 +986,65 @@ if(QPorLP == "QP"){
     
     composition_balance <- rbind(composition_balance, ele_df)
     
-    
-    #ele_df_melt <- melt(ele_df, id.vars = c("reactions", "condition", "element", "exchange", "color"))
-    
-    #barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "bottom", 
-    #  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), legend.key.width = unit(3, "line"),
-    #  strip.background = element_rect(fill = "coral1"))
-    
-    #ggplot(ele_df, aes(x = factor(1), y = netFlux, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 4), labels = boundary_label$reaction, breaks = boundary_label$color)
-    #ggplot(ele_df, aes(x = exchange, y = experimentalFlux, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 4), labels = boundary_label$reaction, breaks = boundary_label$color)
-    
-    #ggplot(ele_df_melt, aes(x = exchange, y = value, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ variable + exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 5), labels = boundary_label$reaction, breaks = boundary_label$color)
-    
-    
-    
     }  
-  }  
-reaction_info('r_0005')
+  } 
+
+reaction_info('r_0745')
+reaction_info('r_0249')
 rxnFile[rxnFile$ReactionID == "r_0005",]
 trackedMet = '^NAD\\(\\+\\)'
 
-trackMetConversion('^acetate$')
-trackMetConversion('ergosta-5,7,24\\(28\\)-trien-3beta-ol')
+trackMetConversion('^2-oxoglutarate', T)
+trackMetConversion('^lipoamide', T)
+trackMetConversion('S\\(8\\)-succinyldihydrolipoamide', T)
+trackMetConversion('succinyl-CoA', T)
+trackMetConversion('^succinate', T)
+trackMetConversion('^FADH2', T)
+trackMetConversion('NADH', T)
+
+trackMetConversion('^glyoxylate')
 trackMetConversion('^NAD\\(\\+\\)', T)
-trackMetConversion('ATP$', T)
+trackMetConversion('isocitrate', T)
 trackMetConversion('ubiquinol-6', T)
 trackMetConversion('cytochrome', T)
+trackMetConversion('^ATP', F)
+trackMetConversion('^ADP', F)
+trackMetConversion('^H\\+$', F)
+
 
 rxn_search(named_stoi, 'cytochrome')
 
 trackedMet <- 'ferricytochrome'
 
 
+############## Mass balance of individual conditions ####### 
+
+ele_df_melt <- data.table(melt(composition_balance, id.vars = c("reactions", "condition", "element", "exchange", "color")))
+ele_df_melt[,limitation := chemostatInfo$limitation[chmatch(ele_df_melt$condition, chemostatInfo$condition)],]
+ele_df_melt[,GR := chemostatInfo$DRgoal[chmatch(ele_df_melt$condition, chemostatInfo$condition)],]
+ele_df_melt[,shortvar := factor(ifelse(variable == "netFlux", "OPT", "EXP"), levels = c("EXP", "OPT")),]
 
 
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "bottom", 
+    panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), legend.key.width = unit(3, "line"),
+    strip.background = element_rect(fill = "coral1"))
+    
+for(an_element in unique(ele_df_melt$element)){
+  elemental_mat <- subset(ele_df_melt,element == an_element,)
+  
+  involvedRxns <- elemental_mat[,sum(value != 0), by = reactions]
+  elemental_mat <- elemental_mat[reactions %in% involvedRxns[V1 != 0,]$reactions,]
+  
+  elemental_barplot <- ggplot(elemental_mat, aes(x = exchange, y = value, fill = color)) + barplot_theme + facet_grid(limitation + shortvar ~ GR) + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 5), labels = boundary_label$reaction[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions], breaks = boundary_label$color[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions])
+  print(elemental_barplot + geom_bar(stat = "identity", position = "stack") + ggtitle(paste("Experimental and Optimized -- ", an_element, " -- mass balance")))
+  }
 
 
+ggplot(ele_df_melt, aes(x = exchange, y = value, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ variable + exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 5), labels = boundary_label$reaction, breaks = boundary_label$color)
+    
+
+
+######################
 
 rxNames <- data.frame(reactionID = unique(Sinfo$reaction), Name = unique(Sinfo$reaction))
 rxNames$Name[grep('r_[0-9]+', rxNames$Name)] = unname(rxnIDtoEnz(rxNames$Name[grep('r_[0-9]+', rxNames$Name)]))

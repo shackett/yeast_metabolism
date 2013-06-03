@@ -81,10 +81,17 @@ is.not.zero = function(vec){
 	
 ######### fxns to convert between IDs and species ######
 
-metIDtoSpec <- function(meta){
-	sapply(meta, function(x){
-		corrFile$SpeciesName[corrFile$SpeciesID == x]
-		})}
+metIDtoSpec <- function(meta, includeComp = F){
+	if(includeComp){
+    sapply(meta, function(x){
+       paste(corrFile[corrFile$SpeciesID == x, colnames(corrFile) %in% c("SpeciesName", "Compartment")] , collapse = "-")
+       })
+    }else{
+     sapply(meta, function(x){
+       corrFile$SpeciesName[corrFile$SpeciesID == x]
+       })
+    }
+}
 
 rxnIDtoEnz <- function(rxn){
 	sapply(rxn, function(x){
@@ -211,7 +218,12 @@ trackMetConversion <- function(trackedMet, allRxns = FALSE){
     for(a_rxn in 1:nrow(comp_fluxes)){
       
       rxnStoi <- comp_stoi[comp_stoi[,a_rxn] != 0,a_rxn]*ifelse(comp_fluxes$flux[a_rxn] >= 0, 1, -1)
-      speciesNames <- metIDtoSpec(names(rxnStoi))
+      if(a_compartment == "exchange"){
+        speciesNames <- metIDtoSpec(names(rxnStoi), T)
+        }else{
+          speciesNames <- metIDtoSpec(names(rxnStoi))
+          }
+      
       rxnDir <- reversibleRx$reversible[reversibleRx$rx == comp_fluxes$ID[a_rxn]]
       
       metOfInterest <- unname(rxnStoi)[grep(trackedMet, speciesNames)]
@@ -256,6 +268,90 @@ trackMetConversion <- function(trackedMet, allRxns = FALSE){
   }
   print(compartment_balance)
 }
+
+######## Diagnostic flux prediction methods ##########
+
+maxFlux <- function(){
+  ## Using the current QP model, for each standard reaction (those in the initial model) determine the maximum flux that can be carried through each reaction.
+  ## output the maximum flux for reactions with a finite maximum flux
+  
+  boundModel <- qpModel
+  
+  SinfoBounds <- Sinfo[boundModel$obj != 0,]; SinfoBounds$index = (1:length(boundModel$obj))[boundModel$obj != 0]; SinfoBounds$maxFlux = NA
+  
+  for(a_rxn in SinfoBounds$index){
+    
+    #for each constrained reaction switch from penalizing flux to giving a bonus
+    #overwrite
+    boundModel$obj[a_rxn] <- 10
+    boundModel$A[,a_rxn] <- qpModel$A[,a_rxn]*-1 #reverse stoichiometry and allow for negative flux
+    boundModel$lb[a_rxn] <- -Inf
+    boundModel$ub[a_rxn] <- 0
+    
+    #evaluate
+    solved_bound <- gurobi(boundModel, list(OutputFlag = 0))
+    
+    if(solved_bound$status == "NUMERIC"){
+      #rerun with simplex
+      solved_bound <- gurobi(boundModel, list(method = 1, OutputFlag = 0))
+      SinfoBounds$maxFlux[a_rxn] <- ifelse(solved_bound$status == "UNBOUNDED", Inf, unname(solved_bound$x[a_rxn]*-1))
+      
+    }else{
+      SinfoBounds$maxFlux[a_rxn] <- ifelse(solved_bound$status == "INF_OR_UNBD", Inf, unname(solved_bound$x[a_rxn]*-1))
+    }
+    #print(solved_bound$status)
+    
+    #restore
+    boundModel$obj[a_rxn] <- qpModel$obj[a_rxn]
+    boundModel$A[,a_rxn] <- qpModel$A[,a_rxn]
+    boundModel$lb[a_rxn] <- qpModel$lb[a_rxn]
+    boundModel$ub[a_rxn] <- qpModel$ub[a_rxn]
+  }
+  
+  flux_bounds <- SinfoBounds[!is.na(SinfoBounds$maxFlux) & SinfoBounds$maxFlux != Inf,]
+  flux_bounds
+}
+
+
+loosenFlux <- function(balanceStoi){
+  # allow for unbounded flux of an additional reaction to evaluate effects on flux
+  loose_model <- qpModel
+  
+  balanceVec <- rep(0, times = nrow(loose_model$A))
+  balanceVec[chmatch(balanceStoi$specie, rownames(loose_model$A))] <- balanceStoi$stoi
+  
+  loose_model$A <- cbind(loose_model$A, balanceVec)
+  loose_model$lb <- c(loose_model$lb, -Inf)
+  loose_model$ub <- c(loose_model$ub, Inf)
+  loose_model$Q <- diag(c(diag(loose_model$Q), 0))
+  loose_model$obj <- c(loose_model$obj, 0)
+  
+  solvedModel <- gurobi(loose_model, qpparams)
+  
+  solvedModel
+}
+
+
+forcedFlux <- function(forcedRx){
+  # force the flux through reactions (given by reaction designation) to exceed a provided value
+  require(data.table)
+  
+  forced_model <- qpModel
+  
+  # bound a flux by the forced value and if reversible bound the complementary flux to prevent compensatory reverse flux
+  forced_model$lb[chmatch(FF$rx, Sinfo$rxDesignation)] <- forcedRx$flux
+  forced_model$ub[chmatch(c(sub('_F', '_R', forcedRx$rx[grep('_F$', forcedRx$rx)]), sub('_R', '_F', forcedRx$rx[grep('_R$', forcedRx$rx)])), Sinfo$rxDesignation)]
+  
+  solvedModel <- gurobi(forced_model, qpparams)
+  
+  solvedModel
+}
+
+
+
+
+
+####### Reaction and metabolite information ##########
 
 
 eval_mets <- function(query_met, grep_it = FALSE){
