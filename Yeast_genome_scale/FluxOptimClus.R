@@ -3,6 +3,7 @@
 setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
 
 library(nnls)
+
 options(stringsAsFactors = FALSE)
 
 args <- commandArgs()
@@ -119,6 +120,10 @@ for(rxN in 1:length(rxnList_form)){
   kineticParPrior <- data.frame(distribution = rep(NA, times = length(kineticPars[,1])), par_1 = NA, par_2 = NA) #par1/2 of a uniform are the lower bound and upper bound; par1/2 of a normal are the mean and variance
   kineticParPrior$distribution <- "unif"
   kineticParPrior$par_1 <- -10; kineticParPrior$par_2 <- 10
+  for(exp_param in kineticPars$modelName[!is.na(kineticPars$measured) & kineticPars$measured == TRUE]){
+    kineticParPrior[kineticPars$modelName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(log(met_abund[,colnames(met_abund) == exp_param])) + c(-10,10)
+    }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
+  
   
   lik_track <- NULL
   markov_par_vals <- matrix(NA, ncol = length(kineticPars[,1]), nrow = markov_pars$n_samples)
