@@ -131,6 +131,44 @@ for(rxN in 1:length(thermAnnotate[,1])){
   }
 reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
 
+#### Associate rxns with enzyme ascertainment in proteomics s.t. flux can favor measured pathways ####
+
+enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
+
+prot_matches <- sapply(enzymes, function(x){
+  rxMatches <- chmatch(strsplit(x, '/')[[1]], rownames(enzyme_abund))
+  rxMatches[!is.na(rxMatches)]
+  })
+
+prot_measured <- unlist(lapply(prot_matches, function(x){
+  ifelse(length(x) != 0, max(rowSums(enzyme_abund[x,] != 0)), 0)
+  }))
+
+rxn_pathway <- read.delim("../KEGGrxns/yeastNameDict.tsv") #pathways associated with a protein
+
+# favor flux through chosen central carbon metabolism pathways
+
+pathways <- sapply(rxn_pathway$PATHWAY, function(x){strsplit(x, '__')[[1]]})
+unq_pathways <- unique(unlist(pathways))
+centralC <- c("Glycolysis / Gluconeogenesis", "Citrate cycle (TCA cycle)", "Oxidative phosphorylation")
+
+centralCmatch <- unlist(lapply(pathways, function(x){
+  sum(x %in% centralC) != 0
+  }))
+
+centralCmatchGenes <- rxn_pathway$SYST[centralCmatch]
+centralCmeasured <- chmatch(centralCmatchGenes, rownames(enzyme_abund))
+centralCmeasured <- centralCmeasured[!is.na(centralCmeasured)]
+
+centralCrxnMatch <- unlist(lapply(prot_matches, function(x){
+  ifelse(length(x) != 0, sum(x %in% centralCmeasured) != 0, 0)
+  }))
+
+
+prot_penalty <- (n_c - prot_measured)/(2*n_c) + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
+
+
+
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
 
 treatment_par <- list()
@@ -192,6 +230,8 @@ for(i in 1:n_c){
   }
 possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID)), as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID)))
 
+
+
 #### During LP should the similarity of shadow prices across the nutrient landscape be investigated ####
 
 if(generatePhPP){
@@ -230,9 +270,13 @@ if(generatePhPP){
   }
 }
 
+
+
 #### Determine the compartmentation of each reaction ####
 
 compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$ReactionID == x][1]})
+
+
 
 #### Define species involved in boundary-conditions ####
 
@@ -289,6 +333,8 @@ for(x in 1:length(free_flux)){
 
 
 skip_me = TRUE
+
+
 
 #### Confirm mass balance of reactions ############
 if(skip_me == FALSE){
@@ -419,6 +465,8 @@ rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
 #chem_form[chem_form$ID %in% met_chebi,]
 #rxnparFile[grep("7814", rxnparFile[,3]),]
 
+
+
 #### Search for rxns with only products or reactants ####
 
 is.unbalanced <- rep(NA, times = length(stoiMat[1,]))
@@ -428,6 +476,8 @@ for(i in 1:length(stoiMat[1,])){
 	}
 
 rem.unbalanced <- colnames(stoiMat)[is.unbalanced]
+
+
 
 #### Remove generic reactions - those which are not mass balanced or are generalizations of a class of species ####
 
@@ -463,6 +513,8 @@ reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
 #save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
+
+
 
 #### output files ####
 
@@ -1066,7 +1118,7 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
   panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line")) 
 
 
-ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(condition), y = resid_st*-1)) + facet_wrap(~ reactions, ncol = 2, scale = "free_y") + geom_bar(stat = "identity") + barplot_theme + scale_y_continuous("predicted - experimental flux / sd(experimental") + ggtitle("Fit of experimental and optimized flux")
+ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(condition), y = resid_st*-1)) + facet_wrap(~ reactions, ncol = 2) + geom_bar(stat = "identity") + barplot_theme + scale_y_continuous("predicted - experimental flux / sd(experimental") + ggtitle("Fit of experimental and optimized flux")
 ggsave("flux_residuals.pdf", width = 8, height = 20)
   
 residual_flux_melted <- dcast(residual_flux_stack, formula = reactions ~ condition, value.var = "resid_st")
@@ -1089,7 +1141,6 @@ flux_summary$ceulluarFluxes = fluxMat_per_cellVol
 save(flux_summary, file = "fluxSummaryQP.Rdata")
 
 
-heatmap.2(fluxMat_per_cellVol / (t(t(apply(abs(fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol) != 0,]), 1, mean))) %*% rep(1, n_c)), trace = "none")
 
 
 high_flux <- order(rowSums(abs(fluxMat_per_cellVol)), decreasing = T)
