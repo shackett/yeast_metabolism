@@ -46,17 +46,8 @@ metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
 #compositionFile <- read.delim("../Yeast_comp_energy.txt") #energy required to assimilate biomass components
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
-reversibleRx <- read.delim("../EcoliYeastMatch/revRxns.tsv", sep = "\t", header = TRUE)
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
 
-
-#### Load weizman free energy files and mapping designations ####
-rxDesignations <- read.delim("../KEGGrxns/yeastNameDict.tsv", sep = "\t", header = T)
-rxFreeEnergy <- read.delim("../KEGGrxns/kegg_reactions_PGC_ph5.0.csv", sep = ",", header = T); colnames(rxFreeEnergy) <- c("KEGGID", "freeEnergykJ_mol", "pH", "ionicStrength", "Note")
-rxFreeEnergy$KEGGIDreformat <- sapply(rxFreeEnergy$KEGGID, function(KID){
-    paste(c("K", rep(0, 5 - length(strsplit(as.character(KID), "")[[1]])), KID), collapse = "")
-    })
-reversibleRx$WEIZfreeE = NA; reversibleRx$WEIZdir = NA; reversibleRx$rxFlip = NA; reversibleRx$manual = NA; annotComment = NA
 
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
@@ -69,67 +60,40 @@ if(file.exists("yeast_stoi.R")){
   load("yeast_stoi.R")
 } else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
 
-#named_stoi <- stoiMat
-#rownames(named_stoi) <- metIDtoSpec(rownames(named_stoi))
-#rxn_search(named_stoi, 'glycerol', is_rxn = FALSE)
 
-#### For reactions where proteins match multiple KEGG reactions, manually choose which is the proper match ####
-if(!file.exists("manualKEGGrxns.Rdata")){
-manualRxKEGGmatch <- NULL
-for(rx in reactions){
-  if(enzymes[names(enzymes) == rx] == ""){next}
-  rxEnzymes <- strsplit(enzymes[names(enzymes) == rx], split = '/')[[1]]
-  rxMatches <- rxFreeEnergy[rxFreeEnergy$KEGGIDreformat %in% unique(rxDesignations[rxDesignations$SYST %in% rxEnzymes,]$KEGG),]
-  
-  if(length(rxMatches$KEGGIDreformat) > 1){
-    print(c("Multiple KEGG IDs match the following reaction"))
-    print(reaction_info(rx))
-    print(c("Which is the correct match?"))
-    for(i in 1:length(rxMatches[,1])){
-      print(paste(c(i, rxMatches$KEGGIDreformat[i], rxDesignations$NAME[rxDesignations$KEGG == rxMatches$KEGGIDreformat[i]][1], rxMatches$freeEnergykJ_mol[i]), collapse = " : "))
-      }
-    response <- as.numeric(readline(promp = "Well..."))
-    
-    manualRxKEGGmatch <- rbind(manualRxKEGGmatch, data.frame(reaction = rx, KEGG = rxMatches$KEGGIDreformat[response]))
-    print("----------------------------------------")
-    
-    }
-  #save(manualRxKEGGmatch, file = "manualKEGGrxns.Rdata")
-}
-}else{
-  load("manualKEGGrxns.Rdata")
-}
 
-# Match unambiguous reactions to KEGG-associated free energy - multiple enzymes involved in a reaction or enzymes associated with multiple reactions degenerate this relationship - encorporate manual matching which was done on line 37
-for(rx in reactions){
-  if(enzymes[names(enzymes) == rx] == ""){next}
-  rxEnzymes <- strsplit(enzymes[names(enzymes) == rx], split = '/')[[1]]
-  rxMatches <- rxFreeEnergy[rxFreeEnergy$KEGGIDreformat %in% unique(rxDesignations[rxDesignations$SYST %in% rxEnzymes,]$KEGG),]
-  if(length(rxMatches[,1]) == 1){
-    reversibleRx$WEIZfreeE[reversibleRx$rx == rx] <- rxMatches$freeEnergykJ_mol
-    
-    }else{
-    if(rx %in% manualRxKEGGmatch$reaction[!is.na(manualRxKEGGmatch$KEGG)]){
-      reversibleRx$WEIZfreeE[reversibleRx$rx == rx] <-  rxMatches$freeEnergykJ_mol[rxMatches$KEGGIDreformat == manualRxKEGGmatch$KEGG[manualRxKEGGmatch$reaction == rx]]
-    }}
-}
+### use Vito's implementation of Elad's component contribution free energey prediction ###
 
-#read in manually flipped and directed reactions (for flipped reations, the SM direction will be flipped and EC and Weiz direction will remain the same.  This is because SM (species matching) already flipped the free
-#sign of the free energy of a reaction if substrates and products were reversed.  
+reversibleRx <- data.frame(rx = reactions, reversible = 0, CCdG = NA, CCdGsd = NA, CCdGdir = NA, manual = NA, rxFlip = NA, annotComment = NA)
+
+ccPred <- read.delim("cc_dG_matlab.tsv")
+ccPred$dir <- 0
+ccPred$dir[ccPred$dGr - 1.96*ccPred$dGrSD > 30] <- -1
+ccPred$dir[ccPred$dGr + 1.96*ccPred$dGrSD < -30] <- 1
+
+reversibleRx[chmatch(ccPred$reaction, reversibleRx$rx), colnames(reversibleRx) %in% c("CCdG", "CCdGsd", "CCdGdir")] <- ccPred[,-1]
+
+reversibleRx$reversible[!is.na(reversibleRx$CCdGdir)] <- reversibleRx$CCdGdir[!is.na(reversibleRx$CCdGdir)]
+
+#read in manually flipped and directed reactions
 
 thermAnnotate = read.delim("thermoAnnotate.txt", header = TRUE, sep = "\t")
-for(rxN in 1:length(thermAnnotate[,1])){
+for(rxN in 1:nrow(thermAnnotate)){
   #flip reaction direction (and free energy) if stated directionality is unconventional  
   if(!is.na(thermAnnotate$flip[rxN]) & thermAnnotate$flip[rxN]){
     stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]] <- stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]]*-1
-    reversibleRx[reversibleRx$rx == thermAnnotate$reaction[rxN],colnames(reversibleRx) %in% c("reversible", "SMfreeE")] <- reversibleRx[reversibleRx$rx == thermAnnotate$reaction[rxN],colnames(reversibleRx) %in% c("reversible", "SMfreeE")]*-1
+    reversibleRx$reversible[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- reversibleRx$reversible[reversibleRx$rx == thermAnnotate$reaction[rxN]]*-1
     }
   
   #manually define reaction direction
   reversibleRx$rxFlip[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$flip[rxN]
   reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
   }
-reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
+#reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
+
+#reversibleRx[!is.na(reversibleRx$CCdGdir) & !is.na(reversibleRx$manual),]
+
+
 
 #### Associate rxns with enzyme ascertainment in proteomics s.t. flux can favor measured pathways ####
 
@@ -160,9 +124,9 @@ centralCmatchGenes <- rxn_pathway$SYST[centralCmatch]
 centralCmeasured <- chmatch(centralCmatchGenes, rownames(enzyme_abund))
 centralCmeasured <- centralCmeasured[!is.na(centralCmeasured)]
 
-centralCrxnMatch <- unlist(lapply(prot_matches, function(x){
-  ifelse(length(x) != 0, sum(x %in% centralCmeasured) != 0, 0)
-  }))
+centralCrxnMatch <- sapply(enzymes, function(x){
+  sum(strsplit(x, '/')[[1]] %in% centralCmatchGenes) != 0
+  })
 
 
 prot_penalty <- (n_c - prot_measured)/(2*n_c) + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
@@ -504,12 +468,12 @@ stoiMat[,rxn_search(named_stoi, "growth", is_rxn = T, index = T)]
 
 #look for rxns that produce CO2 and make them irreversible
 
-carb_match <- rxn_search(named_stoi, "carbon dioxide", is_rxn = FALSE, index = TRUE)
+#carb_match <- rxn_search(named_stoi, "carbon dioxide", is_rxn = FALSE, index = TRUE)
 
-co_two_producing_rx <- apply(stoiMat[met_dict == "carbon dioxide",carb_match] < 0, 2, sum) == 0
-co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
+#co_two_producing_rx <- apply(stoiMat[met_dict == "carbon dioxide",carb_match] < 0, 2, sum) == 0
+#co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 
-reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
+#reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
 #save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
@@ -823,8 +787,7 @@ if(QPorLP == "QP"){
   #flux_penalty <- 1/flux_elevation_factor
   
   flux_elevation_factor <- 1000
-  flux_penalty <- 1/flux_elevation_factor
- # flux_penalty <- 0.001
+  flux_penalty <- 1/(10*flux_elevation_factor)
   
   qpModel$A <- S
   qpModel$rhs <- Fzero #flux balance
@@ -836,12 +799,15 @@ if(QPorLP == "QP"){
   
   qpModel$obj <- rep(flux_penalty, length(S[1,])) #min c * v where v >= 0 to 
   qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
+  # lessen penalization for rxns with measured proteins and central C rxns
+  qpModel$obj[qpModel$obj != 0] <- qpModel$obj[qpModel$obj != 0] * prot_penalty[chmatch(Sinfo$reaction[qpModel$obj != 0], names(prot_penalty))]
   
   ### QP-specific output_files ###
   
   residual_flux_stack <- NULL
   composition_balance <- NULL
   
+          
   ### iterate through conditions and optimize the fit of fluxes to boundary and biomass conditions ###
   
   for(treatment in 1:n_c){
@@ -896,12 +862,6 @@ if(QPorLP == "QP"){
         
         qpModel$A[comp_replacement$conversion.index,stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- comp_replacement$change*ifelse(sum(grep('_R$', biomassSpecRx)) != 0, -1, 1)
         
-        #if(sum(grep('_R$', biomassSpecRx))){
-        #  qpModel$ub[stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- 0.2
-        #  }else if(sum(grep('_F$', biomassSpecRx))){
-        #    qpModel$ub[stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- 4
-        #    }
-        
         }
     }
     #qpModel$A[rowSums(qpModel$A[,stacked_comp_offset$index] != 0) != 0,stacked_comp_offset$index]
@@ -918,46 +878,25 @@ if(QPorLP == "QP"){
     qpModel$lb <- qpModel$lb * flux_elevation_factor
     qpModel$ub <- qpModel$ub * flux_elevation_factor
     
-    ##### add an additional rxn which introduces a metabolite of interest ####
     
-    #rxnFile[grep('NADP\\(\\+\\)$', rxnFile$MetName),][1:10,]
-    #ATP: 446
-    #ADP: 400
-    #pi: 1207
-    #NAD+: s_1082
-    #NADH: s_1087
-    #H+: s_0764_b
-    #NADPH: s_1096
-    #NADP+: s_1091
-    
-    
-    #balanceStoi <- data.frame(specie = c("s_0446", "s_0400", "s_1207"), stoi = c(1, -1, -1))
-    #balanceStoi <- data.frame(specie = c("s_1087", "s_1082", "s_0764_b"), stoi = c(1, -1, -1))
-    #balanceStoi <- data.frame(specie = c("s_1096", "s_1091", "s_0764_b"), stoi = c(1, -1, -1))
-    
-    #z <- loosenFlux(balanceStoi)
-    
-    #if(solvedModel$status == "NUMERIC"){
-    #  growth_rate$L1[treatment] <- NA
-    #  growth_rate$L2[treatment] <- NA
-    #  next
-    #  }
-    ##
-    
-    ### Force flux through a reaction to evaluate where it might be plugged up ###
-    
-    #FF <- data.frame(rx = 'r_0745_F', flux = 1e1) #complex I ETC
-    #solvedModel <- forcedFlux(FF)
-    
-    
-    
-    solvedModel <- gurobi(qpModel, qpparams)
-    
-    # which reactions can carry flux #
-    #z <- maxFlux()
    
-    ### outputs ###
+    solvedModel <- gurobi(qpModel, qpparams) #solve with barrier algorithm
     
+    if(solvedModel$status == "NUMERIC"){
+      alt_parms <- qpparams; alt_parms$method <- 1
+      solvedModel <- gurobi(qpModel, alt_parms) #solve with dual simplex
+      }
+    
+    
+    ### Optional flux checks ####
+    
+    #z <- maxFlux() # which reactions can carry flux (slow)
+    #z <- loosenFlux(balanceStoi) # allow for free flux through a defined reaction of choice (with provided stoichiometry)
+    #FF <- data.frame(rx = 'r_0745_F', flux = 1e1) #complex I ETC
+    #z <- forcedFlux(FF) #Force flux through a reaction to evaluate where it might be plugged up
+    
+    
+    ### outputs ###
     
     collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
       frindices <- c(1:length(Sinfo[,1]))[Sinfo$reaction == frcombo]
@@ -1121,16 +1060,20 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
 ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(condition), y = resid_st*-1)) + facet_wrap(~ reactions, ncol = 2) + geom_bar(stat = "identity") + barplot_theme + scale_y_continuous("predicted - experimental flux / sd(experimental") + ggtitle("Fit of experimental and optimized flux")
 ggsave("flux_residuals.pdf", width = 8, height = 20)
   
-residual_flux_melted <- dcast(residual_flux_stack, formula = reactions ~ condition, value.var = "resid_st")
-  residual_flux_stack$resid_st
-
-residual_flux_stack[residual_flux_stack[,2] == "AA flux composition",]
 
 ### for now only look at reactions which carry flux in >= 80% of conditions
-#rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
-#fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
+rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
+fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 
-heatmap.2(fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c)), trace = "none", Colv = F)
+std_flux <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c))
+
+heatmap.2(std_flux, trace = "none", Colv = F)
+
+std_flux_svd <- svd(std_flux)
+plot((std_flux_svd$d^2) / sum(std_flux_svd$d^2), col = "RED", pch = 16)
+plot((std_flux_svd$d^2)[-1] / sum(std_flux_svd$d^2), col = "RED", pch = 16)
+
+
 
 
 flux_summary <- list()
@@ -1143,12 +1086,22 @@ save(flux_summary, file = "fluxSummaryQP.Rdata")
 
 
 
-high_flux <- order(rowSums(abs(fluxMat_per_cellVol)), decreasing = T)
-rownames(fluxMat_per_cellVol)[high_flux][1:50]
+### visulaize flux through individual rxns ###
+
+set.seed(1337)
+rxnsChosen <- sample(nrow(std_flux), 10)
+
+rxnsMelt <- melt(fluxMat_per_cellVol[rxnsChosen,])
+colnames(rxnsMelt) <- c("Rxn", "Condition", "Flux")
+
+scatter_theme <- barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank(), strip.background = element_rect(fill = "cornsilk"), strip.text = element_text(colour = "blue1")) 
 
 
-row_check <- 100
-for(row_check in 1:100){
+ggplot(rxnsMelt, aes(x = factor(Condition), y = Flux)) + geom_point(size = 3, col = "coral1")+  facet_wrap( ~ Rxn, ncol = 2, scale = "free_y") + scatter_theme + scale_x_discrete("Condition") + scale_y_continuous("Flux Carried") + ggtitle("Flux through random reactions")
+
+
+for(row_check in 1:25){
 if(sum(fluxMat_per_cellVol[row_check,] <= 0) == 0){
   plot_bounds <- c(0, max(fluxMat_per_cellVol[row_check,]))
   } else if(sum(fluxMat_per_cellVol[row_check,] <= 0) == n_c){
