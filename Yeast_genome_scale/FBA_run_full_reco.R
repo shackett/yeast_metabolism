@@ -89,8 +89,12 @@ for(rxN in 1:nrow(thermAnnotate)){
   reversibleRx$rxFlip[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$flip[rxN]
   reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
   }
-#reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
-
+reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
+### this method has problems with urea assimilation and sulphatation ###
+#flagged_species <- metIDtoSpec(metabolites)[grep('urea$|sulphate$', metIDtoSpec(metabolites))]
+#flagged_rxns <- colnames(stoiMat[rownames(stoiMat) %in% names(flagged_species),colSums(stoiMat[rownames(stoiMat) %in% names(flagged_species),] != 0) != 0])
+#reversibleRx$rx[!is.na(reversibleRx$CCdGdir) & reversibleRx$CCdGdir == -1]
+#
 #reversibleRx[!is.na(reversibleRx$CCdGdir) & !is.na(reversibleRx$manual),]
 
 
@@ -895,6 +899,14 @@ if(QPorLP == "QP"){
     #FF <- data.frame(rx = 'r_0745_F', flux = 1e1) #complex I ETC
     #z <- forcedFlux(FF) #Force flux through a reaction to evaluate where it might be plugged up
     
+    #metFeed <- data.frame(mets = metabolites, obj = NA)
+    #for(metN in 1:nrow(metFeed)){
+    #  metFeedbalanceStoi <- data.frame(specie = metFeed$mets[metN], stoi = 1)
+    #  metFeed$obj[metN] <- loosenFlux(balanceStoi, justObj = T)
+    #  }
+    #metIDtoSpec(metFeed$mets[metFeed$obj < 1])
+    
+    
     
     ### outputs ###
     
@@ -925,12 +937,6 @@ if(QPorLP == "QP"){
     experimental_precision[experimental_precision == 1] <- NA
     residualFlux$sd <- 1/sqrt(experimental_precision * flux_elevation_factor^2)
     residualFlux[,resid_st := (experimental - net_flux)/sd,]
-    
-    
-    #range(qpModel$A %*% solvedModel$x)
-    
-    #growth_rate$L1[treatment] <- sum(solvedModel$x*loose_model$obj)
-    #growth_rate$L2[treatment] <- sum(t(solvedModel$x) %*% loose_model$Q %*% t(t(solvedModel$x)))
     
     
     growth_rate$L1[treatment] <- sum(solvedModel$x*qpModel$obj)
@@ -1031,7 +1037,6 @@ for(an_element in unique(ele_df_melt$element)){
   }
 
 
-ggplot(ele_df_melt, aes(x = exchange, y = value, fill = color)) + geom_bar(stat = "identity", position = "stack") + barplot_theme + facet_grid(element ~ variable + exchange, scale = "free") + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 5), labels = boundary_label$reaction, breaks = boundary_label$color)
     
 
 

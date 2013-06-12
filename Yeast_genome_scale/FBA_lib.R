@@ -295,10 +295,9 @@ maxFlux <- function(){
       #rerun with simplex
       solved_bound <- gurobi(boundModel, list(method = 1, OutputFlag = 0))
       SinfoBounds$maxFlux[a_rxn] <- ifelse(solved_bound$status == "UNBOUNDED", Inf, unname(solved_bound$x[a_rxn]*-1))
-      
-    }else{
-      SinfoBounds$maxFlux[a_rxn] <- ifelse(solved_bound$status == "INF_OR_UNBD", Inf, unname(solved_bound$x[a_rxn]*-1))
-    }
+      }else{
+        SinfoBounds$maxFlux[a_rxn] <- ifelse(solved_bound$status == "INF_OR_UNBD", Inf, unname(solved_bound$x[a_rxn]*-1))
+        }
     #print(solved_bound$status)
     
     #restore
@@ -313,8 +312,25 @@ maxFlux <- function(){
 }
 
 
-loosenFlux <- function(balanceStoi){
+loosenFlux <- function(balanceStoi, justObj = FALSE){
   # allow for unbounded flux of an additional reaction to evaluate effects on flux
+  
+  #rxnFile[grep('NADP\\(\\+\\)$', rxnFile$MetName),][1:10,]
+  #ATP: 446
+  #ADP: 400
+  #pi: 1207
+  #NAD+: s_1082
+  #NADH: s_1087
+  #H+: s_0764_b
+  #NADPH: s_1096
+  #NADP+: s_1091
+  
+  
+  #balanceStoi <- data.frame(specie = c("s_0446", "s_0400", "s_1207"), stoi = c(1, -1, -1))
+  #balanceStoi <- data.frame(specie = c("s_1087", "s_1082", "s_0764_b"), stoi = c(1, -1, -1))
+  #balanceStoi <- data.frame(specie = c("s_1096", "s_1091", "s_0764_b"), stoi = c(1, -1, -1))
+  
+  
   loose_model <- qpModel
   
   balanceVec <- rep(0, times = nrow(loose_model$A))
@@ -326,9 +342,18 @@ loosenFlux <- function(balanceStoi){
   loose_model$Q <- diag(c(diag(loose_model$Q), 0))
   loose_model$obj <- c(loose_model$obj, 0)
   
-  solvedModel <- gurobi(loose_model, qpparams)
+  solvedModel <- gurobi(loose_model, list(OutputFlag = 0))
   
-  solvedModel
+   if(solvedModel$status == "NUMERIC"){
+      #rerun with simplex
+      solvedModel <- gurobi(loose_model, list(method = 1, OutputFlag = 0))
+      }
+  if(justObj){
+    solvedModel$objval
+    }else{
+      solvedModel
+      }
+  
 }
 
 
