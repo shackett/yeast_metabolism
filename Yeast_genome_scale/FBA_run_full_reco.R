@@ -1067,7 +1067,6 @@ ggsave("flux_residuals.pdf", width = 8, height = 20)
 #rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 #fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 
-#std_flux <- fluxMat_per_cellVol# / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c))
 std_flux <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c))
 
 std_flux_rxnName <- std_flux
@@ -1076,7 +1075,7 @@ std_flux_rxnName <- std_flux_rxnName[grep('boundary|composition', rownames(std_f
 
 write.output(std_flux_rxnName, "Flux_analysis/fluxCarried.tsv")
 
-npc <- 4
+npc <- 5
 impSVD <- svd(std_flux_rxnName, nu = npc, nv = npc)
 impSVD_pcs <- impSVD$v
 colnames(impSVD_pcs) <- paste("PC", c(1:npc))
@@ -1092,7 +1091,7 @@ heatmap.2(std_flux, trace = "none", Colv = F)
 
 flux_summary <- list()
 flux_summary$IDs = rxNames
-flux_summary$ceulluarFluxes = fluxMat_per_cellVol
+flux_summary$cellularFluxes = fluxMat_per_cellVol
 
 
 save(flux_summary, file = "fluxSummaryQP.Rdata")
@@ -1265,39 +1264,39 @@ heatmap.2(t(scale(t(flux_per_gr), TRUE, TRUE)), trace = "n", cexRow = 0.05, col 
 
 ####### BRIDGE TO NETWORK LAYOUT ########
 
-
+  
 
 # generate the stoichiometry matrix from rxns carrying flux
-load("totalStoi.Rdata")
-first_write = FALSE
+#load("totalStoi.Rdata")
+update_layout = FALSE
 
-if(first_write == TRUE){
-#writing a position file from scratch
-Stotal <- S[,colnames(S) %in% rownames(reduced_flux_mat)]
-Stotal <- Stotal[apply(Stotal != 0, 1, sum) != 0,]
+Scollapse <- sapply(unique(Sinfo$reaction), function(x){
+    first_match <- c(1:nrow(Sinfo))[Sinfo$reaction == x][1]
+    S[,first_match]*ifelse(Sinfo$direction[first_match] == "F", 1, -1)
+    })
+Scollapse <- Scollapse[grep('bookkeeping', rownames(Scollapse), invert = T),grep('bookkeeping', colnames(Scollapse), invert = T)]
 
-metSty <- data.frame(SpeciesID = rep(NA, times = length(Stotal[,1])), SpeciesName = rep(NA, times = length(Stotal[,1])), Compartment = rep(NA, times = length(Stotal[,1])), x = rep(NA, times = length(Stotal[,1])), y = rep(NA, times = length(Stotal[,1]))) 
-rxnSty <- data.frame(ReactionID = rep(NA, times = length(Stotal[1,])), Reaction = rep(NA, times = length(Stotal[1,])), Compartment = rep(NA, times = length(Stotal[1,])), x1 = rep(NA, times = length(Stotal[1,])), y1 = rep(NA, times = length(Stotal[1,])), x2 = rep(NA, times = length(Stotal[1,])), y2 = rep(NA, times = length(Stotal[1,]))) 
+rxNames
 
-for(i in 1:length(Stotal[,1])){
-	metSty[i,c(1:3)] <- corrFile[corrFile$SpeciesID %in% rownames(Stotal)[i],][,c(1,2,4)]
-	}
-for(i in 1:length(Stotal[1,])){
-	if(colnames(Stotal)[i] %in% rxnFile$ReactionID){
-		rxnSty[i,c(1:3)] <- rxnFile[rxnFile$ReactionID %in% colnames(Stotal)[i],][1,][c(2,1,3)]
-		}else{
-			rxnSty$ReactionID[i] <- colnames(Stotal)[i]
-			}}
-}else{
+relevant_species <- list()
+relevant_species$reactions = rxNames[grep('bookkeeping', rxNames$reactionID, invert = T),]
+relevant_species$metabolites = rownames(Scollapse)[rowSums(Scollapse[,colnames(Scollapse) %in% rxNames$reactionID] != 0) != 0]
+
+  
+
+if(update_layout == TRUE){
+  
 	#updating an existing position file
 	metSty.old <- read.delim("metSty.tsv", sep = "\t", header = TRUE)
 	rxnSty.old <- read.delim("rxnSty.tsv", sep = "\t", header = TRUE)
 	
-	Stotal <- S[,colnames(S) %in% union(rownames(reduced_flux_mat), rxnSty.old$ReactionID)]
+  
+  
+	Stotal <- Scollapse[,colnames(Scollapse)[colnames(Scollapse) %in% union(relevant_species$reactions$reactionID, rxnSty.old$ReactionID)]]
 	Stotal <- Stotal[apply(Stotal != 0, 1, sum) != 0,]
 	
 	#new rxns
-	new_rxns <- rownames(reduced_flux_mat)[!(rownames(reduced_flux_mat) %in% rxnSty.old$ReactionID)]
+	new_rxns <- relevant_species$reactions$reactionID[!(relevant_species$reactions$reactionID %in% rxnSty.old$ReactionID)]
 	new_mets <- rownames(Stotal)[!(rownames(Stotal) %in% metSty.old$SpeciesID)]
 	
 	metSty_bind <- as.data.frame(matrix(NA, ncol = length(metSty.old[1,]), nrow = length(new_mets)))
@@ -1314,7 +1313,9 @@ for(i in 1:length(Stotal[1,])){
 		}else{
 			rxnSty_bind$ReactionID[i] <- new_rxns[i]
 			}}
-	
+	rxnSty_bind$Reaction[is.na(rxnSty_bind$Reaction)] <- rxnSty_bind$ReactionID[is.na(rxnSty_bind$Reaction)]
+  
+  
 	metSty = rbind(metSty.old, metSty_bind)
 	rxnSty = rbind(rxnSty.old, rxnSty_bind)
 	
@@ -1342,90 +1343,5 @@ image(t(limiting_fluxes))
 #xtable(limiting_fluxes)
 
 
-########## evaluating rxns ########
 
-#query_rxns <- c("protein production")
-
-#eval_mat <- stoiMat[apply(stoiMat[,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns] != 0, 1, sum) != 0,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
-
-######### evaluate metabolite #########
-
-#eval_mat <- stoiMat[,rxnIDtoEnz(colnames(stoiMat)) %in% query_rxns]; rownames(eval_mat) <- metIDtoSpec(rownames(eval_mat)); colnames(eval_mat) <- rxnIDtoEnz(colnames(eval_mat))
-
-reduced_flux_mat[rownames(reduced_flux_mat) %in% c("r_0393", "r_0394"),]
-
-
-query_met <- c("stearoyl")
-
-eval_mets(query_met, TRUE)
-
-metToCHEBI("s_1002")
-#
-########
-
-
-
-
-
-
-named_stoi <- stoiMat
-met_dict <- metIDtoSpec(rownames(named_stoi))
-rxn_dict <- rxnIDtoEnz(colnames(named_stoi))
-
-rownames(named_stoi) <- sapply(c(1:length(named_stoi[,1])), function(x){met_dict[x][[1]]})
-colnames(named_stoi) <- sapply(c(1:length(named_stoi[1,])), function(x){rxn_dict[x][[1]]})
-
-aggregate_rxns <- c(colnames(rxn_search(named_stoi, "isa", is_rxn = TRUE)), colnames(rxn_search(named_stoi, "protein production", is_rxn = TRUE)))
-
-##########
-
-
-#flux through regexed rxn
-renamed_reduced_flux[rownames(renamed_reduced_flux) %in% names(rxn_search(named_stoi, "g", is_rxn = FALSE)[1,]),]
-
-
-
-growth_rate$growth
-
-"uracil boundary"
-
-growth_rate$growth[30]/(treatment_par$'Uracil 0.3'$nutrients$conc_per_t[treatment_par$'Uracil 0.3'$nutrients$nutrient == "uracil"]/as.numeric(compositionFile[compositionFile$MetName %in% "UMP",]$StoiCoef))
-
-
-
-colnames(stoiMat)
-
-
-
-#### looking at extracellular rxns
-
-extra <- stoiMat[,compartment == "c_05"]
-extra_stoi <- extra[apply(extra != 0, 1, sum) != 0,]
-
-met_dict <- metIDtoSpec(rownames(extra_stoi))
-rxn_dict <- rxnIDtoEnz(colnames(extra_stoi))
-
-rownames(extra_stoi) <- sapply(c(1:length(extra_stoi[,1])), function(x){met_dict[x][[1]]})
-colnames(extra_stoi) <- sapply(c(1:length(extra_stoi[1,])), function(x){rxn_dict[x][[1]]})
-
-#look at all reactions involving a metabolite from a particular compartment, that actually carry flux
-
-extra <- stoiMat[rownames(stoiMat) %in% corrFile[corrFile$Compartment == "c_02",]$SpeciesID,apply(stoiMat[rownames(stoiMat) %in% corrFile[corrFile$Compartment == "c_02",]$SpeciesID,] != 0, 2, sum) != 0]
-
-extra_red <- stoiMat[,colnames(stoiMat) %in% colnames(extra)[colnames(extra) %in% rownames(reduced_flux_mat)]]
-extra_red <- extra_red[apply(extra_red != 0, 1, sum) != 0,]
-
-met_dict <- metIDtoSpec(rownames(extra_red))
-rxn_dict <- rxnIDtoEnz(colnames(extra_red))
-
-rownames(extra_red) <- sapply(c(1:length(extra_red[,1])), function(x){met_dict[x][[1]]})
-colnames(extra_red) <- sapply(c(1:length(extra_red[1,])), function(x){rxn_dict[x][[1]]})
-
- 
- 
-
-#fxns
-
-
-	
 	
