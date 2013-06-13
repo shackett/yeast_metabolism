@@ -133,7 +133,7 @@ centralCrxnMatch <- sapply(enzymes, function(x){
   })
 
 
-prot_penalty <- (n_c - prot_measured)/(2*n_c) + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
+prot_penalty <- (ncol(enzyme_abund) - prot_measured)/(2*ncol(enzyme_abund)) + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
 
 
 
@@ -467,8 +467,6 @@ for(l in 1:length(labelz)){
 
 rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
 
-stoiMat[,rxn_search(named_stoi, "growth", is_rxn = T, index = T)]
-
 
 #look for rxns that produce CO2 and make them irreversible
 
@@ -760,7 +758,7 @@ if(QPorLP == "LP"){
       }
     PhPPgenerated <- TRUE #only do this part once
     }  
-  }    
+     
 
 rxNames <- unique(Sinfo$reaction); rxNames[grep('r_[0-9]+', rxNames)] <- unname(rxnIDtoEnz(rxNames[grep('r_[0-9]+', rxNames)]))
 fluxMat <- matrix(NA, ncol = n_c, nrow = length(flux_vectors[[1]]$flux)); colnames(fluxMat) <- names(flux_vectors); rownames(fluxMat) <- rxNames
@@ -771,6 +769,7 @@ for(i in 1:n_c){
   shadowMat[,i] <- flux_vectors[[i]]$shadowPrices
   fluxMat[,i] <- flux_vectors[[i]]$flux
   }
+}
 
 ########### Quadratic programming to match nutrient uptake/excretion rates and produce biomass ####
 
@@ -784,14 +783,8 @@ if(QPorLP == "QP"){
   qpparams <- list(OptimalityTol = 10^-9, FeasibilityTol = 10^-9, BarConvTol = 10^-16)
 
   
-  #flux_elevation_factor <- 10^9 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
-  #flux_penalty <- 10^-6
-  
-  #flux_elevation_factor <- 10^9 # multiply boundary fluxes by a factor so that minute numbers don't effect tolerance
-  #flux_penalty <- 1/flux_elevation_factor
-  
   flux_elevation_factor <- 1000
-  flux_penalty <- 1/(10*flux_elevation_factor)
+  flux_penalty <- 100/(flux_elevation_factor)
   
   qpModel$A <- S
   qpModel$rhs <- Fzero #flux balance
@@ -986,7 +979,7 @@ if(QPorLP == "QP"){
     }  
   } 
 
-reaction_info('r_0745')
+reaction_info('r_0282')
 reaction_info('r_0249')
 rxnFile[rxnFile$ReactionID == "r_0005",]
 trackedMet = '^NAD\\(\\+\\)'
@@ -1007,7 +1000,10 @@ trackMetConversion('cytochrome', T)
 trackMetConversion('^ATP', F)
 trackMetConversion('^ADP', F)
 trackMetConversion('^H\\+$', F)
+trackMetConversion('oxygen', T)
 
+trackMetConversion('hydrogen peroxide', F)
+trackMetConversion('thioredoxin disulfide', F)
 
 rxn_search(named_stoi, 'cytochrome')
 
@@ -1067,16 +1063,28 @@ ggsave("flux_residuals.pdf", width = 8, height = 20)
   
 
 ### for now only look at reactions which carry flux in >= 80% of conditions
-rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
-fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
+#rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
+#fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 
+#std_flux <- fluxMat_per_cellVol# / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c))
 std_flux <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c))
+
+std_flux_rxnName <- std_flux
+rownames(std_flux_rxnName) <- apply(rxNames, 1, function(x){ifelse(x[1] == x[2], x[1], paste(x, collapse = '_'))})
+std_flux_rxnName <- std_flux_rxnName[grep('boundary|composition', rownames(std_flux_rxnName), invert = T),]
+
+write.output(std_flux_rxnName, "Flux_analysis/fluxCarried.tsv")
+
+npc <- 4
+impSVD <- svd(std_flux_rxnName, nu = npc, nv = npc)
+impSVD_pcs <- impSVD$v
+colnames(impSVD_pcs) <- paste("PC", c(1:npc))
+rownames(impSVD_pcs) <- colnames(std_flux_rxnName)
+
+heatmap.2(t(impSVD_pcs), Colv = FALSE, Rowv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,21), denscol = "white")
 
 heatmap.2(std_flux, trace = "none", Colv = F)
 
-std_flux_svd <- svd(std_flux)
-plot((std_flux_svd$d^2) / sum(std_flux_svd$d^2), col = "RED", pch = 16)
-plot((std_flux_svd$d^2)[-1] / sum(std_flux_svd$d^2), col = "RED", pch = 16)
 
 
 
