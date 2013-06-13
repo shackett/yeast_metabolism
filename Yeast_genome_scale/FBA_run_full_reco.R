@@ -784,7 +784,7 @@ if(QPorLP == "QP"){
 
   
   flux_elevation_factor <- 1000
-  flux_penalty <- 100/(flux_elevation_factor)
+  flux_penalty <- 1000/(flux_elevation_factor)
   
   qpModel$A <- S
   qpModel$rhs <- Fzero #flux balance
@@ -1001,6 +1001,7 @@ trackMetConversion('^ATP', F)
 trackMetConversion('^ADP', F)
 trackMetConversion('^H\\+$', F)
 trackMetConversion('oxygen', T)
+trackMetConversion('bicarbonate', F)
 
 trackMetConversion('hydrogen peroxide', F)
 trackMetConversion('thioredoxin disulfide', F)
@@ -1140,7 +1141,7 @@ print(plot(fluxMat_per_cellVol[row_check,] ~ chemostatInfo$actualDR[1:n_c], pch 
 
 ###### output fluxes so that they can be visualzied using S. cerevisae cellular overview #####
 
-choice_conditions <- names(flux_vectors)[grep(0.05, names(flux_vectors))]
+choice_conditions <- names(flux_vectors)#[grep(0.05, names(flux_vectors))]
 cond_rownames <- names(flux_vectors[[1]]$flux)
 cond_flux <- matrix(NA, ncol = length(choice_conditions), nrow = length(cond_rownames)); rownames(cond_flux) <- cond_rownames; colnames(cond_flux) <- choice_conditions
 
@@ -1227,34 +1228,6 @@ heatmap.2(nonNULLshadow, Colv = FALSE, trace = "n", dendrogram = "row", cexRow =
 
 
 
-#determine whether reactions can carry flux under the current boundary conditons
-
-rxnGR <- data.frame(rxn = colnames(S), fluxF = NA, boundedF = NA, fluxR = NA, boundedR = NA)
-x <- t(sapply(rxnGR[1:5,1], optimize_rx_flux))
-rxnGR[,2:5] <- t(sapply(rxnGR[,1], optimize_rx_flux))
-
-optimize_rx_flux <- function(rx){
-	
-	cost1 <- ifelse(colnames(S) %in% rx, -1, 0)
-	linp_solution1 <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = cost1, ispos = FALSE)
-	
-	cost2 <- ifelse(colnames(S) %in% rx, 1, 0)
-	linp_solution2 <- linp(E = S, F = Fzero, G = Gtot, H = htot, Cost = cost2, ispos = FALSE)
-	
-	c(linp_solution1$solutionNorm*-1, linp_solution1$IsError, linp_solution2$solutionNorm*-1, linp_solution2$IsError)
-	
-	}
-
-
-no_flux <- rxnGR$rxn[!((rxnGR$fluxF != 0 | rxnGR$boundedF == 1) | (rxnGR$fluxR != 0 | rxnGR$boundedR == 1))]
-#rxns that can't carry flux 
-rxnIDtoEnz(no_flux)
-
-
-rxnGR$rxn[rxnGR$growth == 0 & rxnGR$bounded == 0]
-
-
-
 
 #colorz <- rep(c(1:5), each = 6)
 #plot(growth_rate$growth, col = colorz, , xlab = "condition", ylab = "growth rate", pch = 16)
@@ -1270,50 +1243,17 @@ rxnGR$rxn[rxnGR$growth == 0 & rxnGR$bounded == 0]
 #names(rxnstoi) <- metIDtoSpec(names(rxnstoi))
 #rxnstoi
 
-save(flux_vectors, growth_rate, treatment_par, file = "Flux_analysis/SweaveFluxFilez.Rdata")
-save(rxnFile, rxnparFile, corrFile, compFile, metComp, compositionFile, nutrientFile, reversibleRx, file = "Flux_analysis/SweaveNetFilez.Rdata")
+save(flux_vectors, growth_rate, treatment_par, file = "Flux_analysis/knitrFluxFilez.Rdata")
+save(rxnFile, rxnparFile, corrFile, compFile, metComp, chemostatInfo, nutrientFile, reversibleRx, file = "Flux_analysis/knitrNetFilez.Rdata")
 
 
 
 
 
-all_rxns <- NULL
-for(treatment in 1:length(names(treatment_par))){
-	all_rxns <- union(all_rxns, names(flux_vectors[[names(flux_vectors)[treatment]]]))
-	}
-
-specified_rxns <- c(grep("r_", all_rxns), grep("boundary", all_rxns))
-
-ordered_rxns <- all_rxns[c(specified_rxns, c(1:length(all_rxns))[!(all_rxns %in% all_rxns[specified_rxns])])]
-
-cond_fluxes <- matrix(NA, ncol = length(names(treatment_par)), nrow = length(all_rxns))
-rownames(cond_fluxes) <- ordered_rxns
-colnames(cond_fluxes) <- names(treatment_par)
-
-for(treatment in 1:length(names(treatment_par))){
-	fluxes <- flux_vectors[[names(treatment_par)[treatment]]]
-
-	cond_fluxes[,treatment] <- unlist(sapply(rownames(cond_fluxes), function(x){ifelse(is.null(fluxes[names(fluxes) %in% x]),NA,fluxes[names(fluxes) %in% x])}))
-
-	}
-
-reduced_flux_mat <- cond_fluxes[apply(cond_fluxes != 0, 1, sum) != 0,]
-reduced_flux_mat <- reduced_flux_mat[!is.na(apply(reduced_flux_mat, 1, sd, na.rm = TRUE)),]
-renamed_reduced_flux <- reduced_flux_mat; rownames(renamed_reduced_flux) <- c(rxnIDtoEnz(rownames(reduced_flux_mat)[grep("r_", rownames(reduced_flux_mat))]), rownames(reduced_flux_mat)[grep("r_", rownames(reduced_flux_mat), invert = TRUE)])
-
-std.reduced_flux_mat <- (renamed_reduced_flux - apply(renamed_reduced_flux, 1, mean, na.rm = TRUE))/apply(renamed_reduced_flux, 1, sd, na.rm = TRUE)
-
-#write.table(reduced_flux_mat, file = "carriedFlux.tsv", sep = "\t", row.names = TRUE, col.names = TRUE)
-
-heatmap.2(std.reduced_flux_mat, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.05, col = green2red(1000))
-
-heatmap.2(std.reduced_flux_mat[1:50,], Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.5, col = green2red(1000))
 
 
 
-#look at the subset of rxns carrying flux in ura and leu
 
-renamed_reduced_flux[apply(renamed_reduced_flux[,!(growth_rate$limit %in% c("Leucine", "Uracil"))] != 0, 1, sum) == 0,]
 
 
 #heatmap of fluxes-per-unit growth
