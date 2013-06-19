@@ -90,12 +90,6 @@ for(rxN in 1:nrow(thermAnnotate)){
   reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
   }
 reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
-### this method has problems with urea assimilation and sulphatation ###
-#flagged_species <- metIDtoSpec(metabolites)[grep('urea$|sulphate$', metIDtoSpec(metabolites))]
-#flagged_rxns <- colnames(stoiMat[rownames(stoiMat) %in% names(flagged_species),colSums(stoiMat[rownames(stoiMat) %in% names(flagged_species),] != 0) != 0])
-#reversibleRx$rx[!is.na(reversibleRx$CCdGdir) & reversibleRx$CCdGdir == -1]
-#
-#reversibleRx[!is.na(reversibleRx$CCdGdir) & !is.na(reversibleRx$manual),]
 
 
 
@@ -478,7 +472,6 @@ rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
 #reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
 
 
-#save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
 
 
 
@@ -493,7 +486,7 @@ if(QPorLP == "QP"){
   }
 
 flux_vectors <- list()
-  
+#save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
 
 ######################## Set up the equality and inequality constriants for FBA ################
 
@@ -1321,7 +1314,7 @@ if(update_layout == TRUE){
 	
 	}
 
-save(Stotal, metSty, rxnSty, reversibleRx, file = "totalStoiAux.Rdata")
+save(Stotal, metSty, rxnSty, reversibleRx, relevant_species, file = "totalStoiAux.Rdata")
 
 write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
 write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)

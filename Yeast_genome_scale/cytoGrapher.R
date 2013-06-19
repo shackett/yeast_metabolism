@@ -7,14 +7,64 @@ library(combinat)
 
 max.add.new <- 2000
 
-#Read in reaction which are going to be laid out - those which carried flux under some condition generated in FBA_run_full_reco.R.  Also load fluxes across each condition.
+# read in reaction which are going to be laid out - those which carried flux under some condition generated in FBA_run_full_reco.R.  Also load fluxes across each condition.
 
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 load("totalStoiAux.Rdata")
-stoisub <- Stotal
+load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata")
 
-#reorder metSty and rxnSty to reflect the row and column names of S
+### replace composition reactions (where for instance all amino acids are bundled together into AA flux composition because this is the appropriate measured pool)
+### using species-specific boundary fluxes - i.e. valine incorporated into protein with the concaminant hydrolysis of ATP/GTP
+
+stoisub <- Stotal
+stoisub <- stoisub[,grep('composition', colnames(stoisub), invert = TRUE)]
+
+
+# find the sIDs of each metabolite in the composition function
+biomassSpecies <- unique(c(comp_by_cond$compositionFile$AltName, colnames(comp_by_cond$biomassExtensionE)[-1]))
+resource_matches <- lapply(biomassSpecies, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
+biomassMet <- NULL
+for(x in 1:length(biomassSpecies)){
+biomassMet <- rbind(biomassMet, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "cytoplasm"],])
+}
+biomassMet$stoisubIndex <- chmatch(biomassMet$SpeciesID, rownames(stoisub))
+
+
+### matrix with composition stoichiometry which will be added to reactions
+stoiAppended <- NULL
+
+# maintenance ATP hydrolysis
+rxStoi <- data.frame(specie = comp_by_cond$compositionFile$AltName[comp_by_cond$compositionFile$varCategory == "Maintenance ATP hydrolysis"], sID = NA, rowIndex = NA, coef = NA)
+rxStoi$sID <- biomassMet$SpeciesID[chmatch(rxStoi$specie, biomassMet$SpeciesName)]
+rxStoi$rowIndex <- biomassMet$stoisubIndex[chmatch(rxStoi$specie, biomassMet$SpeciesName)]
+rxStoi$coef <- ifelse(rxStoi$specie == "ATP", -1, 1)
+
+atpOut <- matrix(0, ncol = 1, nrow = nrow(stoisub))
+atpOut[rxStoi$rowIndex,] <- rxStoi$coef
+colnames(atpOut) <- "Maintenance ATP hydrolysis"
+stoiAppended <- cbind(stoiAppended, atpOut)
+
+# all other species
+
+for(specie in comp_by_cond$biomassExtensionE$name){
+  rxStoi <- data.table(specie = c(specie, colnames(comp_by_cond$biomassExtensionE)[-1]), sID = NA, rowIndex = NA, coef = unlist(c(-1, comp_by_cond$biomassExtensionE[comp_by_cond$biomassExtensionE$name == specie, -1])))
+  rxStoi$sID <- biomassMet$SpeciesID[chmatch(rxStoi$specie, biomassMet$SpeciesName)]
+  rxStoi$rowIndex <- biomassMet$stoisubIndex[chmatch(rxStoi$specie, biomassMet$SpeciesName)]
+
+  
+  specOut <- matrix(0, ncol = 1, nrow = nrow(stoisub))
+  specOut[rxStoi[,sum(coef), by = rowIndex]$rowIndex,] <- rxStoi[,sum(coef), by = rowIndex]$V1
+  colnames(specOut) <- paste(specie, "to biomass") 
+  stoiAppended <- cbind(stoiAppended, specOut)
+  }
+
+stoisub <- cbind(stoisub, stoiAppended)
+
+
+
+
+### reorder metSty and rxnSty to reflect the row and column names of S
 metSty = read.delim("metSty.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
 metSty$y <- metSty$y*-1
 
@@ -151,6 +201,7 @@ while(length(rxn_to_do) != 0){
     if(sum(!(names(principal_change) %in% rownames(met_pos))) != 0){
       print(paste("some species are undefined - probably because they were split:", names(principal_change)[!(names(principal_change) %in% rownames(met_pos))]))
       print(paste("check reaction", colnames(stoisub)[rx]))
+      next
     }
     
     if(n_react == 0 | n_prod == 0){
@@ -166,7 +217,7 @@ while(length(rxn_to_do) != 0){
       
       if(length(ndefined_react) == 0 & length(ndefined_prod) == 0){
         
-        met_pos[rownames(met_pos) %in% rownames(defined_mets)[is.na(defined_mets$x)]] <- 1
+        met_pos[rownames(met_pos) %in% rownames(defined_mets)[is.na(defined_mets$x)],] <- 1
         rxn_nodes[rx,1:2] <- c(2,0)
         rxn_nodes[rx,3:4] <- c(2,2)
         
@@ -177,12 +228,23 @@ while(length(rxn_to_do) != 0){
         rxn_nodes[rx,1:2] <- c(mean(defined_mets$x) + 1, mean(defined_mets$y) - 1)
         rxn_nodes[rx,3:4] <- c(mean(defined_mets$x) + 1, mean(defined_mets$y) + 1)
       }
+    next
     }
+    
+    ### position metabolites and reactions where either only substrates or only reactants have already been laid out (or in the case of neither lay arbitrarely) ###
     
     #if only either a subset of products or reactants is defined, but not both, the principal direction vector (going from reactants to products) is determined by the center of the graph.  Otherwise this vector is determined by the position of the defined metabolites, making adjustments to account for whether the number of principal products and reactants is odd or even
     #if there are already reactions attached to a metabolite polarize the new reaction in the opposite direction from the mean angle
     
     if(length(ndefined_react) == 0 | length(ndefined_prod) == 0){
+      
+      if(length(ndefined_react) == 0 & length(ndefined_prod) == 0){
+        met_pos[rownames(met_pos) %in% rownames(defined_mets)[is.na(defined_mets$x)],] <- 1
+        rxn_nodes[rx,1:2] <- c(2,0)
+        rxn_nodes[rx,3:4] <- c(2,2)
+        next  
+      }
+      
       #use ifelse to indicate whether reactants or products were defined
       
       reactDef = ifelse(length(ndefined_react) != 0, TRUE, FALSE)
@@ -244,6 +306,8 @@ while(length(rxn_to_do) != 0){
         met_pos[rownames(met_pos) %in% names(principal_change[changing]),] <- met_posn[[i]]
       }
     }
+    
+    ### position metabolites and reactions where some substrates and reactants have already been laid out ###
     
     if(length(ndefined_react) != 0 & length(ndefined_prod) != 0){
       
@@ -308,6 +372,9 @@ while(length(rxn_to_do) != 0){
     
   }
   
+  #if(!all(!is.nan(rxn_nodes[rx,])) | !all(!is.nan(unlist(met_pos[rownames(met_pos) %in% names(principal_change),])))){print("die"); die}
+     
+     
   def_splits <- rownames(met_pos)[!is.na(met_pos[,1])][sapply(c(1:length(rownames(met_pos)[!is.na(met_pos[,1])])), function(x){rownames(met_pos)[!is.na(met_pos[,1])][x] %in% split.metab$new_name})]
   all_semi_defined <- union(rownames(met_pos)[apply(is.na(met_pos), 1, sum) == 0], split.metab$metabolite[split.metab$new_name %in% def_splits])
   
@@ -338,18 +405,25 @@ while(length(rxn_to_do) != 0){
 }
 
 
+c(1:nrow(rxn_nodes))[rownames(rxn_nodes) == "r_1521"]
+
 
 #overwrite some nodes with pre-specified coordinates
 for(i in 1:length(nodeOver[,1])){
 	rxn_nodes[nodeOver$reaction[i],] <- unlist(nodeOver[i, colnames(nodeOver) %in% c("xsub", "ysub", "xprod", "yprod")])
 	}
 	
-	
 
 
 
 
 
+
+#### reduce reactions (rxn_nodes) and metabolites (met_pos) to the set of reactions which carry flux under some condition ####
+
+
+
+### optionally add edges and nodes for cofactors ###
 
 
 ########## Add the created reaction diagram to cytoscape and specify attributes allowing for flexible visualization ######
