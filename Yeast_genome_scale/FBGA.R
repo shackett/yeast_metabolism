@@ -100,8 +100,17 @@ reaction_pred_log <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nC
 reaction_pred_linear <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, TSS = NA)
 
 
-cond_mapping <- data.frame(flux_cond = names(rxnList[[1]]$flux), enzyme_reordering = sapply(toupper(chemostatInfo$condition), function(x){c(1:length(colnames(rxnList[[1]]$enzymeAbund)))[colnames(rxnList[[1]]$enzymeAbund) == x]})) 
+cond_mapping <- data.frame(flux_cond = names(rxnList[[1]]$flux), 
+                           enzyme_reordering = sapply(toupper(rownames(rxnList[[1]]$rxnMet)), 
+                                                      function(x){
+                                                        c(1:length(colnames(rxnList[[1]]$enzymeAbund)))[colnames(rxnList[[1]]$enzymeAbund) == x]})) 
 cond_mapping$enzyme_cond = colnames(rxnList[[1]]$enzymeAbund)[cond_mapping$enzyme_reordering]
+cond_mapping$met_cond = rownames(rxnList[[1]]$rxnMet)
+
+# check if everything is correctly ordered
+if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapping$enzyme_cond == cond_mapping$met_cond)){
+  warning('There is a problem with the order of the conditions. (check cond_mapping)')
+}
 
 for(rxN in 1:length(rxnList)){
   reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeAbund[,1])
