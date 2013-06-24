@@ -13,14 +13,14 @@ load("paramOptim.Rdata")
 run_summary <- list() #### MCMC run output and formatted inputs
 
 markov_pars <- list()
-    markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-    markov_pars$n_samples <- 10000 #how many total markov samples are desired
-    markov_pars$burn_in <- 500 #how many initial samples should be skipped
+markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+markov_pars$n_samples <- 10000 #how many total markov samples are desired
+markov_pars$burn_in <- 500 #how many initial samples should be skipped
 
 markov_pars <- list()
-   markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-   markov_pars$n_samples <- 100 #how many total markov samples are desired
-   markov_pars$burn_in <- 0 #how many initial samples should be skipped
+markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+markov_pars$n_samples <- 100 #how many total markov samples are desired
+markov_pars$burn_in <- 0 #how many initial samples should be skipped
 
 
 run_summary$markov_pars <- markov_pars
@@ -35,12 +35,12 @@ par_draw <- function(updates){
   for(par_n in updates){
     if(kineticParPrior$distribution[par_n] == "unif"){
       draw[par_n] <- runif(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
-      } else if(kineticParPrior$distribution[par_n] == "unif"){
+    } else if(kineticParPrior$distribution[par_n] == "unif"){
       draw[par_n] <- rnorm(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
-      }
     }
-  draw
   }
+  draw
+}
 
 lik_calc <- function(proposed_params){
   #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
@@ -57,7 +57,7 @@ lik_calc <- function(proposed_params){
   
   sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
   
-  }
+}
 
 n_c <- length(rxnList_form[[1]]$flux)
 
@@ -72,10 +72,12 @@ for(rxN in 1:length(rxnList_form)){
   
   ### Create a data.frame describing the relevent parameters for the model ###
   kineticPars <- data.frame(rel_spec = c(rxnSummary$enzymeAbund[,1], colnames(rxnSummary$rxnMet)), 
-  SpeciesType = c(rep("Enzyme", times = length(rxnSummary$enzymeAbund[,1])), rep("Metabolite", times = length(colnames(rxnSummary$rxnMet)))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
+                            SpeciesType = c(rep("Enzyme", times = length(rxnSummary$enzymeAbund[,1])), 
+                                            rep("Metabolite", times = length(colnames(rxnSummary$rxnMet)))), 
+                            modelName = NA, commonName = NA, formulaName = NA, measured = NA)
   kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste("E", rxnSummary$rxnID, sep = "_")
-  kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metsID2tID[names( rxnSummary$metsID2tID) == x]}))
-  kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metNames[names(rxnSummary$metNames) == x]}))
+  kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
+  kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- rxnSummary$metNames[kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]]
   kineticPars$commonName[kineticPars$SpeciesType == "Enzyme"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
   kineticPars$formulaName[kineticPars$SpeciesType == "Metabolite"] <- paste("K", rxnSummary$rxnID, kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"], sep = "_")
   
@@ -86,16 +88,16 @@ for(rxN in 1:length(rxnList_form)){
   
   ### Create a matrix containing the metabolites and enzymes 
   enzyme_abund <- t(rxnSummary$enzymeAbund[,cond_mapping$enzyme_reordering]); colnames(enzyme_abund) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
-  met_abund <- rxnSummary$rxnMet[cond_mapping$met_reordering,]
+  met_abund <- rxnSummary$rxnMet
   met_abund <- met_abund[,colnames(met_abund) %in% kineticPars$rel_spec]
   
   if(length(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]) <= 1){
     met_abund <- data.frame(met_abund)
     colnames(met_abund) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
     kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- !all(is.na(met_abund))
-    }else{
-      kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
-      }
+  }else{
+    kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
+  }
   
   
   ### set missing data to invariant across conditions
@@ -122,7 +124,7 @@ for(rxN in 1:length(rxnList_form)){
   kineticParPrior$par_1 <- -10; kineticParPrior$par_2 <- 10
   for(exp_param in kineticPars$modelName[!is.na(kineticPars$measured) & kineticPars$measured == TRUE]){
     kineticParPrior[kineticPars$modelName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(log(met_abund[,colnames(met_abund) == exp_param])) + c(-10,10)
-    }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
+  }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
   
   
   lik_track <- NULL
@@ -142,36 +144,36 @@ for(rxN in 1:length(rxnList_form)){
       if(runif(1, 0, 1) < exp(proposed_lik - current_lik)){
         current_pars <- proposed_par
         current_lik <- proposed_lik
-        }
       }
+    }
     
     if(i > markov_pars$burn_in){
       if((i - markov_pars$burn_in) %% markov_pars$sample_freq == 0){
         markov_par_vals[(i - markov_pars$burn_in)/markov_pars$sample_freq,] <- current_pars
         lik_track <- c(lik_track, current_lik)
-        }
       }
     }
+  }
   
   #colnames(markov_par_vals) <- ifelse(kineticPars$SpeciesType == "keq", "keq", kineticPars$commonName)
   colnames(markov_par_vals) <- kineticPars$rel_spec
-    
+  
   kineticPars$formatted[kineticPars$SpeciesType != "keq"] <- unname(sapply(kineticPars$commonName[kineticPars$SpeciesType != "keq"], function(name_int){
     if(length(strsplit(name_int, split = "")[[1]]) >= 25){
       split_name <- strsplit(name_int, split = "")[[1]]
       split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(20 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
       split_name[split_pois] <- "\n"
       paste(split_name, collapse = "")
-      }else{name_int}
-    }))
+    }else{name_int}
+  }))
   kineticPars$formatted[kineticPars$SpeciesType == "keq"] <- "keq"
   
   run_summary[[names(rxnList_form)[rxN]]]$kineticPars <- kineticPars
   run_summary[[names(rxnList_form)[rxN]]]$markovChain <- markov_par_vals
   run_summary[[names(rxnList_form)[rxN]]]$likelihood <- lik_track
   
-  }
+}
 
-  
+
 save(run_summary, file = paste(c("paramSets/paramSet", runNum, ".Rdata"), collapse = ""))
 

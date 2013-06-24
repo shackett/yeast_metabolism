@@ -542,13 +542,23 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     geom_point(data = flux_plot, aes(x = DR, y = actual, col = condition, size = DR*50)) + scale_size_identity() + 
     scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux predicted from FBA - actual")
     
-  all_species <- data.frame(run_rxn$enzymes, run_rxn$metabolites)
+  #Order the metabolite vector correctly
+  condMet <- row.names(run_rxn$metabolites)
+  condMet <- toupper(gsub('3','30',condMet))
+  
+  ordV <- 1:nrow(run_rxn$enzymes)
+  names(ordV) <- condMet
+  
+  
+  all_species <- data.frame(run_rxn$enzymes, run_rxn$metabolites[ ordV[row.names(run_rxn$enzymes)] ,])
   colnames(all_species) <- run_rxn$all_species$commonName
   
   all_species_tab <- run_rxn$all_species[colSums(all_species != 1) != 0,]
   all_species <- all_species[,colSums(all_species != 1) != 0]
   
-  species_df <- melt(data.frame(all_species, condition = chemostatInfo$limitation, DR = chemostatInfo$actualDR, flux = run_rxn$flux), id.vars = c("condition", "DR", "flux"))
+  species_df <- melt(data.frame(all_species, condition = chemostatInfo$limitation, 
+                                DR = chemostatInfo$actualDR, flux = run_rxn$flux),
+                                id.vars = c("condition", "DR", "flux"))
   
   output_plots$species <- ggplot() + geom_path(data = species_df, aes(x = DR, y = value, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free_y") +
     scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_y_continuous("Relative concentration") +
@@ -571,28 +581,18 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   param_interval <- exp(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
   param_interval <- data.frame(cbind(t(param_interval), median = exp(apply(par_markov_chain, 2, median)), MLE = exp(par_markov_chain[which.max(par_likelihood$likelihood),])))
   
-  par_stack <- rep(1, n_c) %*% t(exp(par_markov_chain[which.max(par_likelihood$likelihood),])); colnames(par_stack) <- run_rxn$kineticPars$formulaName
+  n_c <- nrow(run_rxn$metabolites )
+  
+  # take the maximum likelihood estimate
+  par_stack <- rep(1, n_c) %*% t(exp(par_markov_chain[which.max(par_likelihood$likelihood),]))
+  colnames(par_stack) <- run_rxn$kineticPars$formulaName
   occupancy_vals <- data.frame(run_rxn$metabolites, par_stack)
   predOcc <- model.matrix(run_rxn$occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
- 
+  
   enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*run_rxn$enzymes #occupany of enzymes * relative abundance of enzymes
   flux_fit <- nnls(enzyme_activity, run_rxn$flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
   
   fit_summary <- data.frame(residDF = sum(run_rxn$flux != 0) - length(par_stack[1,]), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
-  
-  ### using flux fitted from the median parameter set, how much variance is explained
-  fit_summary$parametricFit = anova(lm(run_rxn$flux ~ flux_fit$fitted))$S[1]
-  
-  ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
-  NNLSmetab <- run_rxn$metabolites * -1*(rep(1, n_c) %*% t(sapply(colnames(run_rxn$metabolites), function(x){run_rxn$rxnSummary$rxnStoi[names(run_rxn$rxnSummary$rxnStoi) == names(run_rxn$rxnSummary$metsID2tID)[run_rxn$rxnSummary$metsID2tID == x]]})))
-    
-  if(all(run_rxn$flux < 0)){
-    NNLSanova <- anova(lm(-1*run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)$fitted))
-    fit_summary$NNLS <- ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
-    }else{
-      NNLSanova <- anova(lm(run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)$fitted))
-      fit_summary$NNLS = ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
-    }
   
   
   ### using LS regression, how much variance is explained 
@@ -601,12 +601,40 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   fit_summary$LS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S[1:2])
   fit_summary$TSS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S)
   
-  output <- list()
-    output$fit_summary <- fit_summary
-    output$param_interval <- param_interval
-    output$fitted_flux <- flux_fit$fitted
-  output
+  ### using flux fitted from the MLE parameter set, how much variance is explained
+  #fit_summary$parametricFit = anova(lm(run_rxn$flux ~ flux_fit$fitted+0))$S[1]
+  
+
+  
+  fit_summary$parametricFit <- fit_summary$TSS-sum((flux_fit$residuals)^2)
+  
+  
+  ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
+  NNLSmetab <- run_rxn$metabolites * -1*(rep(1, n_c) %*% t(sapply(colnames(run_rxn$metabolites), function(x){
+    run_rxn$rxnSummary$rxnStoi[names(run_rxn$rxnSummary$rxnStoi) == names(run_rxn$rxnSummary$metsID2tID)[run_rxn$rxnSummary$metsID2tID == x]]})))
+  
+  if(all(run_rxn$flux < 0)){
+    #NNLSanova <- anova(lm(-1*run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)$fitted +0))
+    #fit_summary$NNLS <- ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
+    
+    tpred  <-nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)$residuals
+    fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
+  }else{
+    #NNLSanova <- anova(lm(run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)$fitted+0))
+    #fit_summary$NNLS = ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
+    
+    tpred <- nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)$residuals
+    fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
   }
+  
+
+  
+  output <- list()
+  output$fit_summary <- fit_summary
+  output$param_interval <- param_interval
+  output$fitted_flux <- flux_fit$fitted
+  output
+}
 
 
 param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
