@@ -33,7 +33,7 @@ library(ggplot2)
 library(reshape2)
 
 opts_knit$set(progress = TRUE, verbose = TRUE)
-opts_chunk$set(echo = FALSE)
+opts_chunk$set(echo = FALSE, fig.width = 15, fig.height = 15)
 
 
 setwd('~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics')
@@ -1197,7 +1197,6 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 	#system("R64 callEM.R")
 
 	}
-write.table(t(prot_abund[,alpha_pres == 1]), file = "proteinAbundance.tsv", sep = "\t", row.names = T, col.names = T, quote = F)
 
 #prot_abund_final <- prot_abund[,c(1:n_prot)[matched_prots]]
 prot_abund_final <- prot_abund
@@ -1213,6 +1212,9 @@ mixing_fract <- mixing_fract[,!(colSums(mixing_fract) == 0)]
 prot_abund_final[prot_abund_final == 0] <- NA
 
 n_prot <- length(prot_abund_final[1,])	
+
+write.output(t(prot_abund_final), "proteinAbundance.tsv")
+
 @
 
 

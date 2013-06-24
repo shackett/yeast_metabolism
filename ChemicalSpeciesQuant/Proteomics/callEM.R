@@ -62,6 +62,8 @@ for(entry in 1:length(entry_split)){
   relFract[[entry]] <- rep((1/length(subGraphs[[entry]])), times =  length(subGraphs[[entry]]))  
 }
 
+#plot_proteinConnections(overlapMat)
+
 
 
 #save the estimates of mixing fractions generated on a per-peptide basis
@@ -81,22 +83,18 @@ param_track$mixing_fract[[1]] <- as.matrix(mixing_fract) #for some reason initia
 
 t <- 1
 while(continue_it){
-	
+  
 	#update protein abundances: using integrated likelihood
 	#update protein means (c x j)
 	
   prot_abund = ((uniquePepMean*uniquePepPrecision) %*% Diagonal(n_p, pi_fit) %*% mixing_fract)/(uniquePepPrecision %*% Diagonal(n_p, pi_fit) %*% mixing_fract)
 	prot_abund <- as.matrix(Matrix(prot_abund, sparse = FALSE))
-	prot_abund[is.nan(prot_abund)] <- 0
-	
+	prot_abund[is.nan(prot_abund) | is.infinite(prot_abund)] <- 0
   
-  #if all peptides attributed to a protein are called "divergent" then initialize its trend as the median of matched peptides for each condition
-	#divOverride <- colSums(mixing_fract * pi_fit) == 0; divOverride[alpha_pres == 0] <- FALSE
-	#prot_abund[,divOverride] <- prot_abund_over[,divOverride]
-  
-	#update protein precision
+  #update protein precision
 	prot_prec <- uniquePepPrecision %*% Diagonal(n_p, pi_fit) %*% mixing_fract
 	
+  
 	#update pi - relative prob peptide match based on bayes factors
   
   prot_matchLik <- -(1/2)*uniquePepPrecision*(((prot_abund %*% Diagonal(n_prot, alpha_pres) %*% t(mixing_fract)) - uniquePepMean)^2)
@@ -109,9 +107,10 @@ while(continue_it){
   
   for(peptide in ambig_peps){
     n_matches <- sum(sparse_mapping[peptide,]*alpha_pres)
-    solution <- lsei(A = prot_abund[,sparse_mapping[peptide,]*alpha_pres == 1]*uniquePepPrecision[,peptide], B = uniquePepMean[,peptide] * uniquePepPrecision[,peptide], E = t(rep(1, times = n_matches)), F = 1, G = diag(n_matches), H = rep(0, times = n_matches))$X
-    mixing_fract_inconsistent[peptide,sparse_mapping[peptide,]*alpha_pres == 1] <- solution
-    }
+    if(n_matches != 0){
+      solution <- lsei(A = prot_abund[,sparse_mapping[peptide,]*alpha_pres == 1]*uniquePepPrecision[,peptide], B = uniquePepMean[,peptide] * uniquePepPrecision[,peptide], E = t(rep(1, times = n_matches)), F = 1, G = diag(n_matches), H = rep(0, times = n_matches))$X
+      mixing_fract_inconsistent[peptide,sparse_mapping[peptide,]*alpha_pres == 1] <- solution
+      }}
   
   ### update mixing fractions based on weighted quadratic programming over each isolated bipartite graph ####
   for(graph_part in 1:length(subGraphs)){
@@ -131,6 +130,8 @@ while(continue_it){
     subPepAbund <- uniquePepMean[,relPep]
     subPepPrec <- uniquePepPrecision[,relPep]
     subMap <- sparse_mapping[relPep, relProt]
+    if(is.numeric(subMap)){subMap <- matrix(subMap, ncol = length(subMap)); colnames(subMap) <- names(sparse_mapping[relPep, relProt]); rownames(subMap) <- rownames(sparse_mapping)[relPep]}
+    
     #mixing_fract[relPep, relProt]
     ### Find mixing proportions for observed combination of peptide-protein matches
     
@@ -160,6 +161,7 @@ while(continue_it){
       protStack <- protStack[,matchedCombo == 1]
       
       solution <- lsei(A = protStack, B = pepVec, E = rep(1, sum(matchedCombo)), F = 1, G = diag(rep(1, sum(matchedCombo))), H = rep(0, times = sum(matchedCombo)))$X
+      solution <- sapply(solution, function(x){max(0, x)})
       combo_mixes[a_combo,matchedCombo==1] <- solution
       combo_mixes[a_combo,matchedCombo==0] <- NA
       combo_precision <- c(combo_precision, precTotal)
@@ -176,7 +178,14 @@ while(continue_it){
           comboMatches <- pepCombos %in% uniqueCombos[a_combo]
           matchedCombo <- as.numeric(strsplit(uniqueCombos[a_combo], split = "")[[1]])
           subMixes <- combo_mixes[,matchedCombo == 1]/rowSums(combo_mixes[,matchedCombo == 1], na.rm = TRUE)
+          
           wsubMix <- subMixes * combo_precision
+          wsubMix <- wsubMix[rowSums(combo_mixes[,matchedCombo == 1], na.rm = TRUE) != 0,]
+          
+          if(is.vector(wsubMix)){
+            mixing_fract[relPep, relProt][comboMatches,matchedCombo == 1] <- wsubMix / sum(wsubMix)
+            next
+            }
           
           mix_converge <- FALSE
           
@@ -203,9 +212,8 @@ while(continue_it){
         }
       }
     #for peptides which are uncontested set mixing fraction at 1 - this corrects for the point when some peptides become unambiguous after degenerate peptides are removed 
-    mixing_fract[relPep, relProt][rowSums(sparse_mapping[relPep, relProt]) == 1,] <- sparse_mapping[relPep, relProt][rowSums(sparse_mapping[relPep, relProt]) == 1,]
+    mixing_fract[relPep, relProt][rowSums(sparse_mapping[relPep, relProt]) == 1,] <- as.matrix(sparse_mapping[relPep, relProt][rowSums(sparse_mapping[relPep, relProt]) == 1,])
   }  
-    
     
   if(set_alpha == TRUE){ 
   

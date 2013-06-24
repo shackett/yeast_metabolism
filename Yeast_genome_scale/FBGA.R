@@ -14,21 +14,22 @@ options(stringsAsFactors = FALSE)
 ######## Import all of the species involved in a reaction and other reaction information ###########
 
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
-
-##### import list of metabolite abundances and rxn forms
-
 chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.05H2")),] # the 25 chemostat conditions of interest and their actual growth rates
 
+##### Import list of metabolite abundances and rxn forms
 
 load("rxnf_formulametab.rdata") #### run Vito script which using the stoichiometric matrix and FBA_run files to construct a list of reaction information, including a mechanism.
+
 
 ##### Import fluxes
 load("fluxSummaryQP.Rdata") #load flux through each reaction
 
+
 ##### Import enzyme abundances
-enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/run_Deg/relAbundMatrix.tsv")
-#### load protLMfile.Rdata when rerun in order to get all of the genes that a non-unique peptide-set could correspond to
-#measured_genes <- unlist(sapply(colnames(prot_abund_final), function(x){strsplit(x, "/")}))
+enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
+rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
+enzyme_abund <- enzyme_abund[,c(16:20, 1:5, 11:15, 6:10, 21:25)] #reorder proteins so that they are the same order as fluxes and metabolites (otherwise a warning will be issued later)
+
 
 ##### Associate enzymes with pathways ######
 
@@ -41,10 +42,10 @@ if(is.null(kegg_enzyme_dict$PATHWAY)){
   pathway_names$pathway <- sapply(pathway_names$pathway, function(x){strsplit(x, split = " - yeast")[[1]][1]})
   pathway_match <- merge(genes_to_pathways, pathway_names)
   kegg_enzyme_dict$PATHWAY <- sapply(kegg_enzyme_dict$SYST, function(x){
-      paste(pathway_match$pathway[pathway_match$gene == x], collapse = "__")
-    })
+    paste(pathway_match$pathway[pathway_match$gene == x], collapse = "__")
+  })
   write.table(kegg_enzyme_dict, "../KEGGrxns/yeastNameDict.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
-  }#generate a per-gene pathway annotation if one is not already generated
+}#generate a per-gene pathway annotation if one is not already generated
 
 
 ##### For each reaction in the consensus reconstruction, determine which pathways are associated with its enzymes ######
@@ -57,36 +58,42 @@ for(rxN in 1:length(met_genes[,1])){
   met_genes$genes[rxN] <- paste(rxSubset$MetName[is.na(rxSubset$StoiCoef)], collapse = "/")
   gene_subset <- strsplit(paste(rxSubset$MetName[is.na(rxSubset$StoiCoef)], collapse = ":"), split = ":")[[1]]
   met_genes$pathway[rxN] <- paste(unique(strsplit(paste(kegg_enzyme_dict[kegg_enzyme_dict$SYST %in% gene_subset,]$PATHWAY, collapse = "__"), "__")[[1]]), collapse = "__")
-  }
+}
 
 ###### Create a list containing model and experimental information for all reactions in the consensus reconstruction #####
 
 rxnList_all <- rxnf
 
 for(rxN in c(1:length(rxnList_all))){
-  kegg_subset <- met_genes[met_genes$reaction == names(rxnList_all)[rxN],]
+  kegg_subset <- met_genes[met_genes$reaction == substr(names(rxnList_all),1,6)[rxN],]
   if(length(kegg_subset[,1]) == 0){next}
   
   rxnList_all[[names(rxnList_all)[rxN]]]$pathway = kegg_subset$pathway
   rxnList_all[[names(rxnList_all)[rxN]]]$genes = kegg_subset$genes
-  rxnList_all[[names(rxnList_all)[rxN]]]$enzymeAbund = enzyme_abund[enzyme_abund$Gene %in% strsplit(kegg_subset$genes, split = '[/:]')[[1]],]
-  }
+  
+  rxnList_all[[names(rxnList_all)[rxN]]]$enzymeAbund = enzyme_abund[unlist(sapply(strsplit(kegg_subset$genes, split = '[/:]')[[1]], function(x){grep(x, rownames(enzyme_abund))})),]
+  
+}
 
 
 
 ####### Narrow the previous list to only rxns which carry flux #####
 
-rxnList <- rxnf[names(rxnf) %in% flux_summary$IDs$reactionID]
+rxnList <- rxnf[substr(names(rxnf),1,6) %in% flux_summary$IDs$reactionID]
 
 for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactionID)]){
   kegg_subset <- met_genes[met_genes$reaction == flux_summary$IDs$reactionID[rxN],]
-  if(length(kegg_subset[,1]) == 0){next}
+  idx <- names(rxnList)[grep(flux_summary$IDs$reactionID[rxN],names(rxnList))]
+  if(length(kegg_subset[,1]) == 0 | length(idx) ==0){next}
   
-  rxnList[[flux_summary$IDs$reactionID[rxN]]]$reaction = flux_summary$IDs$Name[rxN]
-  rxnList[[flux_summary$IDs$reactionID[rxN]]]$pathway = kegg_subset$pathway
-  rxnList[[flux_summary$IDs$reactionID[rxN]]]$genes = kegg_subset$genes
-  rxnList[[flux_summary$IDs$reactionID[rxN]]]$enzymeAbund = enzyme_abund[enzyme_abund$Gene %in% strsplit(kegg_subset$genes, split = '[/:]')[[1]],]
-  rxnList_all[[flux_summary$IDs$reactionID[rxN]]]$flux <- rxnList[[flux_summary$IDs$reactionID[rxN]]]$flux <- flux_summary$ceulluarFluxes[rxN,]
+  for (entry in names(rxnList)[grep(flux_summary$IDs$reactionID[rxN],names(rxnList))]){
+    rxnList[[entry]]$reaction = flux_summary$IDs$Name[rxN]
+    rxnList[[entry]]$pathway = kegg_subset$pathway
+    rxnList[[entry]]$genes = kegg_subset$genes
+    rxnList[[entry]]$enzymeAbund = enzyme_abund[enzyme_abund$Gene %in% strsplit(kegg_subset$genes, split = '[/:]')[[1]],]
+    rxnList_all[[entry]]$flux <- rxnList[[entry]]$flux <- flux_summary$ceulluarFluxes[rxN,]
+  }
+  
 }
 #save(rxnList_all, file = "all_rxnList.Rdata")
 
@@ -96,10 +103,16 @@ for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactio
 reaction_pred_log <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, TSS = NA)
 reaction_pred_linear <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, TSS = NA)
 
+### ensure that the ordering of conditions is the same ###
 
-cond_mapping <- data.frame(flux_cond = names(rxnList[[1]]$flux), met_reordering = c(11:15, 1:5, 6:10, 16:20, 21:25), enzyme_reordering = sapply(toupper(chemostatInfo$condition), function(x){c(1:length(colnames(rxnList[[1]]$enzymeAbund)))[colnames(rxnList[[1]]$enzymeAbund) == x]})) #remove this when metabolite conditions are remapped onto flux/protein ones prior to this script
-cond_mapping$met_cond = rownames(rxnList[[1]]$rxnMet)[cond_mapping$met_reordering] #remove this when new metabolite abundance are introduced
-cond_mapping$enzyme_cond = colnames(rxnList[[1]]$enzymeAbund)[cond_mapping$enzyme_reordering]
+cond_mapping <- data.frame(standard = chemostatInfo$condition, e = colnames(enzyme_abund), m = rownames(rxnList[[1]]$rxnMet), f = colnames(flux_summary$cellularFluxes))
+
+if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapping$enzyme_cond == cond_mapping$met_cond)){
+  warning('There is a problem with the order of the conditions. (check cond_mapping)')
+}
+
+#cond_mapping$enzyme_reordering = sapply(toupper(chemostatInfo$condition), function(x){c(1:n_c)[toupper(cond_mapping$e) == x]})
+#cond_mapping$enzyme_cond = cond_mapping$e[cond_mapping$enzyme_reordering]
 
 for(rxN in 1:length(rxnList)){
   reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeAbund[,1])
@@ -123,7 +136,7 @@ for(rxN in 1:length(rxnList)){
     enzymes <- 2^lenzymes
     }else{lenzymes <- enzymes <- NULL}
   if(reaction_pred_linear$nmetab[rxN] != 0){
-    metab_df = rxnList[[rxN]]$rxnMet[cond_mapping$met_reordering,]
+    metab_df = rxnList[[rxN]]$rxnMet
     
     lmetabs <- as.matrix(data.frame(metab_df[,colSums(!is.na(metab_df) != 0) != 0])); colnames(lmetabs) <- colnames(rxnList[[rxN]]$rxnMet)[colSums(!is.na(rxnList[[rxN]]$rxnMet) != 0) != 0]
     metabs <- 2^lmetabs
@@ -236,27 +249,11 @@ n_c <- length(rxnList_form[[1]]$flux)
 
 #### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
 
+save(rxnList_form, cond_mapping, file = "paramOptim.Rdata")
+
 
 ##### looking at subset of reactions where a kinetic form was produced because most/all substrates were ascertained ####
 
-load("paramOptim.Rdata")
-
-run_summary <- list() #### MCMC run output and formatted inputs
-
-markov_pars <- list()
-    markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-    markov_pars$n_samples <- 10000 #how many total markov samples are desired
-    markov_pars$burn_in <- 500 #how many initial samples should be skipped
-
-markov_pars <- list()
-    markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-    markov_pars$n_samples <- 1000 #how many total markov samples are desired
-    markov_pars$burn_in <- 500 #how many initial samples should be skipped
-
-
-run_summary$markov_pars <- markov_pars
-
-#save(rxnList_form, cond_mapping, file = "paramOptim.Rdata")
 
 
 
@@ -312,6 +309,8 @@ for(arxn in all_rxns){
   
   pdf(file = paste(c("FBGA_files/outputPlots/", arxn, ".pdf"), collapse = ""), width = 20, height = 20)
   
+  reaction_info_FBGA(rxnName)
+  
   print(ggplot() + geom_violin(data = par_likelihood, aes(x = factor(index), y = likelihood), fill = "RED"))
   print(param_compare(run_rxn, par_markov_chain, par_likelihood))
   species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
@@ -324,6 +323,7 @@ for(arxn in all_rxns){
   }
 
 save(param_set_list, file = "param_set_list.Rdata")
+save(rxn_fit_params, file = "paramDist.Rdata")
 
 under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
 rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
