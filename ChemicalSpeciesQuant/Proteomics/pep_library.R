@@ -1,3 +1,16 @@
+#### Plotting themes ####
+
+library(gplots)
+library(ggplot2)
+
+hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), 
+      panel.background = element_rect(fill = "aliceblue"), legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), 
+      strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), panel.grid.major = element_blank(), 
+      axis.line = element_blank(), legend.key.width = unit(6, "line")) 
+
+scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), 
+      panel.background = element_rect(fill = "azure"), legend.position = "none", panel.grid.minor = element_blank(), 
+      panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
 
 
 # Functions
@@ -598,17 +611,8 @@ plot_proteinConnections <- function(overlapMat, subsumedIDs = NULL){
 CV_dispersions <- function(repeated_conds, nCV = 5, nreps = 100){
     ### peform K-fold cross-validation to determine how stable over-dispersion parameter estimation is.
     ### When the sd of an OD value is approximately known, shrinkage can be employed
-    
-    cond_subset <- unique(repeated_conds$Condition)
-    cond_indeces <- c(rep(1:nCV, times = floor(length(cond_subset)/nCV)), (0:(length(cond_subset) %% nCV))[-1])
-    cond_subset <- data.table(cond_subset, sample_set = sample(cond_indeces))
-    
-    sd(sapply(1:nCV, function(n){
-      red_set <- repeated_conds[repeated_conds$Condition %in% cond_subset$cond_subset[cond_subset$sample_set != n],]
-      mean(red_set[, (RA - fitted)^2 * nreps/(nreps - 1) * (1/var_fit),])
-      }))
-    
-    sd(c(sapply(1:nreps, function(z){
+      
+    sd(log2(c(sapply(1:nreps, function(z){
     cond_subset <- unique(repeated_conds$Condition)
     cond_indeces <- c(rep(1:nCV, times = floor(length(cond_subset)/nCV)), (0:(length(cond_subset) %% nCV))[-1])
     cond_subset <- data.table(cond_subset, sample_set = sample(cond_indeces))
@@ -616,7 +620,7 @@ CV_dispersions <- function(repeated_conds, nCV = 5, nreps = 100){
     sapply(1:nCV, function(n){
       red_set <- repeated_conds[repeated_conds$Condition %in% cond_subset$cond_subset[cond_subset$sample_set != n],]
       mean(red_set[, (RA - fitted)^2 * nreps/(nreps - 1) * (1/var_fit),])
-      })})))
+      })}))))
 
 
     }

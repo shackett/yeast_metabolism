@@ -6,8 +6,8 @@ library(limSolve)
 library(data.table)
 library(ggplot2)
 library(reshape2)
-options(stringsAsFactors = F)
 
+options(stringsAsFactors = F)
 options(digits = 15)
 
 

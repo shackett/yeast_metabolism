@@ -29,6 +29,8 @@
 <<setup, echo=FALSE,results='hide'>>=
 options(width=80, stringsAsFactors = FALSE)
 library(knitr)
+library(ggplot2)
+library(reshape2)
 
 opts_knit$set(progress = TRUE, verbose = TRUE)
 opts_chunk$set(echo = FALSE)
@@ -77,8 +79,14 @@ ICthreshold <- 2^15
 #only consider peptides that match unambiguously to a single protein
 unq_matches_only <- FALSE
 
-
 lightIC[lightIC < ICthreshold] <- NA; heavyIC[heavyIC < ICthreshold] <- NA
+
+### all quantifiable peptides must be above threshold for both light and heavy peptides
+lightIC[is.na(heavyIC)] <- NA; heavyIC[is.na(lightIC)] <- NA
+PepMatrix[is.na(heavyIC)] <- NA
+
+
+
 
 #filter experimental column from instruments without an biological replicates
 good_experimental_samples <- colnames(lightIC) %in% proteomicsBlocking$SampleName[proteomicsBlocking$Instrument %in% c("QTOF6538", "QTOF6550")]
@@ -325,21 +333,21 @@ hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = elemen
 
 LHscatter <- ggplot(SNvsIC, aes(y = SN, x = meanIC)) + hex_theme + scale_x_continuous("meanIC", expand = c(0.02,0.02)) + scale_y_continuous("SN", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200)
-
-LHscatter <- ggplot(SNvsIC[SNvsIC$SN > 2^-5,] , aes(y = log2(SN), x = meanIC)) + hex_theme + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
-LHscatter + geom_hex(bins = 200)
-
-
 @
 
+<<>>=
+LHscatter <- ggplot(SNvsIC[SNvsIC$SN > 2^-5,] , aes(y = log2(SN), x = meanIC)) + hex_theme + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
+LHscatter + geom_hex(bins = 200)
+@
+
+
+<<>>=
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
+@
 
 
 \begin{figure}
 <<pooled_var_plot, echo = FALSE, cache = TRUE, fig.width=10, fig.height=6>>=
-scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
-
-
-ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
 
 ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation", limits = c(0,1)) + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
 
@@ -409,23 +417,23 @@ X^{*}_{ij} &= X_{ij} - \delta^{o}_{j}\label{normalizeC}
 
 
 <<normalizeProtAbund, dependson = "EMprep", cache = TRUE>>=
-load('../BulkComposition/protSpecQuantOut.Rdata')
+#load('../BulkComposition/protSpecQuantOut.Rdata')
 
 sampleChemoInfo <- conditions[sapply(proteomicsBlocking$Condition, function(x){c(1:length(conditions[,1]))[conditions$condition == x]}),] #align chemostat conditions to tech replicates
 
-added_conds <- conditions[conditions$condition == "p0.30",]; added_conds$condition <- "p0.30_ORBI"
-conditions <- rbind(conditions, added_conds)
+#added_conds <- conditions[conditions$condition == "p0.30",]; added_conds$condition <- "p0.30_ORBI"
+#conditions <- rbind(conditions, added_conds)
 
-cond_info <- sapply(colnames(good_light), function(cond){
-	if(strsplit(cond, "")[[1]][1] == "L"){
-		tmp <- cond
-		}else{
-			tmp <- paste(c(tolower(strsplit(cond, "")[[1]][1]), strsplit(cond, "")[[1]][-1]), collapse = "")
-			}
-		c(1:length(conditions[,1]))[conditions$condition == tmp]
-		})
+#cond_info <- sapply(colnames(good_light), function(cond){
+#	if(strsplit(cond, "")[[1]][1] == "L"){
+#		tmp <- cond
+#		}else{
+#			tmp <- paste(c(tolower(strsplit(cond, "")[[1]][1]), strsplit(cond, "")[[1]][-1]), collapse = "")
+#			}
+#		c(1:length(conditions[,1]))[conditions$condition == tmp]
+#		})
 
-conditions <- conditions[cond_info,]
+#conditions <- conditions[cond_info,]
 
 initial_offset = log2(apply(good_light/good_heavy, 2, median, na.rm = TRUE))
 
@@ -433,61 +441,7 @@ abundMat <- abundMat + rep(1, times = length(abundMat[,1])) %*% t(-1*initial_off
 
 @
 
-\begin{figure}[h!]
-<<prot_cellular_conc, echo = FALSE, cache = TRUE>>=
-pconc_plot <- ggplot(plotting_DF, aes(x = factor(Condition), y = Concentration, col = limitation)) + facet_wrap(~ Iteration, ncol = 1) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("mg protein/uL cellular volume") + scale_x_discrete("Experimental condition")
-pconc_plot + geom_boxplot() 
-@
-\caption{Concentration of proteins (mg) per $\mu$L cellular volume.  The top panel contains the raw transformed protein concentrations.  It is notable that some treatments are measured poorly, with a great discordance between technical replicates.  There is a strong linear trend across dilution rates within each limitation, so this could serve as a fitted value for each condition.  To minimize the influence of outliers, we want to find a point estimate of the concentration of protein in each condition that balances the actual possibly noisy value measured, with the predicted value from the structure of the data.  The balance of using the experimental measurement or the fitted value is determined by how noisy the experimental measurement is relative to the residual mean square error of the regression fit.}
-\label{prot_cellular_conc}
-\end{figure}
-
-\begin{figure}[h!]
-<<prot_frac_DW, echo = FALSE, cache = TRUE>>=
-dw_plot <- ggplot(dry_weight_DF, aes(x = factor(condition), y = ProteinDW_fraction, col = limitation)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Protein fraction of dry-material") + scale_x_discrete("Experimental condition")
-dw_plot + geom_boxplot()
-@
-\caption{Fraction of dry weight taken up by proteins}
-\label{prot_frac_DW}
-\end{figure}
-
-\begin{figure}[h!]
-<<dry_weight_dens, echo = FALSE, cache = TRUE, warning = FALSE>>=
-dry_weight_turnover_plot1 <- ggplot(dry_weight_turnover_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight(mg) per mL culture", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
-dry_weight_turnover_plot1 + geom_bar(stat = "identity", position = "stack")
-@
-\caption{Dry weight (mg) per mL of culture: Maximal density is seen at low growth rates except under carbon and leucine limitation}
-\label{dry_weight_dens}
-\end{figure}
-
-\begin{figure}[h!]
-<<dry_weight_turnover, echo = FALSE, cache = TRUE, warning = FALSE>>=
-dry_weight_turnover_plot2 <- ggplot(dry_weight_turnover_DFmelt2, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight production (mg/hr) per mL culture", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
-dry_weight_turnover_plot2 + geom_bar(stat = "identity", position = "stack")
-@
-\caption{Dry weight per mL * DR (h$^{-1}$ indicates that optimal growth, in terms of biomass production occurs at intermediate GRs}
-\label{dry_weight_turnover}
-\end{figure}
-
-\begin{figure}[h!]
-<<dry_weight_cellconc, echo = FALSE, cache = TRUE, warning = FALSE>>=
-dry_weight_turnover_plot3 <- ggplot(dry_weight_turnover_D_cellular_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold")) + scale_y_continuous("Dry weight (mg) per uL of cellular volume", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
-dry_weight_turnover_plot3 + geom_bar(stat = "identity", position = "stack")
-@
-\caption{Concentration of proteins and dry-matter per cellular volume (mg/uL).  The protein relative concentrations are equivalent to the means of the figure \ref{prot_cellular_conc} box plot}
-\label{dry_weight_cellconc}
-\end{figure}
-
-\begin{figure}[h!]
-<<material_percell, echo = FALSE, cache = TRUE, warning = FALSE>>=
-dry_weight_perCell_plot <- ggplot(dry_weight_perCell_DFmelt, aes(x = factor(Condition), y = value, fill = variable)) + theme(axis.text.x = element_text(size = 4, face = "bold"), panel.grid.minor=element_blank(), panel.grid.major=element_blank()) + scale_y_continuous("pg protein/dry-material per cell", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(palette = "Set1")
-dry_weight_perCell_plot + geom_bar(stat = "identity", position = "stack")
-@
-\caption{pico-grams protein per cell: The smaller size of nitrogen and carbon limited cells results in them having less material per-cell.  For most conditions, at slow growth-rates cells either become minute or huge and then tend back towards a similar intermediate size as growth-rates increase.  This makes carbon and C, N and L look more similar in terms of total material per cell, while uracil looks radically different}
-\label{material_percell}
-\end{figure}
-
-
+%\caption{Concentration of proteins (mg) per $\mu$L cellular volume.  The top panel contains the raw transformed protein concentrations.  It is notable that some treatments are measured poorly, with a great discordance between technical replicates.  There is a strong linear trend across dilution rates within each limitation, so this could serve as a fitted value for each condition.  To minimize the influence of outliers, we want to find a point estimate of the concentration of protein in each condition that balances the actual possibly noisy value measured, with the predicted value from the structure of the data.  The balance of using the experimental measurement or the fitted value is determined by how noisy the experimental measurement is relative to the residual mean square error of the regression fit.}
 
 
 
@@ -526,6 +480,22 @@ inst_block_level_joined <- apply(proteomicsBlocking, 1, function(x){
     paste(x[names(x) %in% c("Instrument", "Set", "Block")], collapse = "_")
     })
 
+
+###########
+
+#### filter a peptide on an instrument if the light and heavy peptide are highly discordant - this can be seen as a gross mismatch between the p0.05 H and L sample on each instrument ###
+#### because these samples will be missing on some instruments*peptides impute all missing values with knn.imputation and then flag which peptides are discordant on a given instrument run ###
+
+library(impute)
+
+impute_abundMat <- impute.knn(as.matrix(abundMat), k = 10, colmax = 0.9, rowmax = 1 - quality_frac)$data
+tech_diff_threshold <- 5
+
+tech_diff_boolean <- abs(impute_abundMat[,proteomicsBlocking$Condition == "p0.05"]) > tech_diff_threshold
+colnames(tech_diff_boolean) <- inst_set_level_joined[proteomicsBlocking$Condition == "p0.05"]
+
+
+
 ### fit relative abundance with condition and blocking main effects to generate LS fit ###
 filtered_peps <- abundMat; filtered_peps[is.na(filtered_peps) | !is.na(filtered_peps)] <- 0
 outlier_type <- filtered_peps; outlier_type[!is.na(outlier_type)] <- NA
@@ -539,12 +509,27 @@ for(a_pep_n in 1:n_p){
   
   peptide_model$index <- 1:length(peptide_model[,1])
   
-  ### Prune individual points if they are strong outliers based upon a bonferroni-corrected wald test
-  wald_p <- 1 - abs(pnorm((peptide_model$RA - mean(peptide_model$RA))/sd(peptide_model$RA)) - 0.5)*2
-  peptide_model$is_outlier[wald_p < 0.05/length(wald_p) & abs(peptide_model$RA) > 5] <- TRUE
-  peptide_model$outlier_type[wald_p < 0.05/length(wald_p) & abs(peptide_model$RA) > 5] <- "point"
+  ### call a set as outliers if p0.05L greatly departs from p0.05H ###
   
-  ### if a peptide is broadly consistent then rather than doing aggresive pruning, the peptides added variance will be accounted for at the level of expected precision
+  peptide_model$is_outlier[peptide_model$setBlocking %in% colnames(tech_diff_boolean)[tech_diff_boolean[a_pep_n,]]] <- T
+  peptide_model$outlier_type[peptide_model$setBlocking %in% colnames(tech_diff_boolean)[tech_diff_boolean[a_pep_n,]]] <- "technicalRepMismatch"
+  
+  ### if there are few samples left ditch the peptide ###
+  
+  if(sum(peptide_model$is_outlier == F) < n_e*quality_frac){
+    filtered_peps[a_pep_n, !is.na(abundMat[a_pep_n,])] <- TRUE
+    outlier_type[a_pep_n, !is.na(abundMat[a_pep_n,])] <- "technicalRepMismatch"
+    next
+    }
+  
+  
+  ### Prune individual points if they are strong outliers based upon a bonferroni-corrected wald test
+  wald_p <- 1 - abs(pnorm((peptide_model$RA[!peptide_model$is_outlier] - mean(peptide_model$RA[!peptide_model$is_outlier]))/sd(peptide_model$RA[!peptide_model$is_outlier])) - 0.5)*2
+  peptide_model$outlier_type[!peptide_model$is_outlier][wald_p < 0.05/length(wald_p) & abs(peptide_model$RA[!peptide_model$is_outlier]) > 5] <- "point"
+  peptide_model$is_outlier[!peptide_model$is_outlier][wald_p < 0.05/length(wald_p) & abs(peptide_model$RA[!peptide_model$is_outlier]) > 5] <- TRUE
+  
+  
+  ### if a peptide has consistently high variance rather than doing aggresive pruning, the peptides elevated variance will be accounted for at the level of expected precision
   
   block_prune <- TRUE
   RA_blocks <- acast(peptide_model[!peptide_model$is_outlier,], Condition ~  Instrument + Set + Block, value.var = "RA")
@@ -623,6 +608,7 @@ for(a_pep_n in 1:n_p){
   
   if(totally_inconsistent){
     totally_inconsistent <- FALSE; peptide_model$outlier_type[is.na(peptide_model$outlier_type)] <- "sparse"}
+    peptide_model$is_outlier[peptide_model$outlier_type == "sparse"] <- T
   }
   
   #plot(peptide_model$RA ~ factor(peptide_model$Condition), col = factor(peptide_model$totalBlocking))
@@ -635,7 +621,7 @@ for(a_pep_n in 1:n_p){
 
 @
 
-<<pooled_variance, dependson = "dataImp", cache = TRUE>>=
+<<pooled_variance_setup, dependson = "dataImp", cache = TRUE>>=
 
 refSamples <- proteomicsBlocking[proteomicsBlocking$Condition == "p0.05",]
 # generate an instrument-specific function
@@ -662,21 +648,25 @@ for(inst in unique(refSamples$Instrument)){
     
     }
   }
+@
 
-hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
-
+<<>>=
 LHscatter <- ggplot(bioRepPlot, aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200) + ggtitle("p0.05H ~ p0.05L")
+@
 
+<<>>=
 LHscatter <- ggplot(bioRepPlot[bioRepPlot$outlier_type == "valid",], aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200) + ggtitle("p0.05H ~ p0.05L Filtered")
+@
 
+<<>>=
 LHscatter <- ggplot(bioRepPlot[bioRepPlot$outlier_type != "valid",], aes(y = experimental, x = reference, col = outlier_type)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_color_brewer(palette = "Set2") 
 LHscatter + geom_point(size = 1.5) + geom_abline(intercept = 0, slope = 1, size = 2) + ggtitle("p0.05H ~ p0.05L Outliers")
+@
 
-
+<<pooled_variance_IC, dependson = "pooled_variance_setup">>=
 ##### Fitting Var(IC) #####
-
 
 nbins <- 50
 var_spline_inst <- list()
@@ -684,7 +674,7 @@ var_spline_plot <- list()
 
 for(inst in unique(bioRepPlot$Instrument)){
   # calculate a variance/precision kernal over instrument*IC
-  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst & !(bioRepPlot$outlier_type %in% c("block", "point")),]
+  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst & !(bioRepPlot$outlier_type %in% c("block", "point", "technicalRepMismatch")),]
   binsize <- floor(length(instSubset[,1])/nbins)
   error_bins <- data.frame(val_mean = instSubset$averageIC[order(instSubset$averageIC)], light_val = instSubset$experimental[order(instSubset$averageIC)], bin = c(rep(1:(length(instSubset[,1]) %% nbins), each = binsize + 1), rep(((length(instSubset[,1]) %% nbins) + 1):nbins, each = binsize)))
 
@@ -708,7 +698,9 @@ bin_dist_plot <- NULL
 }
 
 ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = logIC, y = MLE_var, color = "blue", size = 3))
+@
 
+<<pooled_variance_SN, dependson = "pooled_variance_setup">>=
 ##### Fitting Var(SN) #######
 
 nbins <- 50
@@ -717,7 +709,7 @@ var_spline_plot <- list()
 
 for(inst in unique(bioRepPlot$Instrument)){
   # calculate a variance/precision kernal over instrument*IC
-  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst & !(bioRepPlot$outlier_type %in% c("block", "point")),]
+  instSubset <- bioRepPlot[bioRepPlot$Instrument == inst & !(bioRepPlot$outlier_type %in% c("block", "point", "technicalRepMismatch")),]
   binsize <- floor(length(instSubset[,1])/nbins)
   error_bins <- data.frame(val_mean = instSubset$averageIC[order(instSubset$SN)], light_val = instSubset$experimental[order(instSubset$SN)], SN = instSubset$SN[order(instSubset$SN)], bin = c(rep(1:(length(instSubset[,1]) %% nbins), each = binsize + 1), rep(((length(instSubset[,1]) %% nbins) + 1):nbins, each = binsize)))
 
@@ -741,13 +733,14 @@ for(inst in unique(bioRepPlot$Instrument)){
     
 }
 
-scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan")) 
-
-
 ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
+@
 
+<<>>=
 ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation", limits = c(0,1)) + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
+@
 
+<<>>=
 bioRepPlot_outlier <- bioRepPlot
 bioRepPlot_outlier$outlier_type[is.na(bioRepPlot_outlier$outlier_type)] <- "valid"
 bioRepPlot_outlier_plot <- ggplot(data = bioRepPlot_outlier, aes(x = SN, fill = outlier_type)) + facet_wrap(~ outlier_type, scales = "free_y")
@@ -757,7 +750,7 @@ bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c
 
 
 
-<<>>=
+<<point_disp_Estimation, dependson = c("pooled_variance, pooled_variance_SN"), cache = TRUE>>=
 
 library(data.table)
 library(ggplot2)
@@ -780,7 +773,7 @@ for(a_pep_n in 1:n_p){
   
   peptide_model <- data.table(RA = abundMat[a_pep_n,], proteomicsBlocking, totalBlocking = inst_block_level_joined, setBlocking = inst_set_level_joined, lightIC = log2(good_light[a_pep_n,]), heavyIC = log2(good_heavy[a_pep_n,]), averageIC = (log2(good_light[a_pep_n,]) + log2(good_heavy[a_pep_n,]))/2, SN = good_SN[a_pep_n,], outlier_type = outlier_type[a_pep_n,], index = 1:n_e)
   peptide_model <- peptide_model[!is.na(peptide_model$RA),]
-  peptide_model <- peptide_model[!(peptide_model$outlier_type %in% c("point", "block")),]
+  peptide_model <- peptide_model[!(peptide_model$outlier_type %in% c("block", "point", "technicalRepMismatch")),]
   
   if(nrow(peptide_model) < n_e*quality_frac){next}
   
@@ -815,7 +808,15 @@ for(a_pep_n in 1:n_p){
   point_estimates[a_pep_n,] <- cond_summary$RA
   precision_estimates[a_pep_n,] <- cond_summary$precision
   
+  if(a_pep_n %% 500 == 0){
+    print(paste(round(a_pep_n/n_p * 100, 2), "% done"))
+    }
+  
 }
+
+#(1:nrow(point_estimates))[apply(point_estimates, 1, max, na.rm = T) == max(apply(point_estimates, 1, max, na.rm = T))]
+#(1:ncol(point_estimates))[apply(point_estimates, 2, max, na.rm = T) == max(apply(point_estimates, 2, max, na.rm = T))]
+
 @
 
 <<>>=
@@ -825,15 +826,12 @@ fraction_plot[,label:= paste(c(paste(c(min_label, max_label), collapse = "-"), "
 dispersion_table$nvals = rowSums(!is.na(abundMat))
 dispersion_table[, sample_fraction:= fraction_plot$label[fraction_plot$max >= nvals][1], by = nvals]
 
-hist(dispersion_table$dispersion_SW_test, breaks = 50)
-
 #ggplot(dispersion_table, aes(x = log2(dispersion_adj))) + geom_bar(binwidth = 0.3, fill = "RED")
 #ggplot(data.frame(dispersion = log2(dispersion_adj), nvals = rowSums(!is.na(abundMat))), aes(y = dispersion, x = nvals)) + geom_jitter(size = 0.5)
 ggplot(dispersion_table, aes(x = dispersion_SW_test)) + facet_wrap(~ sample_fraction, ncol = 5) + geom_bar(binwidth = 0.05)
-           
+@           
 
-#####
-
+<<>>=
 dispersion_adj_df <- dispersion_table[!is.na(log_dispersion_SD),]
 
 ggplot(dispersion_adj_df, aes(x = log2(dispersion_adj), y = log_dispersion_SD, color = nvals)) + geom_point(size = 3)
@@ -841,23 +839,31 @@ mean_spline <- smooth.spline(log2(dispersion_adj_df$dispersion_adj) ~ dispersion
 
 plot(data = dispersion_adj_df, log2(dispersion_adj) ~ jitter(nvals), pch = 16, cex = 0.5)
 lines(predict(mean_spline, 1:n_e)$y ~ c(1:n_e), lwd = 3, col = "RED")
+@
 
+<<>>=
 dispersion_adj_df$centered_dispersion <- log2(dispersion_adj_df$dispersion_adj) - predict(mean_spline, dispersion_adj_df$nvals)$y
 plot(data = dispersion_adj_df, centered_dispersion ~ jitter(nvals), pch = 16, cex = 0.5)
+@
 
+<<>>=
 dispersion_adj_df[,lambda_est:=sapply(dispersion_adj_df[,centered_dispersion^2 - log_dispersion_SD^2,], function(x){max(0, x)}),]
 dispersion_adj_df[,shrunk_estimate:=lambda_est/(lambda_est + log_dispersion_SD)*centered_dispersion,]
 dispersion_adj_df[,predicted_dispersion:=2^shrunk_estimate,]
 
 ggplot(dispersion_adj_df, aes(x = centered_dispersion, y = shrunk_estimate, col = nvals)) + geom_point()
+@
 
+<<>>=
 dispersion_shrinkageDF <- melt(dispersion_adj_df, measure.vars = c("dispersion_adj", "predicted_dispersion"), id.vars = c("nvals", "sample_fraction"))
 
 ggplot(dispersion_shrinkageDF, aes(y = log2(value), x = sample_fraction)) + facet_grid(~ variable) + geom_violin(scale = "count", fill = "RED")
 
 ### adjust precision by 1/(ODcorrected/OD)
 precision_estimates[!is.na(dispersion_table$log_dispersion_SD),] <- precision_estimates[!is.na(dispersion_table$log_dispersion_SD),]/(dispersion_adj_df[,predicted_dispersion/dispersion_adj,] %*% t(rep(1, n_c)))
+@
 
+<<peptide_pointAndPrecisionEst, dependson = "point_disp_Estimation">>=
 ######
 
 fittedPrec <- precision_estimates
@@ -1108,8 +1114,6 @@ if(length(clusterCoherence[clusterCoherence > 0.2]) != 0){
 
 
 
-names(mv_clust@cluster)[mv_clust@cluster == 1]
-
 
 
 
@@ -1166,7 +1170,7 @@ $\tau_{y} = \prod_{z \neq y}^{Y}\sigma^{2}_{z}$
 
 \scriptsize
 
-<<EMprep>>=	
+<<EMprep, dependson = "peptide_pointAndPrecisionEst">>=	
 			
 ### Iteration ###
 
@@ -1193,14 +1197,14 @@ if((unq_matches_only == TRUE & file.exists("EMoutputUnq.Rdata"))|(unq_matches_on
 	#system("R64 callEM.R")
 
 	}
-
+write.table(t(prot_abund[,alpha_pres == 1]), file = "proteinAbundance.tsv", sep = "\t", row.names = T, col.names = T, quote = F)
 
 #prot_abund_final <- prot_abund[,c(1:n_prot)[matched_prots]]
 prot_abund_final <- prot_abund
 mixing_fract[likdiff_df$matched == "Divergent-trend",] <- 0
 
 #remove proteins that were subsumable or poorly fit (reevaluate this second part when replicates are available)
-alpha_pres[alpha_pres == 1][colSums(mixing_fract) == 0] <- 0
+#alpha_pres[alpha_pres == 1][colSums(mixing_fract[,alpha_pres == 1]) == 0] <- 0
 prot_abund_final <- prot_abund_final[,!(colSums(mixing_fract) == 0)]
 prot_prec <- prot_prec[,!(colSums(mixing_fract) == 0)]
 possibleMap <- Matrix(unique_mappingMat[,alpha_pres == 1] == 1)
