@@ -303,6 +303,8 @@ save(rxnList_form, cond_mapping, chunk_assignment, file = "paramOptim.Rdata")
 
 ###### import cluster parameter results #####
 
+load("paramOptim.Rdata")
+
 param_sets <- list.files('FBGA_files/paramSets/')
 
 param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), chunkNum =sapply(param_sets, function(x){as.numeric(sub('C', '', regmatches(x, regexec('C[0-9]+', x))[[1]]))}),
@@ -332,57 +334,65 @@ for(a_chunk in sort(unique(param_run_info$chunkNum))){
       }
     }
   }
-    for(rx in names(run_summary)[-1]){
-      
-      if(rx %in% param_set_list){
-        ### add markov samples and likelihood to existing reaction data
-        
-        param_set_list[[rx]] <- run_summary[names(run_summary) == rx][[1]]
-        param_set_list[[rx]]$likelihood <- rbind(param_set_list[[rx]]$likelihood, data.frame(sample = 1:param_run_info$n_samples[an_index], likelihood = run_summary[names(run_summary) == rx][[1]]$likelihood, index = param_run_info$runNum[an_index]))
-        param_set_list[[rx]]$markovChain  <- rbind(param_set_list[[rx]]$markovChain, run_summary[names(run_summary) == rx][[1]]$markovChain)
-        
-      }else{
-        ### initialize a reaction with reaction data
-        param_set_list[[rx]] <- run_summary[names(run_summary) == rx][[1]]
-        param_set_list[[rx]]$likelihood <- data.frame(sample = 1:param_run_info$n_samples[an_index], likelihood = param_set_list[[rx]]$likelihood, index = param_run_info$runNum[an_index])
-        
-      }
-    }
-  }
-} 
     
-      
-  
-  
+parSetInfo <- as.data.frame(t(sapply(param_set_list, function(x){x$name})))
+parSetInfo$ML <- sapply(param_set_list, function(x){max(x$lik)})
 
-for(an_index in param_run_info$index){
-  load(paste(c("FBGA_files/paramSets/", param_run_info$file[an_index]), collapse = ""))
-  param_run_info$n_samples[an_index] <- run_summary$markov_pars$n_samples
-  param_run_info$sample_freq[an_index] <- run_summary$markov_pars$sample_freq
-  param_run_info$burn_in[an_index] <- run_summary$markov_pars$burn_in
-  param_set_list[[an_index]] <- run_summary
+reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(rxnList_form), function(x){substr(x, 1, 6)}),
+  form = sapply(names(rxnList_form), function(x){substr(x, 8, 9)}), modification = sapply(names(rxnList_form), function(x){sub(substr(x, 1, 10), '', x)}),
+  npar = sapply(rxnList_form, function(x){nrow(x$enzymeAbund) + nrow(x$rxnFormData) + 1}))
+
+reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])})
+
+reactionInfo$changeP <- NA
+
+for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | reactionInfo$modification != ""]){
+  rxn_eval <- reactionInfo[rx,]
+  rxn_ref <- reactionInfo[reactionInfo$reaction == rxn_eval$reaction & reactionInfo$form == "rm" & reactionInfo$modification == "",]
+  likDiff <- rxn_eval$ML - rxn_ref$ML
+  
+  if(rxn_eval$npar == rxn_ref$npar){
+    
+    reactionInfo$changeP[rx] <- 1/(exp(likDiff) + 1)
+    
+  }else{
+    
+    reactionInfo$changeP[rx] <- 1 - pchisq(2*likDiff, rxn_eval$npar - rxn_ref$npar)
+    
   }
+}
 
+### Identify reaction form modification which significantly improve the likelihood function ###
 
-all_rxns <- names(rxnList_form)
+library(qvalue)
+Qthresh <- 0.1
+
+reactionInfo$Qvalue <- NA
+reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
+
+### reduce reactions of interest to primary forms and reparameterizations ###
+
+reactionInfo <- reactionInfo[is.na(reactionInfo$Qvalue) | (!is.na(reactionInfo$Qvalue) & reactionInfo$Qvalue < Qthresh),]
+
 rxn_fits <- NULL
 rxn_fit_params <- list()
 
-for(arxn in all_rxns){
-  #which runs contain the desired reaction
-  rxn_found <- unlist(lapply(param_set_list, function(x){arxn %in% names(x)}))
-  if(!all(rxn_found)){print(paste(c(arxn, "missing in", paste(param_run_info$file[!rxn_found], collapse = " & ")), collapse = " "))}
-  if(all(!rxn_found)){print("skip"); next}
-  
+for(arxn in reactionInfo$rMech){
+ 
   par_likelihood <- NULL
   par_markov_chain <- NULL
   
-  for(i in param_run_info$index[rxn_found]){
-    run_rxn <- param_set_list[[i]][names(param_set_list[[i]]) == arxn][[1]]
+  parSubset <- param_set_list[parSetInfo$rx == arxn]
+  
+  for(i in 1:length(parSubset)){
     
-    par_likelihood <- rbind(par_likelihood, data.frame(sample = 1:param_run_info$n_samples[i], likelihood = run_rxn$likelihood, index = param_run_info$index[i]))
-    par_markov_chain <- rbind(par_markov_chain, run_rxn$markovChain)
+    par_likelihood <- rbind(par_likelihood, data.frame(sample = 1:param_run_info$n_samples[parSubset[[i]]$name$index], likelihood = parSubset[[i]]$lik, index = parSubset[[i]]$name$index))
+    par_markov_chain <- rbind(par_markov_chain, parSubset[[1]]$MC)
     }
+  
+  load(paste(c("FBGA_files/paramSets/", param_run_info$file[param_run_info$index == par_likelihood$index[1]]), collapse = ""))
+  run_rxn <- run_summary[[arxn]]
+  
   
   if(var(par_likelihood$likelihood) < 10^-10 | all(run_rxn$metabolites == 1)){next} #skip underparameterized reactions - those with essentially no variation
   
