@@ -48,15 +48,20 @@ if(is.null(kegg_enzyme_dict$PATHWAY)){
 }#generate a per-gene pathway annotation if one is not already generated
 
 
-##### For each reaction in the consensus reconstruction, determine which pathways are associated with its enzymes ######
+##### For each reaction in the consensus reconstruction, determine which pathways and genes are associated ######
 
 rxnFile <- read.delim('rxn_yeast.tsv', stringsAsFactors = FALSE)
 met_genes <- data.frame(reaction = unique(rxnFile$ReactionID), genes = NA, pathway = NA)
 
 for(rxN in 1:length(met_genes[,1])){
   rxSubset <- rxnFile[rxnFile$ReactionID == met_genes$reaction[rxN],]
-  met_genes$genes[rxN] <- paste(rxSubset$MetName[is.na(rxSubset$StoiCoef)], collapse = "/")
   gene_subset <- strsplit(paste(rxSubset$MetName[is.na(rxSubset$StoiCoef)], collapse = ":"), split = ":")[[1]]
+  if(length(gene_subset) == 0){
+    met_genes$genes[rxN] <- ""
+  }else{
+    met_genes$genes[rxN] <- paste(unique(sort(gene_subset)), collapse = "/")
+  }
+  
   met_genes$pathway[rxN] <- paste(unique(strsplit(paste(kegg_enzyme_dict[kegg_enzyme_dict$SYST %in% gene_subset,]$PATHWAY, collapse = "__"), "__")[[1]]), collapse = "__")
 }
 
@@ -90,18 +95,13 @@ for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactio
     rxnList[[entry]]$reaction = flux_summary$IDs$Name[rxN]
     rxnList[[entry]]$pathway = kegg_subset$pathway
     rxnList[[entry]]$genes = kegg_subset$genes
-    rxnList[[entry]]$enzymeAbund = enzyme_abund[enzyme_abund$Gene %in% strsplit(kegg_subset$genes, split = '[/:]')[[1]],]
-    rxnList_all[[entry]]$flux <- rxnList[[entry]]$flux <- flux_summary$ceulluarFluxes[rxN,]
+    rxnList[[entry]]$enzymeAbund = enzyme_abund[unlist(sapply(strsplit(kegg_subset$genes, split = '[/:]')[[1]], function(x){grep(x, rownames(enzyme_abund))})),]
+    rxnList_all[[entry]]$flux <- rxnList[[entry]]$flux <- flux_summary$cellularFluxes[rxN,]
   }
   
 }
-#save(rxnList_all, file = "all_rxnList.Rdata")
+save(rxnList_all, file = "all_rxnList.Rdata")
 
-
-##### predict flux using linear regression using either metabolites and enzymes or their log - partition variance explained into that explained by metabolite and by enzymes ####
-
-reaction_pred_log <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, TSS = NA)
-reaction_pred_linear <- data.frame(nmetab = rep(NA, length(rxnList)), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, TSS = NA)
 
 ### ensure that the ordering of conditions is the same ###
 
@@ -111,10 +111,14 @@ if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapp
   warning('There is a problem with the order of the conditions. (check cond_mapping)')
 }
 
-#cond_mapping$enzyme_reordering = sapply(toupper(chemostatInfo$condition), function(x){c(1:n_c)[toupper(cond_mapping$e) == x]})
-#cond_mapping$enzyme_cond = cond_mapping$e[cond_mapping$enzyme_reordering]
 
-for(rxN in 1:length(rxnList)){
+
+##### predict flux using linear regression using either metabolites and enzymes or their log - partition variance explained into that explained by metabolite and by enzymes ####
+
+reaction_pred_log <- data.frame(nmetab = rep(NA, length(grep('rm$', names(rxnList)))), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, varExplainedJointly = NA, TSS = NA)
+reaction_pred_linear <- data.frame(nmetab = rep(NA, length(grep('rm$', names(rxnList)))), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, varExplainedJointly = NA, TSS = NA)
+
+for(rxN in grep('rm$', names(rxnList))){
   reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeAbund[,1])
   reaction_pred_linear$nmetab[rxN] <- reaction_pred_log$nmetab[rxN] <- sum(!is.na(rxnList[[rxN]]$rxnMet))/25
   
@@ -130,9 +134,9 @@ for(rxN in 1:length(rxnList)){
   reaction_pred_log$nCond[rxN] <- reaction_pred_linear$nCond[rxN] <- sum(!is.na(rxFlux))
   
   if(reaction_pred_linear$nenz[rxN] != 0){
-    enzyme_df = rxnList[[rxN]]$enzymeAbund[,cond_mapping$enzyme_reordering]
+    enzyme_df = rxnList[[rxN]]$enzymeAbund
     
-    lenzymes <- as.matrix(data.frame(t(enzyme_df))); colnames(lenzymes) <- rxnList[[rxN]]$enzymeAbund$Gene
+    lenzymes <- as.matrix(data.frame(t(enzyme_df))); rownames(lenzymes) <- colnames(enzyme_abund)
     enzymes <- 2^lenzymes
     }else{lenzymes <- enzymes <- NULL}
   if(reaction_pred_linear$nmetab[rxN] != 0){
@@ -175,32 +179,54 @@ for(rxN in 1:length(rxnList)){
   if(reaction_pred_linear$nmetab[rxN] != 0 & reaction_pred_linear$nenz[rxN] != 0){
     ### both metabolites and enzymes ###
     reaction_pred_linear$varExplainedTotal[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum[1:2])
+    if(reaction_pred_linear$varExplainedTotal[rxN] < max(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN])){
+      reaction_pred_linear$varExplainedTotal[rxN] <- max(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN])  
+      }
+    
+    ### Variance explained in a full model versus reduced ones
+    
+    if(reaction_pred_linear$varExplainedTotal[rxN] > sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN])){
+      ### add variance explained in complete model to new class - jointly described
+      reaction_pred_linear$varExplainedJointly[rxN] <- reaction_pred_linear$varExplainedTotal[rxN] - sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN])
+      }else{
+        ### some variance is equally accounted for by metabolites or enzymes and should be pulled out and removed from both enzymes and mets
+        reaction_pred_linear$varExplainedEither[rxN] <- sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN]) - reaction_pred_linear$varExplainedTotal[rxN]
+        reaction_pred_linear$varExplainedMetab[rxN] <- reaction_pred_linear$varExplainedMetab[rxN] - reaction_pred_linear$varExplainedEither[rxN]
+        reaction_pred_linear$varExplainedEnzy[rxN] <- reaction_pred_linear$varExplainedEnzy[rxN] - reaction_pred_linear$varExplainedEither[rxN]
+      }
+    
     reaction_pred_log$varExplainedTotal[rxN] <- sum(anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum[1:2])
+    if(is.na(reaction_pred_log$varExplainedTotal[rxN])){next}
     
-    reaction_pred_linear$varExplainedEither[rxN] <- sum(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN]) - reaction_pred_linear$varExplainedTotal[rxN]
-    reaction_pred_linear$varExplainedEnzy[rxN] <- reaction_pred_linear$varExplainedEnzy[rxN] - reaction_pred_linear$varExplainedEither[rxN]
-    reaction_pred_linear$varExplainedMetab[rxN] <- reaction_pred_linear$varExplainedMetab[rxN] - reaction_pred_linear$varExplainedEither[rxN]
+    if(reaction_pred_log$varExplainedTotal[rxN] < max(reaction_pred_log$varExplainedMetab[rxN], reaction_pred_log$varExplainedEnzy[rxN])){
+      reaction_pred_log$varExplainedTotal[rxN] <- max(reaction_pred_log$varExplainedMetab[rxN], reaction_pred_log$varExplainedEnzy[rxN])  
+      }
     
-    reaction_pred_log$varExplainedEither[rxN] <- sum(reaction_pred_log$varExplainedMetab[rxN], reaction_pred_log$varExplainedEnzy[rxN]) - reaction_pred_log$varExplainedTotal[rxN]
-    reaction_pred_log$varExplainedEnzy[rxN] <- reaction_pred_log$varExplainedEnzy[rxN] - reaction_pred_log$varExplainedEither[rxN]
-    reaction_pred_log$varExplainedMetab[rxN] <- reaction_pred_log$varExplainedMetab[rxN] - reaction_pred_log$varExplainedEither[rxN]
+    if(reaction_pred_log$varExplainedTotal[rxN] > sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN])){
+      ### add variance explained in complete model to new class - jointly described
+      reaction_pred_log$varExplainedJointly[rxN] <- reaction_pred_log$varExplainedTotal[rxN] - sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN])
+      }else{
+        ### some variance is equally accounted for by metabolites or enzymes and should be pulled out and removed from both enzymes and mets
+        reaction_pred_log$varExplainedEither[rxN] <- sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN]) - reaction_pred_log$varExplainedTotal[rxN]
+        reaction_pred_log$varExplainedMetab[rxN] <- reaction_pred_log$varExplainedMetab[rxN] - reaction_pred_log$varExplainedEither[rxN]
+        reaction_pred_log$varExplainedEnzy[rxN] <- reaction_pred_log$varExplainedEnzy[rxN] - reaction_pred_log$varExplainedEither[rxN]
+      }
+    
     }
   }
 
 
-qplot(reaction_pred_linear$Fmetab)
-qplot(reaction_pred_linear$Fenz)
+hist(reaction_pred_linear$Fmetab)
+hist(reaction_pred_linear$Fenz)
 
-reaction_pred_log$varExplainedJointly <- NA; reaction_pred_log$varExplainedJointly[!is.na(reaction_pred_log$varExplainedEither) & reaction_pred_log$varExplainedEither < 0] <- -1*reaction_pred_log$varExplainedEither[!is.na(reaction_pred_log$varExplainedEither) & reaction_pred_log$varExplainedEither < 0]
-reaction_pred_linear$varExplainedJointly <- NA; reaction_pred_linear$varExplainedJointly[!is.na(reaction_pred_linear$varExplainedEither) & reaction_pred_linear$varExplainedEither < 0] <- -1*reaction_pred_linear$varExplainedEither[!is.na(reaction_pred_linear$varExplainedEither) & reaction_pred_linear$varExplainedEither < 0]
-reaction_pred_log$varExplainedEither[!is.na(reaction_pred_log$varExplainedEither) & reaction_pred_log$varExplainedEither < 0] <- NA
-reaction_pred_linear$varExplainedEither[!is.na(reaction_pred_linear$varExplainedEither) & reaction_pred_linear$varExplainedEither < 0] <- NA
 
 reaction_pred_summary_log <- data.frame(N = reaction_pred_log$nCond, metaboliteVarianceExplained = reaction_pred_log$varExplainedMetab/reaction_pred_log$TSS, enzymeVarianceExplained = reaction_pred_log$varExplainedEnzy/reaction_pred_log$TSS, 
         varianceAmbiguouslyExplained = reaction_pred_log$varExplainedEither/reaction_pred_log$TSS, varianceJointlyExplained = reaction_pred_log$varExplainedJointly/reaction_pred_log$TSS)
+
 reaction_pred_summary_linear <- data.frame(N = reaction_pred_linear$nCond, metaboliteVarianceExplained = reaction_pred_linear$varExplainedMetab/reaction_pred_linear$TSS, enzymeVarianceExplained = reaction_pred_linear$varExplainedEnzy/reaction_pred_linear$TSS,
         varianceAmbiguouslyExplained = reaction_pred_linear$varExplainedEither/reaction_pred_linear$TSS, varianceJointlyExplained = reaction_pred_linear$varExplainedJointly/reaction_pred_linear$TSS)
-rownames(reaction_pred_summary_log) <- rownames(reaction_pred_summary_linear) <- names(rxnList)
+
+rownames(reaction_pred_summary_log) <- rownames(reaction_pred_summary_linear) <- names(rxnList)[grep('rm$', names(rxnList))]
 
 
 residualDF <- reaction_pred_log$nCond - reaction_pred_log$nmetab - reaction_pred_log$nenz
@@ -212,16 +238,27 @@ reaction_pred_summary_linear <- reaction_pred_summary_linear[reaction_pred_summa
 reaction_pred_summary_log <- reaction_pred_summary_log[order(apply(reaction_pred_summary_log, 1, sum, na.rm = TRUE)),]
 reaction_pred_summary_linear <- reaction_pred_summary_linear[order(apply(reaction_pred_summary_linear, 1, sum, na.rm = TRUE)),]
 
+
+### remove the fraction of variance accounted for by either metabolites or enzymes from each of them ####
+
+#reaction_pred_summary_log$metaboliteVarianceExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)] <- reaction_pred_summary_log$metaboliteVarianceExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)] - reaction_pred_summary_log$varianceJointlyExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)]
+#reaction_pred_summary_log$enzymeVarianceExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)] <- reaction_pred_summary_log$enzymeVarianceExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)] - reaction_pred_summary_log$varianceJointlyExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)]
+                                                   
+#reaction_pred_summary_linear$metaboliteVarianceExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)] <- reaction_pred_summary_linear$metaboliteVarianceExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)] - reaction_pred_summary_linear$varianceJointlyExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)]
+#reaction_pred_summary_linear$enzymeVarianceExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)] <- reaction_pred_summary_linear$enzymeVarianceExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)] - reaction_pred_summary_linear$varianceJointlyExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)]
+
+
 reaction_pred_summary_plotter <- rbind(data.frame(modelType = "logFlux ~ logMetab + logEnzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_log[,1])), reaction_pred_summary_log), id.vars = "index")),
 data.frame(modelType = "Flux ~ Metab + Enzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_linear[,1])), reaction_pred_summary_linear), id.vars = "index")))
 
 reaction_pred_summary_plotter <- reaction_pred_summary_plotter[!is.na(reaction_pred_summary_plotter$value),]
 
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank()) 
+  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank(), panel.margin = unit(1.5, "lines"), axis.text = element_text(color = "BLACK"),
+  strip.background = element_rect(fill = "chocolate1"), strip.text = element_text(vjust = 0.6)) 
  
 rxnPredictionPlot <- ggplot(reaction_pred_summary_plotter, aes(x = factor(index), y = value, fill = as.factor(variable), color = "black")) + facet_grid(modelType ~ .)
-rxnPredictionPlot + geom_bar(binwidth = 1) + barplot_theme + geom_vline(aes(xintercept = 0), size = 0.5) + geom_hline(aes(yintercept = 0), size = 0.5) + 
+rxnPredictionPlot + geom_bar(stat ="identity", width=0.75) + barplot_theme + geom_vline(aes(xintercept = 0), size = 0.5) + geom_hline(aes(yintercept = 0), size = 0.5) + 
   scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) +
   scale_fill_brewer("Prediction Method", palette = "Set2") + scale_color_identity()
   
@@ -243,13 +280,18 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 #### Determine which reaction have valid reaction mechanisms ####
 
-reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$rxnID, NA)})  
+reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$listEntry, NA)})  
 rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
-n_c <- length(rxnList_form[[1]]$flux)
+n_c <- nrow(chemostatInfo)
 
 #### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
 
-save(rxnList_form, cond_mapping, file = "paramOptim.Rdata")
+# chunks to break rxnList into
+chunk_size <- 100
+chunk_assignment <- data.frame(set = names(rxnList_form), chunk = c(rep(1:floor(length(rxnList_form)/chunk_size), each = chunk_size), rep(ceiling(length(rxnList_form)/chunk_size), length(rxnList_form) %% chunk_size)))
+print(paste("The number of parameter chunks is", ceiling(length(rxnList_form)/chunk_size), "submit this parameter when batch submitting processes in FluxOptim.sh"))
+
+save(rxnList_form, cond_mapping, chunk_assignment, file = "paramOptim.Rdata")
 
 
 ##### looking at subset of reactions where a kinetic form was produced because most/all substrates were ascertained ####
@@ -263,9 +305,56 @@ save(rxnList_form, cond_mapping, file = "paramOptim.Rdata")
 
 param_sets <- list.files('FBGA_files/paramSets/')
 
-param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), runNum = sapply(param_sets, function(x){as.numeric(regmatches(x, regexec('[0-9]+', x))[[1]])}), n_samples = NA, sample_freq = NA, burn_in = NA)
+param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), chunkNum =sapply(param_sets, function(x){as.numeric(sub('C', '', regmatches(x, regexec('C[0-9]+', x))[[1]]))}),
+    runNum = sapply(param_sets, function(x){as.numeric(sub('R', '', regmatches(x, regexec('R[0-9]+', x))[[1]]))}), n_samples = NA, sample_freq = NA, burn_in = NA)
+
+
+
+
+### combine parameter runs together into a list indexed by reaction name ####
 
 param_set_list <- list()
+
+k <- 1
+for(a_chunk in sort(unique(param_run_info$chunkNum))){
+  
+  for(an_index in param_run_info$index[param_run_info$chunkNum == a_chunk]){ #temporarely only loading run number 1 (1 tenth of data)
+    load(paste(c("FBGA_files/paramSets/", param_run_info$file[an_index]), collapse = ""))
+    param_run_info$n_samples[an_index] <- run_summary$markov_pars$n_samples
+    param_run_info$sample_freq[an_index] <- run_summary$markov_pars$sample_freq
+    param_run_info$burn_in[an_index] <- run_summary$markov_pars$burn_in
+    
+    for(rx in names(run_summary)[-1]){
+      param_set_list[[as.character(k)]]$name <- data.frame(rx = rx, index = an_index, chunk = a_chunk)
+      param_set_list[[as.character(k)]]$lik <- run_summary[[rx]]$likelihood
+      param_set_list[[as.character(k)]]$MC <- run_summary[[rx]]$markovChain
+      k <- k + 1
+      }
+    }
+  }
+    for(rx in names(run_summary)[-1]){
+      
+      if(rx %in% param_set_list){
+        ### add markov samples and likelihood to existing reaction data
+        
+        param_set_list[[rx]] <- run_summary[names(run_summary) == rx][[1]]
+        param_set_list[[rx]]$likelihood <- rbind(param_set_list[[rx]]$likelihood, data.frame(sample = 1:param_run_info$n_samples[an_index], likelihood = run_summary[names(run_summary) == rx][[1]]$likelihood, index = param_run_info$runNum[an_index]))
+        param_set_list[[rx]]$markovChain  <- rbind(param_set_list[[rx]]$markovChain, run_summary[names(run_summary) == rx][[1]]$markovChain)
+        
+      }else{
+        ### initialize a reaction with reaction data
+        param_set_list[[rx]] <- run_summary[names(run_summary) == rx][[1]]
+        param_set_list[[rx]]$likelihood <- data.frame(sample = 1:param_run_info$n_samples[an_index], likelihood = param_set_list[[rx]]$likelihood, index = param_run_info$runNum[an_index])
+        
+      }
+    }
+  }
+} 
+    
+      
+  
+  
+
 for(an_index in param_run_info$index){
   load(paste(c("FBGA_files/paramSets/", param_run_info$file[an_index]), collapse = ""))
   param_run_info$n_samples[an_index] <- run_summary$markov_pars$n_samples
@@ -274,7 +363,6 @@ for(an_index in param_run_info$index){
   param_set_list[[an_index]] <- run_summary
   }
 
-names(param_set_list[[1]])[-1]
 
 all_rxns <- names(rxnList_form)
 rxn_fits <- NULL
