@@ -410,7 +410,7 @@ for(arxn in reactionInfo$rMech){
   reaction_info_FBGA(rxnName)
   
   print(ggplot() + geom_violin(data = par_likelihood, aes(x = factor(index), y = likelihood), fill = "RED"))
-  print(param_compare(run_rxn, par_markov_chain, par_likelihood))
+  #print(param_compare(run_rxn, par_markov_chain, par_likelihood))
   species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
   print(species_plots[[1]])
   print(species_plots[[2]])
@@ -423,39 +423,90 @@ for(arxn in reactionInfo$rMech){
 save(param_set_list, file = "param_set_list.Rdata")
 save(rxn_fit_params, file = "paramDist.Rdata")
 
+
 under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
 rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
+under_determined_rxnFits <- under_determined_rxnFits[under_determined_rxnFits$parametricFit > 0 | under_determined_rxnFits$rxn %in% paste(substr(under_determined_rxnFits$rxn[under_determined_rxnFits$parametricFit > 0], 1, 6), "-rm", sep = ""),] # remove parameteric fits which are worse than mean flux
+
 under_determined_rxnFits <- under_determined_rxnFits[,-c(1:2)]
+
+rxnFits_correlation <- under_determined_rxnFits[,colnames(under_determined_rxnFits) %in% c("parPearson", "parSpearman", "nnlsPearson", "nnlsSpearman")]
 under_determined_rxnFits_frac <- under_determined_rxnFits/under_determined_rxnFits$TSS
-under_determined_rxnFits_frac <- under_determined_rxnFits_frac[,!(colnames(under_determined_rxnFits_frac) %in% c("TSS", "LS_met", "LS_enzyme"))]
-under_determined_rxnFits_frac <- under_determined_rxnFits_frac[rowSums(is.na(under_determined_rxnFits_frac[,1:3])) == 0,]
-under_determined_rxnFits_frac$bestFit = ifelse(under_determined_rxnFits_frac[,1] > under_determined_rxnFits_frac[,2], TRUE, "LS/NNLS max")
-under_determined_rxnFits_frac$bestFit[under_determined_rxnFits_frac$bestFit == "TRUE"] <- ifelse(apply(under_determined_rxnFits_frac[under_determined_rxnFits_frac$bestFit == "TRUE",1:3], 1, which.max) == 1, "parametric fit", "parameteric fit > NNLS")
+under_determined_rxnFits_frac <- under_determined_rxnFits_frac[,colnames(under_determined_rxnFits_frac) %in% c("parametricFit", "NNLS")]
+under_determined_rxnFits_frac <- under_determined_rxnFits_frac[rowSums(is.na(under_determined_rxnFits_frac)) == 0,]
+under_determined_rxnFits_frac$rxn <- substr(rownames(under_determined_rxnFits_frac), 1, 6)
+under_determined_rxnFits_frac$rxnMech <- rownames(under_determined_rxnFits_frac)
 
-under_determined_rxnFits_frac <- under_determined_rxnFits_frac[order(under_determined_rxnFits_frac$bestFit),]
-barplot_ordering <- 1:length(under_determined_rxnFits_frac[,1])
-for(afit in unique(under_determined_rxnFits_frac$bestFit)){
-  orderfit <- if(afit %in% c("parametric fit", "parameteric fit > NNLS")){"parametricFit"}else{"LS"}
-  barplot_ordering[under_determined_rxnFits_frac$bestFit == afit] <- barplot_ordering[under_determined_rxnFits_frac$bestFit == afit][order(under_determined_rxnFits_frac[,colnames(under_determined_rxnFits_frac) == orderfit][under_determined_rxnFits_frac$bestFit == afit])]
-  }
-under_determined_rxnFits_frac <- under_determined_rxnFits_frac[barplot_ordering,]
+rxOrder <- data.frame(rx = unique(under_determined_rxnFits_frac$rxn), order = rank(sapply(unique(under_determined_rxnFits_frac$rxn), function(x){max(under_determined_rxnFits_frac$parametricFit[under_determined_rxnFits_frac$rxn == x])})))
 
-under_determined_rxnFits_frac$reaction <- factor(rownames(under_determined_rxnFits_frac), levels = rownames(under_determined_rxnFits_frac))
-rxnFit_frac_melt <- melt(under_determined_rxnFits_frac, id.vars = c("reaction", "bestFit"))
+under_determined_rxnFits_frac$rxnOrder <- sapply(under_determined_rxnFits_frac$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
+under_determined_rxnFits_frac <- under_determined_rxnFits_frac[order(under_determined_rxnFits_frac$rxnOrder, under_determined_rxnFits_frac$parametricFit),]
+
+#under_determined_rxnFits_frac <- under_determined_rxnFits_frac[order(under_determined_rxnFits_frac$rxnOrder, mapply(function(x,y){max(x,y)}, x = under_determined_rxnFits_frac$parametricFit, y = under_determined_rxnFits_frac$NNLS)),]
+#under_determined_rxnFits_frac$rxnOrder <- c(1:nrow(under_determined_rxnFits_frac))
+under_determined_rxnFits_frac$rxnMech <- factor(under_determined_rxnFits_frac$rxnMech, levels = under_determined_rxnFits_frac$rxnMech)
+
+rxnFit_frac_melt <- melt(under_determined_rxnFits_frac, id.vars = c("rxn", "rxnMech", "rxnOrder"))
+
 
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
   panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank()) 
 
 
-rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = reaction, y = value, fill = variable)) + facet_wrap(~bestFit, ncol = 1, scales = "free_x")
-rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge") + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+
+
+
+rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = rxnMech, y = value, fill = variable)) + barplot_theme + facet_grid(variable ~ .)
+rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
   scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2")
 ggsave("parFitQuality.pdf", height = 20, width = 20)
 
- 
-  
 
 
+#### plot correlation of flux and prediction ####
+rxnFits_correlation
+rxnFits_correlation$rxn <- substr(rownames(rxnFits_correlation), 1, 6)
+rxnFits_correlation$rxnMech <- rownames(rxnFits_correlation)
+
+rxOrder <- data.frame(rx = unique(rxnFits_correlation$rxn), order = rank(sapply(unique(rxnFits_correlation$rxn), function(x){max(rxnFits_correlation$parSpearman[rxnFits_correlation$rxn == x])})))
+rxnFits_correlation$rxnOrder <- sapply(rxnFits_correlation$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
+rxnFits_correlation <- rxnFits_correlation[order(rxnFits_correlation$rxnOrder, rxnFits_correlation$parSpearman),]
+
+
+
+
+
+
+
+
+
+# make another histogram that shows the explained variance with parametric vs nnls
+rxn_fits$shareNNLS <- rxn_fits$NNLS / rxn_fits$TSS
+rxn_fits$shareNNLS[rxn_fits$shareNNLS <0] <- 0
+rxn_fits$shareParam <- rxn_fits$parametricFit/ rxn_fits$TSS
+rxn_fits$shareParam [rxn_fits$shareParam <0] <- 0
+hist(rxn_fits$shareNNLS,100)
+hist(rxn_fits$shareParam,100)
+
+rxn_fits$rxn[rxn_fits$shareParam >0.6]
+rxn_fits <- rxn_fits[order(rxn_fits$shareParam),]
+fil <- rxn_fits$shareParam > rxn_fits$shareNNLS
+rxn_fits$rxn[fil]
+hist(rxn_fits$shareParam[fil])
+
+plotRxn <- melt(rxn_fits[fil,c('rxn','shareParam','shareNNLS')])
+colnames(plotRxn) <- c('reaction','fit','ESS')
+plotRxn$fit <- as.character(plotRxn$fit)
+plotRxn$reaction <- factor(plotRxn$reaction ,levels=unique(plotRxn$reaction))
+plotRxn$fit[plotRxn$fit == 'shareParam'] <- 'parametric'
+plotRxn$fit[plotRxn$fit == 'shareNNLS'] <- 'NNLS'
+
+ggplot(data=plotRxn,aes(x=reaction,y=ESS))+
+  geom_bar(stat="identity",alpha=1,aes(fill=fit), position = 'dodge')+
+  theme(axis.text.x = element_text(angle=90,vjust=.50))
+
+
+ggsave('ESShist.png',width=9,height=5)
 
 
 
