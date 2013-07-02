@@ -5,6 +5,96 @@ library("RCytoscape")
 library(gplots)
 library(combinat)
 
+### Functions ###
+  				
+met_assigner <- function(head_node, rxn_angle, sub_posn, newlen){
+						
+	#assign metabolites to angles radiating from a node such that minimize the sum of squared angle adjustment
+	#returns a filled in version of sub_posn
+					
+	nmets <- length(sub_posn[,1])
+	if(odd(nmets)){
+		met_angles <- angle_set_odd[1:nmets]
+		}else{
+			met_angles <- angle_set_even[1:nmets]
+			}
+					
+	ideal_met_angles <- rxn_angle + met_angles
+	actual_met_angles <- apply(sub_posn, 1, function(x){
+	if(is.na(x[1])){
+		NA
+		}else{
+	ifelse((x - head_node)[1] >= 0, atan((head_node - x)[2]/(head_node - x)[1]), atan((head_node - x)[2]/(head_node - x)[1]) + pi)}})
+	angle_permutations <- permn(ideal_met_angles)
+	new_angles <- angle_permutations[which.min(lapply(angle_permutations, function(x){sum((x - actual_met_angles)^2, na.rm = TRUE)}))][[1]]
+					
+	for(metab in c(1:length(sub_posn[,1]))){
+		if(is.na(sub_posn[metab,][1])){
+			sub_posn[metab,] <- head_node + newlen*c(cos(new_angles[metab]), sin(new_angles[metab]))
+			}
+		}
+	sub_posn
+	}
+	
+color_by_flux <- function(flux_mat, col_num, edge_sf){
+  	
+	nonzeroRx <- rownames(flux_mat)[flux_mat[,col_num] != 0]
+	rxnFlux <- flux_mat[flux_mat[,col_num] != 0,col_num]
+	
+	
+	medFlux <- summary(abs(rxnFlux))[names(summary(abs(rxnFlux))) == "Median"]
+	edgeWeight <- abs(rxnFlux)
+	edgeWidth <- sapply(edgeWeight/(10*medFlux), function(x){max(x, 1)})*edge_sf
+	edgeStyle <- rep("SOLID", times = length(edgeWidth))
+	
+	number.col = 1001
+	colorz <- blue2red(number.col)
+	col_index <- round(edgeWeight/(max(edgeWeight))*(number.col-1))+1
+	
+	dyn_pop_frame_total <- NULL	
+		
+	for(rx in 1:length(nonzeroRx)){
+		rxname <- nonzeroRx[rx]
+		rxn_stoi <- stoiActive[stoiActive[,colnames(stoiActive) == rxname] != 0,colnames(stoiActive) == rxname]
+		cofactor_change <- rxn_stoi[names(rxn_stoi) %in% cofactors]
+		if(length(cofactor_change) != 0){
+			cofactor_change <- cofactor_change[names(cofactor_change) %in% cofactor.rxns$cofactor[cofactor.rxns$cofactor %in% names(cofactor_change)][sapply(cofactor.list[cofactor.rxns$cofactor %in% names(cofactor_change)], function(x){!(rxname %in% x)})]]
+			}
+		
+		principal_change <-  rxn_stoi[!(names(rxn_stoi) %in% names(cofactor_change))]
+			 
+		if(sum(names(principal_change) %in% split.metab[,1]) != 0){
+			
+			meta_switch <- split.metab[split.metab$metabolite %in% names(principal_change),][sapply(rxn.list[split.metab$metabolite %in% names(principal_change)], function(x){rxname %in% x}),]
+		
+			for(i in 1:length(meta_switch[,1])){
+				names(principal_change)[names(principal_change) == meta_switch[i,1]] <- meta_switch$new_name[i]
+				}
+				}
+		
+		dyn_pop_frame <- NULL
+		if(length(principal_change[principal_change < 0]) > 0){
+			dyn_pop_frame <- rbind(dyn_pop_frame, cbind(nonzeroRx[rx], names(principal_change[principal_change < 0]), paste(rxname, "sub", sep = "_"), edgeWidth[rx]*abs(principal_change[principal_change < 0]), colorz[col_index][rx], edgeStyle[rx], ifelse(rxnFlux[rx] > 0, 1, 0)))
+			}
+		if(length(principal_change[principal_change > 0]) > 0){
+			dyn_pop_frame <- rbind(dyn_pop_frame, cbind(nonzeroRx[rx], paste(rxname, "prod", sep = "_"), names(principal_change[principal_change > 0]), edgeWidth[rx]*abs(principal_change[principal_change > 0]), colorz[col_index][rx], edgeStyle[rx], ifelse(rxnFlux[rx] > 0, 1, 0)))
+			}
+		dyn_pop_frame <- rbind(dyn_pop_frame, cbind(nonzeroRx[rx], paste(rxname, "sub", sep = "_"), paste(rxname, "prod", sep = "_"), edgeWidth[rx]*1, colorz[col_index][rx], edgeStyle[rx], ifelse(rxnFlux[rx] > 0, 1, 0)))
+		
+	
+		dyn_pop_frame_total <- rbind(dyn_pop_frame_total, dyn_pop_frame)
+	}
+	rownames(dyn_pop_frame_total) <- NULL
+	colnames(dyn_pop_frame_total) <- c("rxn", "source", "dest", "width", "color", "line_style", "flip")
+	dyn_pop_frame_total
+}			
+
+####
+
+
+
+
+
 max.add.new <- 2000
 
 # read in reaction which are going to be laid out - those which carried flux under some condition generated in FBA_run_full_reco.R.  Also load fluxes across each condition.
@@ -95,9 +185,6 @@ rxn.list <- list()
 for(i in 1:length(split.metab[,1])){
   rxn.list[[i]] <- strsplit(split.metab$reaction[i], split = ", ")[[1]]
 }
-
-#read in flux values
-flux_vals <- read.delim("carriedFlux.tsv", sep = "\t")
 
 
 
@@ -404,8 +491,11 @@ while(length(rxn_to_do) != 0){
   
 }
 
+#x <- "r_1436"
+#reaction_info(x)
+#rxnFile$Compartment[rxnFile$ReactionID == x]
+#stoisub[stoisub[,colnames(stoisub) == x] != 0,colnames(stoisub) == x]
 
-c(1:nrow(rxn_nodes))[rownames(rxn_nodes) == "r_1521"]
 
 
 #overwrite some nodes with pre-specified coordinates
@@ -417,9 +507,26 @@ for(i in 1:length(nodeOver[,1])){
 
 
 
-
-
 #### reduce reactions (rxn_nodes) and metabolites (met_pos) to the set of reactions which carry flux under some condition ####
+
+fluxMat <- read.delim("Flux_analysis/fluxCarriedSimple.tsv")
+
+
+allLaidRx <- data.frame(index = grep('^r_', rownames(rxn_nodes)), rxName = grep('^r_', rownames(rxn_nodes), value = T))
+validRx <- allLaidRx[allLaidRx$rxName %in% rownames(fluxMat),]
+validRx <- rbind(validRx, data.frame(index = grep('^r_', rownames(rxn_nodes), invert = T), rxName = grep('^r_', rownames(rxn_nodes), invert = T, value = T)))
+
+stoiActive <- stoisub[,validRx$index]
+stoiActive <- stoiActive[rowSums(stoiActive != 0) != 0,]
+
+rxn_nodes <- rxn_nodes[rownames(rxn_nodes) %in% validRx$rxName,] #remove reactions which don't carry flux in any condition
+
+
+valid_split <- split.metab$new_name[sapply(rxn.list, function(x){length(x[x %in% validRx$rxName])}) != 0] # split metabolites which still exist after reactions are pruned
+met_pos <- met_pos[rownames(met_pos) %in% c(valid_split, rownames(stoiActive)[!(rownames(stoiActive) %in% split.metab$metabolite)]),] # all metabolites with some valid associated rxns
+
+
+
 
 
 
@@ -429,104 +536,172 @@ for(i in 1:length(nodeOver[,1])){
 ########## Add the created reaction diagram to cytoscape and specify attributes allowing for flexible visualization ######
 
 library(RCytoscape)
+# install cytoscapeRPC plugin > can be done through "manage plugins" in Cytoscape
 
-mel_graph <- new("graphNEL", edgemode = "directed")
-mel_graph <- initNodeAttribute(graph = mel_graph, attribute.name = "moleculeType", attribute.type = "char", default.value = "undefined")
-mel_graph <- initNodeAttribute(graph = mel_graph, attribute.name = "name", attribute.type = "char", default.value = "undefined")
-mel_graph <- initNodeAttribute(graph = mel_graph, attribute.name = "compartment", attribute.type = "char", default.value = "undefined")
+### initialize some graph properties ###
 
-mel_graph <- initEdgeAttribute(graph = mel_graph, attribute.name = "edgeType", attribute.type = "char", default.value = "produces")
-mel_graph <- initEdgeAttribute(graph = mel_graph, attribute.name = "weights", attribute.type = "numeric", default.value = 1)
-mel_graph <- initEdgeAttribute(graph = mel_graph, attribute.name = "reaction", attribute.type = "char", default.value = "undefined")
-mel_graph <- initEdgeAttribute(graph = mel_graph, attribute.name = "reactionName", attribute.type = "char", default.value = "undefined")
+metabGraph <- new("graphNEL", edgemode = "directed")
+metabGraph <- initNodeAttribute(graph = metabGraph, attribute.name = "moleculeType", attribute.type = "char", default.value = "undefined")
+metabGraph <- initNodeAttribute(graph = metabGraph, attribute.name = "name", attribute.type = "char", default.value = "undefined")
+metabGraph <- initNodeAttribute(graph = metabGraph, attribute.name = "compartment", attribute.type = "char", default.value = "undefined")
 
+metabGraph <- initEdgeAttribute(graph = metabGraph, attribute.name = "edgeType", attribute.type = "char", default.value = "produces")
+metabGraph <- initEdgeAttribute(graph = metabGraph, attribute.name = "weights", attribute.type = "numeric", default.value = 1)
+metabGraph <- initEdgeAttribute(graph = metabGraph, attribute.name = "reaction", attribute.type = "char", default.value = "undefined")
+metabGraph <- initEdgeAttribute(graph = metabGraph, attribute.name = "reactionName", attribute.type = "char", default.value = "undefined")
+
+### display names and compartments of reactionse and metabolites ###
 
 met_pos <- data.frame(met_pos, display_name = rownames(met_pos), stringsAsFactors = FALSE)
 rxn_nodes <- data.frame(rxn_nodes, display_name = rownames(rxn_nodes), stringsAsFactors = FALSE)
 
-if(organism == "yeast"){
-for(i in 1:length(met_pos[,1])){
+for(i in 1:nrow(met_pos)){
 	if(rownames(met_pos)[i] %in% metSty$SpeciesID){
 		met_pos$display_name[i] <- paste(metSty[metSty$SpeciesID == rownames(met_pos)[i],c(2:3)], collapse = "_")
 		met_pos$comp[i] <- metSty$Compartment[metSty$SpeciesID == rownames(met_pos)[i]]
 		}}
 		
-for(i in 1:length(rxn_nodes[,1])){
+for(i in 1:nrow(rxn_nodes)){
 	if(rownames(rxn_nodes)[i] %in% rxnSty$ReactionID[!is.na(rxnSty$Reaction)]){
 		rxn_nodes$display_name[i] <- paste(rxnSty[rxnSty$ReactionID == rownames(rxn_nodes)[i],c(2:3)], collapse = "_")
 		}}
-	}
+	
+## Specify Nodes ###
 
-#specify metabolite nodes
-for(mets in 1:length(met_pos[,1])){
+# Metabolite nodes
+for(mets in 1:nrow(met_pos)){
 	if(is.nan(met_pos[mets,1])){print(paste(mets, " NaN", collapse = " "))}
 	if(!is.na(met_pos[mets,1])){
-		mel_graph <- graph::addNode(rownames(met_pos)[mets], mel_graph)
-		nodeData(mel_graph, rownames(met_pos)[mets], "moleculeType") <- "primaryMet"
-		nodeData(mel_graph, rownames(met_pos)[mets], "name") <- met_pos$display_name[mets]
-		nodeData(mel_graph, rownames(met_pos)[mets], "compartment") <- met_pos$comp[mets]
+		metabGraph <- graph::addNode(rownames(met_pos)[mets], metabGraph)
+		nodeData(metabGraph, rownames(met_pos)[mets], "moleculeType") <- "primaryMet"
+		nodeData(metabGraph, rownames(met_pos)[mets], "name") <- met_pos$display_name[mets]
+		nodeData(metabGraph, rownames(met_pos)[mets], "compartment") <- met_pos$comp[mets]
 		}
 	}
-#setNodePosition(mel_graph, rownames(met_pos)[!is.na(met_pos[,1])], met_pos$x[!is.na(met_pos[,1])], met_pos$y[!is.na(met_pos[,1])])
-#specify substrate/product linker nodes
-for(rxns in 1:length(rxn_nodes[,1])){
+
+# Substrate/product reaction linker nodes 
+for(rxns in 1:nrow(rxn_nodes)){
 	if(is.nan(rxn_nodes[rxns,1])){print(paste(rxns, " NaN", collapse = " "))}
 	if(!is.na(rxn_nodes[rxns,1])){
 		for(x in c("sub", "prod")){
-			mel_graph <- graph::addNode(paste(rownames(rxn_nodes)[rxns], x, sep = "_"), mel_graph)
-			nodeData(mel_graph, paste(rownames(rxn_nodes)[rxns], x, sep = "_"), "moleculeType") <- "spNode"
-			nodeData(mel_graph, paste(rownames(rxn_nodes)[rxns], x, sep = "_"), "name") <- rxn_nodes$display_name[rxns]
+			metabGraph <- graph::addNode(paste(rownames(rxn_nodes)[rxns], x, sep = "_"), metabGraph)
+			nodeData(metabGraph, paste(rownames(rxn_nodes)[rxns], x, sep = "_"), "moleculeType") <- "spNode"
+			nodeData(metabGraph, paste(rownames(rxn_nodes)[rxns], x, sep = "_"), "name") <- rxn_nodes$display_name[rxns]
 			}
 		}
 	}
-#specify edges
-for(rx in 1:length(stoisub[1,])){
+
+### Specify edges ###
+cofactor_layout <- NULL
+cof_node_dist <- 3
+preferred_angles <- c(pi/4, -pi/4, pi/3, -pi/3)
+
+for(rx in 1:ncol(stoiActive)){
 #for(rx in 622:length(stoisub[1,])){
 		
-	rxn_stoi <- stoisub[,rx][stoisub[,rx] != 0]
+	rxn_stoi <- stoiActive[,rx][stoiActive[,rx] != 0]
 	cofactor_change <- rxn_stoi[names(rxn_stoi) %in% cofactors]
-	if(length(cofactor_change) != 0){
-	cofactor_change <- cofactor_change[names(cofactor_change) %in% cofactor.rxns$cofactor[cofactor.rxns$cofactor %in% names(cofactor_change)][sapply(cofactor.list[cofactor.rxns$cofactor %in% names(cofactor_change)], function(x){!(colnames(stoisub)[rx] %in% x)})]]
-		}
+	
+  if(length(cofactor_change) != 0){
+    cofactor_change <- cofactor_change[names(cofactor_change) %in% cofactor.rxns$cofactor[cofactor.rxns$cofactor %in% names(cofactor_change)][sapply(cofactor.list[cofactor.rxns$cofactor %in% names(cofactor_change)], function(x){!(colnames(stoiActive)[rx] %in% x)})]]
+    }
+  	
+  if(length(cofactor_change) != 0){
+	  
+	  ### Add cofactor nodes ###
+	  parent_pos <- rxn_nodes[rownames(rxn_nodes) == colnames(stoiActive)[rx],]
+	  rxAngle <- atan((parent_pos$pn_y - parent_pos$rn_y)/(parent_pos$pn_x - parent_pos$rn_x))
+	  
+	  rxCoef <- data.frame(reaction = colnames(stoiActive)[rx], ID = names(cofactor_change), name = paste(colnames(stoiActive)[rx], names(cofactor_change), sep = "/"), LongcommonName = metIDtoSpec(names(cofactor_change), T), Stoi = unname(cofactor_change), x = NA, y = NA)
+	  rxCoef$commonName <- sapply(rxCoef$LongcommonName, function(x){strsplit(x, split = '-c_[0-9]{1,2}$')[[1]]})
+    rxCoef$compartment <- regmatches(rxCoef$LongcommonName, regexpr('c_[0-9]{1,2}$', rxCoef$LongcommonName))
+    for(cof in 1:length(cofactor_change)){
+	    
+	    if(cofactor_change[cof] < 0){
+	      coefAngle <- pi + rxAngle - preferred_angles[c(1:length(cofactor_change[cofactor_change < 0]))[names(cofactor_change[cofactor_change < 0]) == rxCoef$ID[cof]]]
+	      rxCoef$y[cof] <- parent_pos$rn_y + sin(coefAngle)*cof_node_dist
+	      rxCoef$x[cof] <- parent_pos$rn_x + cos(coefAngle)*cof_node_dist
+	    }else{
+	      coefAngle <- rxAngle + preferred_angles[c(1:length(cofactor_change[cofactor_change > 0]))[names(cofactor_change[cofactor_change > 0]) == rxCoef$ID[cof]]]
+	      rxCoef$y[cof] <- parent_pos$pn_y + sin(coefAngle)*cof_node_dist
+	      rxCoef$x[cof] <- parent_pos$pn_x + cos(coefAngle)*cof_node_dist
+	    }
+	  }
+    
+    #plot(parent_pos$rn_x, parent_pos$rn_y, xlim = c(-30, 15), ylim = c(-15, 30))
+    #points(parent_pos$pn_x, parent_pos$pn_y)
+    #points(rxCoef$y ~ rxCoef$x, col = "RED")
+    
+	  metabGraph <- graph::addNode(rxCoef$name, metabGraph)
+	  nodeData(metabGraph, rxCoef$name, "moleculeType") <- "Cofactor"
+	  nodeData(metabGraph, rxCoef$name, "name") <- rxCoef$commonName
+	  nodeData(metabGraph, rxCoef$name, "compartment") <- rxCoef$compartment
+	  
+	  if(sum(rxCoef$Stoi < 0) != 0){
+	    
+	    metabGraph <- graph::addEdge(rxCoef$name[rxCoef$Stoi < 0], paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), metabGraph)
+	    edgeData(metabGraph, rxCoef$name[rxCoef$Stoi < 0], paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "weights") <- abs(rxCoef$Stoi[rxCoef$Stoi < 0])
+	    edgeData(metabGraph, rxCoef$name[rxCoef$Stoi < 0], paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "edgeType") <- "Consumed"
+	    edgeData(metabGraph, rxCoef$name[rxCoef$Stoi < 0], paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "reaction") <- rownames(rxn_nodes)[rx]
+	    
+	  }
+	  if(sum(rxCoef$Stoi > 0) != 0){
+	    
+	    metabGraph <- graph::addEdge(paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), rxCoef$name[rxCoef$Stoi > 0], metabGraph)
+	    edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), rxCoef$name[rxCoef$Stoi > 0], "weights") <- abs(rxCoef$Stoi[rxCoef$Stoi > 0])
+	    edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), rxCoef$name[rxCoef$Stoi > 0], "edgeType") <- "Produced"
+	    edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), rxCoef$name[rxCoef$Stoi > 0], "reaction") <- rownames(rxn_nodes)[rx]
+	    
+	  }
+    
+    cofactor_layout <- rbind(cofactor_layout, rxCoef)
+    
+	  }
 	
 	principal_change <-  rxn_stoi[!(names(rxn_stoi) %in% names(cofactor_change))]
 		 
 	if(sum(names(principal_change) %in% split.metab[,1]) != 0){
 		
-		meta_switch <- split.metab[split.metab$metabolite %in% names(principal_change),][sapply(rxn.list[split.metab$metabolite %in% names(principal_change)], function(x){colnames(stoisub)[rx] %in% x}),]
+		meta_switch <- split.metab[split.metab$metabolite %in% names(principal_change),][sapply(rxn.list[split.metab$metabolite %in% names(principal_change)], function(x){colnames(stoiActive)[rx] %in% x}),]
 		
 		for(i in 1:length(meta_switch[,1])){
 			names(principal_change)[names(principal_change) == meta_switch[i,1]] <- meta_switch$new_name[i]
 			}
 			}
 	
+  if(sum(is.na(met_pos[rownames(met_pos) %in% names(principal_change),1])) != 0){
+    print(paste("in reaction", colnames(stoiActive)[rx], ":", paste(rownames(met_pos)[rownames(met_pos) %in% names(principal_change)][is.na(met_pos[rownames(met_pos) %in% names(principal_change),1])], collapse = " & "), "not positioned"))
+    next
+    }
+  
+  
 	if(!is.na(rxn_nodes[rx,1])){
 	
 	if(length(principal_change[principal_change < 0]) > 0){	
-		mel_graph <- graph::addEdge(names(principal_change[principal_change < 0]), paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), mel_graph)
-		edgeData(mel_graph, names(principal_change[principal_change < 0]), paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "weights") <- unname(abs(principal_change[principal_change < 0]))
-		edgeData(mel_graph, names(principal_change[principal_change < 0]), paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "edgeType") <- "produced"
-		edgeData(mel_graph, names(principal_change[principal_change < 0]), paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "reaction") <- rownames(rxn_nodes)[rx]
+		metabGraph <- graph::addEdge(names(principal_change[principal_change < 0]), paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), metabGraph)
+		edgeData(metabGraph, names(principal_change[principal_change < 0]), paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "weights") <- unname(abs(principal_change[principal_change < 0]))
+		edgeData(metabGraph, names(principal_change[principal_change < 0]), paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "edgeType") <- "Consumed"
+		edgeData(metabGraph, names(principal_change[principal_change < 0]), paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), "reaction") <- rownames(rxn_nodes)[rx]
 		}
 		
 	if(length(principal_change[principal_change > 0]) > 0){
-	 	mel_graph <- graph::addEdge(paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), names(principal_change[principal_change > 0]), mel_graph)
-	 	edgeData(mel_graph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), names(principal_change[principal_change > 0]), "weights") <- unname(abs(principal_change[principal_change > 0]))
-	 	edgeData(mel_graph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), names(principal_change[principal_change > 0]), "edgeType") <- "consumed"
-	 	edgeData(mel_graph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), names(principal_change[principal_change > 0]), "reaction") <- rownames(rxn_nodes)[rx]
+	 	metabGraph <- graph::addEdge(paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), names(principal_change[principal_change > 0]), metabGraph)
+	 	edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), names(principal_change[principal_change > 0]), "weights") <- unname(abs(principal_change[principal_change > 0]))
+	 	edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), names(principal_change[principal_change > 0]), "edgeType") <- "Produced"
+	 	edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), names(principal_change[principal_change > 0]), "reaction") <- rownames(rxn_nodes)[rx]
 	 	}
 	 	
-	 	mel_graph <- addEdge(paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), mel_graph)
-		edgeData(mel_graph, paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), "weights") <- 1
-		edgeData(mel_graph, paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), "edgeType") <- "reacts"
-		edgeData(mel_graph, paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), "reaction") <- rownames(rxn_nodes)[rx]
-		edgeData(mel_graph, paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), "reactionName") <- rxn_nodes$display_name[rx]
+	 	metabGraph <- addEdge(paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), metabGraph)
+		edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), "weights") <- 1
+		edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), "edgeType") <- "reacts"
+		edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), "reaction") <- rownames(rxn_nodes)[rx]
+		edgeData(metabGraph, paste(rownames(rxn_nodes)[rx], "sub", sep = "_"), paste(rownames(rxn_nodes)[rx], "prod", sep = "_"), "reactionName") <- rxn_nodes$display_name[rx]
 	}}
 
-#eda.names(mel_graph)
-#eda(mel_graph, "weights")
+#eda.names(metabGraph)
+#eda(metabGraph, "weights")
 
-plotter = new.CytoscapeWindow("yeastie4", graph = mel_graph)
+plotter = new.CytoscapeWindow("yeastie4", graph = metabGraph)
 #specify node positioning
 #options(error = recover)
 #options(help.ports=2120)
@@ -535,6 +710,11 @@ displayGraph(plotter)
 setNodePosition(plotter, rownames(met_pos)[!is.na(met_pos[,1])], met_pos$x[!is.na(met_pos[,1])], -1*met_pos$y[!is.na(met_pos[,1])])
 setNodePosition(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "sub", sep = "_"),rxn_nodes[,1][!is.na(rxn_nodes[,1])], -1*rxn_nodes[,2][!is.na(rxn_nodes[,1])])
 setNodePosition(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,3])], "prod", sep = "_"),rxn_nodes[,3][!is.na(rxn_nodes[,3])], -1*rxn_nodes[,4][!is.na(rxn_nodes[,3])])
+
+setNodePosition(plotter, cofactor_layout$name, cofactor_layout$x, -1*cofactor_layout$y)
+setNodeSizeDirect(plotter, cofactor_layout$name, 2)
+setNodeShapeDirect(plotter, cofactor_layout$name, "diamond")
+
 
 #hide all of the reaction nodes
 setNodeFillOpacityDirect(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "sub", sep = "_"), 0)
@@ -550,88 +730,84 @@ setNodeLabelRule(plotter, "name")
 
 setEdgeLabelRule(plotter, "reaction")
 setDefaultEdgeFontSize(plotter, 0.1)
-#setNodeLabelRule()
+setDefaultBackgroundColor(plotter, '#000000') # black background
+setDefaultEdgeColor(plotter, '#FF0033') # red edges
+setDefaultNodeLabelColor(plotter, '#FFFFFF') # white node labels
+showGraphicsDetails(plotter, TRUE) #make it so that cytoscape doesn't suppress labels when zoomed out
 
+redraw(plotter)
 
 #setEdgeLabelRule(obj, edge.attribute.name)
 #setEdgeLabelWidthDirect(obj, edge.names, new.value)
-#add in 2 more nodes between the sub/prod node and cofactors emerging from them
+
+### color nodes by compartment ###
+
+col_mat <- matrix(col2rgb(rich.colors(length(unique(met_pos$comp)))), ncol = 3, byrow = TRUE)
+color_index <- data.frame(compartment = sort(unique(met_pos$comp)), color = mapply(rgb, red = col_mat[,1]/255, green = col_mat[,2]/255, blue = col_mat[,3]/255), stringsAsFactors = FALSE)
+
+for(mets in 1:length(met_pos[,1])){
+  if(!is.na(met_pos[mets,1])){
+    setNodeColorDirect(plotter, rownames(met_pos)[mets], color_index$color[color_index$compartment == met_pos$comp[mets]])
+  }
+}
+
+flux_mat <- fluxMat
+col_num <- 6
+edge_sf <- 0.1
+library(colorRamps)
+
+flux_att <- color_by_flux(flux_mat, col_num, edge_sf)
+edge_names <- sapply(c(1:length(flux_att[,1])), function(x){paste(flux_att[,colnames(flux_att) == "source"][x], flux_att[,colnames(flux_att) == "dest"][x], sep = "~")})
+all_edges <- cy2.edge.names(metabGraph)
+edge_names2 <- unname(unlist(sapply(edge_names, function(x){all_edges[names(all_edges) == x]})))
+edge_names2 <- unname(unlist(sapply(edge_names, function(x){
+  if(x %in% names(all_edges)){
+    all_edges[names(all_edges) == x]
+  }else{
+    NA
+  }
+})))
+
+valid_edge <- edge_names2 %in% all_edges
+
+noflux_edge <- !(names(all_edges) %in% edge_names)
+noflux_edgename <- unname(all_edges[noflux_edge])
 
 
 
-
-if(organism == "yeast"){
-	col_mat <- matrix(col2rgb(rich.colors(length(unique(met_pos$comp)))), ncol = 3, byrow = TRUE)
-	#col_mat <- matrix(col2rgb(rainbow(7)), ncol = 3, byrow = TRUE)
-	color_index <- data.frame(compartment = sort(unique(met_pos$comp)), color = mapply(rgb, red = col_mat[,1]/255, green = col_mat[,2]/255, blue = col_mat[,3]/255), stringsAsFactors = FALSE)
-	
-	for(mets in 1:length(met_pos[,1])){
-	if(!is.na(met_pos[mets,1])){
-		setNodeColorDirect(plotter, rownames(met_pos)[mets], color_index$color[color_index$compartment == met_pos$comp[mets]])
-		}
-	}
-
-	flux_mat <- flux_vals
-	col_num <- 2
-	edge_sf <- 0.1
-	library(colorRamps)
-	
-	flux_att <- color_by_flux(flux_vals, col_num, edge_sf)
-	edge_names <- sapply(c(1:length(flux_att[,1])), function(x){paste(flux_att[,colnames(flux_att) == "source"][x], flux_att[,colnames(flux_att) == "dest"][x], sep = "~")})
-	all_edges <- cy2.edge.names(mel_graph)
-	edge_names2 <- unname(unlist(sapply(edge_names, function(x){all_edges[names(all_edges) == x]})))
-	edge_names2 <- unname(unlist(sapply(edge_names, function(x){
-		if(x %in% names(all_edges)){
-			all_edges[names(all_edges) == x]
-			}else{
-				NA
-				}
-		})))
-	
-	valid_edge <- edge_names2 %in% all_edges
-	
-	noflux_edge <- !(names(all_edges) %in% edge_names)
-	noflux_edgename <- unname(all_edges[noflux_edge])
-	
-	
-	
-	frac_match <- rep(NA, times = length(unique(flux_att[,colnames(flux_att) == "rxn"])))
-	for(i in 1:length(unique(flux_att[,colnames(flux_att) == "rxn"]))){
-		submatch <- flux_att[flux_att[,colnames(flux_att) == "rxn"] %in% unique(flux_att[,colnames(flux_att) == "rxn"])[i],]
-		if(is.vector(submatch) == TRUE){
-			sub_names  <- paste(submatch[names(submatch) == "source"], submatch[names(submatch) == "dest"], sep = "~")
-			}else{
-				sub_names <- sapply(c(1:length(submatch[,1])), function(x){paste(submatch[,colnames(submatch) == "source"][x], submatch[,colnames(submatch) == "dest"][x], sep = "~")})
-				}
-		frac_match[i] <- sum(sub_names %in% names(all_edges))/length(sub_names %in% names(all_edges))
-		}
-	
-	
-	flux_att_red <- flux_att[valid_edge,]
-	edge_names2_red <- edge_names2[valid_edge]
-	
-	for(edge in c(1:length(edge_names2_red))){	
-		setEdgeLineWidthDirect(plotter, edge_names2_red[edge], as.numeric(flux_att_red[,colnames(flux_att_red) == "width"][edge]))
-		setEdgeColorDirect(plotter, edge_names2_red[edge], flux_att_red[,colnames(flux_att_red) == "color"][edge])
-		}
-		
-		
-		
-	for(edge in c(1:length(noflux_edgename))){	
-		setEdgeLineWidthDirect(plotter, noflux_edgename[edge], edge_sf)
-		setEdgeColorDirect(plotter, noflux_edgename[edge], rgb(0,0,0))
-		}
+frac_match <- rep(NA, times = length(unique(flux_att[,colnames(flux_att) == "rxn"])))
+for(i in 1:length(unique(flux_att[,colnames(flux_att) == "rxn"]))){
+  submatch <- flux_att[flux_att[,colnames(flux_att) == "rxn"] %in% unique(flux_att[,colnames(flux_att) == "rxn"])[i],]
+  if(is.vector(submatch) == TRUE){
+    sub_names  <- paste(submatch[names(submatch) == "source"], submatch[names(submatch) == "dest"], sep = "~")
+  }else{
+    sub_names <- sapply(c(1:length(submatch[,1])), function(x){paste(submatch[,colnames(submatch) == "source"][x], submatch[,colnames(submatch) == "dest"][x], sep = "~")})
+  }
+  frac_match[i] <- sum(sub_names %in% names(all_edges))/length(sub_names %in% names(all_edges))
+}
 
 
-	
-	}
+flux_att_red <- flux_att[valid_edge,]
+edge_names2_red <- edge_names2[valid_edge]
+
+for(edge in c(1:length(edge_names2_red))){	
+  setEdgeLineWidthDirect(plotter, edge_names2_red[edge], as.numeric(flux_att_red[,colnames(flux_att_red) == "width"][edge]))
+  setEdgeColorDirect(plotter, edge_names2_red[edge], flux_att_red[,colnames(flux_att_red) == "color"][edge])
+}
+
+
+
+for(edge in c(1:length(noflux_edgename))){	
+  setEdgeLineWidthDirect(plotter, noflux_edgename[edge], edge_sf)
+  setEdgeColorDirect(plotter, noflux_edgename[edge], rgb(0,0,0))
+}
 
 redraw(plotter)
 
 #setEdge
-#grep(matchRE, cy2.edge.names(mel_graph))
-#grep(flux_att[1,1], cy2.edge.names(mel_graph))
-#grep(flux_att[2,1], cy2.edge.names(mel_graph))
+#grep(matchRE, cy2.edge.names(metabGraph))
+#grep(flux_att[1,1], cy2.edge.names(metabGraph))
+#grep(flux_att[2,1], cy2.edge.names(metabGraph))
 
 
 #setEdgeLineStyleDirect
@@ -642,100 +818,11 @@ redraw(plotter)
 
 rx <- 73
 
-color_by_flux <- function(flux_mat, col_num, edge_sf){
-		
-	nonzeroRx <- rownames(flux_mat)[flux_mat[,col_num] != 0]
-	rxnFlux <- flux_mat[flux_mat[,col_num] != 0,col_num]
-	
-	
-	medFlux <- summary(abs(rxnFlux))[names(summary(abs(rxnFlux))) == "Median"]
-	edgeWeight <- abs(rxnFlux)
-	edgeWidth <- sapply(edgeWeight/(10*medFlux), function(x){max(x, 1)})*edge_sf
-	edgeStyle <- rep("SOLID", times = length(edgeWidth))
-	
-	number.col = 1001
-	colorz <- blue2red(number.col)
-	col_index <- round(edgeWeight/(max(edgeWeight))*(number.col-1))+1
-	
-	dyn_pop_frame_total <- NULL	
-		
-	for(rx in 1:length(nonzeroRx)){
-		rxname <- nonzeroRx[rx]
-		rxn_stoi <- stoisub[stoisub[,colnames(stoisub) == rxname] != 0,colnames(stoisub) == rxname]
-		cofactor_change <- rxn_stoi[names(rxn_stoi) %in% cofactors]
-		if(length(cofactor_change) != 0){
-			cofactor_change <- cofactor_change[names(cofactor_change) %in% cofactor.rxns$cofactor[cofactor.rxns$cofactor %in% names(cofactor_change)][sapply(cofactor.list[cofactor.rxns$cofactor %in% names(cofactor_change)], function(x){!(rxname %in% x)})]]
-			}
-		
-		principal_change <-  rxn_stoi[!(names(rxn_stoi) %in% names(cofactor_change))]
-			 
-		if(sum(names(principal_change) %in% split.metab[,1]) != 0){
-			
-			meta_switch <- split.metab[split.metab$metabolite %in% names(principal_change),][sapply(rxn.list[split.metab$metabolite %in% names(principal_change)], function(x){rxname %in% x}),]
-		
-			for(i in 1:length(meta_switch[,1])){
-				names(principal_change)[names(principal_change) == meta_switch[i,1]] <- meta_switch$new_name[i]
-				}
-				}
-		
-		dyn_pop_frame <- NULL
-		if(length(principal_change[principal_change < 0]) > 0){
-			dyn_pop_frame <- rbind(dyn_pop_frame, cbind(nonzeroRx[rx], names(principal_change[principal_change < 0]), paste(rxname, "sub", sep = "_"), edgeWidth[rx]*abs(principal_change[principal_change < 0]), colorz[col_index][rx], edgeStyle[rx], ifelse(rxnFlux[rx] > 0, 1, 0)))
-			}
-		if(length(principal_change[principal_change > 0]) > 0){
-			dyn_pop_frame <- rbind(dyn_pop_frame, cbind(nonzeroRx[rx], paste(rxname, "prod", sep = "_"), names(principal_change[principal_change > 0]), edgeWidth[rx]*abs(principal_change[principal_change > 0]), colorz[col_index][rx], edgeStyle[rx], ifelse(rxnFlux[rx] > 0, 1, 0)))
-			}
-		dyn_pop_frame <- rbind(dyn_pop_frame, cbind(nonzeroRx[rx], paste(rxname, "sub", sep = "_"), paste(rxname, "prod", sep = "_"), edgeWidth[rx]*1, colorz[col_index][rx], edgeStyle[rx], ifelse(rxnFlux[rx] > 0, 1, 0)))
-		
-	
-		dyn_pop_frame_total <- rbind(dyn_pop_frame_total, dyn_pop_frame)
-	}
-	rownames(dyn_pop_frame_total) <- NULL
-	colnames(dyn_pop_frame_total) <- c("rxn", "source", "dest", "width", "color", "line_style", "flip")
-	dyn_pop_frame_total
-}			
+
 
 			
 		
 
-
-
-#edgeVals <- sort(unique(eda(mel_graph, "weights")))
-#names(eda(mel_graph, "weights")), unname(eda(mel_graph, "weights"))
-
-
-#setEdgeLineWidthRule(obj, edge.attribute.name, attribute.values, line.widths, default.width)
-#getArrowShapes(plotter)
-#setEdgeTargetArrowRule
-#add flux value - either effects edge width or color
-
-if(organism == "mel"){
-
-load("LHPC_resp.Rdata")
-library(colorRamps)
-lh_pc[,1] <- lh_pc[,1]*-1
-
-
-pc_num <- 1
-number.col = 1001
-colorz <- blue2red(number.col)
-col_index <- round((lh_pc + max(abs(range(lh_pc[,pc_num]))))/(2*max(abs(range(lh_pc))))*(number.col-1))
-
-
-edgeSF <- 0.3
-for(x in c(1:length(eda(mel_graph, "weights")))){
-	setEdgeLineWidthDirect(plotter, cy2.edge.names(mel_graph)[x], (unname(eda(mel_graph, "weights"))*edgeSF)[x])
-	rxn = unname(eda(mel_graph, "reaction"))[x]
-	if(!(rxn %in% rownames(col_index))){
-		setEdgeColorDirect(plotter, cy2.edge.names(mel_graph)[x], rgb(0,0,0))
-		}else{
-			setEdgeColorDirect(plotter, cy2.edge.names(mel_graph)[x], colorz[col_index[rownames(col_index) %in% rxn,pc_num]+1])
-			}}
-
-	}
-
-#source the options in this script and save the model positioning part
-redraw(plotter)
 
 
 
@@ -761,9 +848,11 @@ for(n in 1:length(allNodes)){
 				new_mat[n,c(2:3)] <- metSty[metSty$SpeciesID == split.metab[split.metab$new_name == allNodes[n],]$metabolite,][c(2,3)]
 				}
 			}else{
-				new_mat[n,-((length(metSty[1,])+1):(length(metSty[1,])+2))] <- metSty[metSty$SpeciesID == allNodes[n],]
+				new_mat[n,] <- c(metSty[metSty$SpeciesID == allNodes[n],], metSty[metSty$SpeciesID == allNodes[n],][(length(metSty[metSty$SpeciesID == allNodes[n],]) - 1):length(metSty[metSty$SpeciesID == allNodes[n],])])
 				}}
+    
 joint.table <- new_mat	
+
 
 #all_mets <- metSty[,1]
 #bind_frame <- data.frame(temp1 = rep(NA, times = length(all_mets)), temp2 = rep(NA, times = length(all_mets)))
@@ -790,19 +879,19 @@ getNodePosition(plotter, rownames(met_pos))
 plot(met_pos[,2] ~ met_pos[,1], col = "RED", pch = 16)
 segments(rxn_nodes[,1], rxn_nodes[,2], rxn_nodes[,3], rxn_nodes[,4])	
 	
-for(rx in 1:length(stoisub[1,])){
+for(rx in 1:length(stoiActive[1,])){
 	
-	rxn_stoi <- stoisub[,rx][stoisub[,rx] != 0]
+	rxn_stoi <- stoiActive[,rx][stoiActive[,rx] != 0]
 	cofactor_change <- rxn_stoi[names(rxn_stoi) %in% cofactors]
 	if(length(cofactor_change) != 0){
-	cofactor_change <- cofactor_change[names(cofactor_change) %in% cofactor.rxns$cofactor[cofactor.rxns$cofactor %in% names(cofactor_change)][sapply(cofactor.list[cofactor.rxns$cofactor %in% names(cofactor_change)], function(x){!(colnames(stoisub)[rx] %in% x)})]]
+	cofactor_change <- cofactor_change[names(cofactor_change) %in% cofactor.rxns$cofactor[cofactor.rxns$cofactor %in% names(cofactor_change)][sapply(cofactor.list[cofactor.rxns$cofactor %in% names(cofactor_change)], function(x){!(colnames(stoiActive)[rx] %in% x)})]]
 		}
 	
 	principal_change <-  rxn_stoi[!(names(rxn_stoi) %in% names(cofactor_change))]
 		 
 	if(sum(names(principal_change) %in% split.metab[,1]) != 0){
 		
-		meta_switch <- split.metab[split.metab$metabolite %in% names(principal_change),][sapply(rxn.list[split.metab$metabolite %in% names(principal_change)], function(x){colnames(stoisub)[rx] %in% x}),]
+		meta_switch <- split.metab[split.metab$metabolite %in% names(principal_change),][sapply(rxn.list[split.metab$metabolite %in% names(principal_change)], function(x){colnames(stoiActive)[rx] %in% x}),]
 		#meta_switch <- split.metab[split.metab$metabolite %in% names(principal_change),][sapply(rxn.list[split.metab$metabolite %in% names(principal_change)], function(x){rx %in% x}),]
 		for(i in 1:length(meta_switch[,1])){
 			names(principal_change)[names(principal_change) == meta_switch[i,1]] <- meta_switch$new_name[i]
@@ -824,37 +913,6 @@ for(rx in 1:length(stoisub[1,])){
 					
 					
 					
-					
-met_assigner <- function(head_node, rxn_angle, sub_posn, newlen){
-						
-	#assign metabolites to angles radiating from a node such that minimize the sum of squared angle adjustment
-	#returns a filled in version of sub_posn
-					
-	nmets <- length(sub_posn[,1])
-	if(odd(nmets)){
-		met_angles <- angle_set_odd[1:nmets]
-		}else{
-			met_angles <- angle_set_even[1:nmets]
-			}
-					
-	ideal_met_angles <- rxn_angle + met_angles
-	actual_met_angles <- apply(sub_posn, 1, function(x){
-	if(is.na(x[1])){
-		NA
-		}else{
-	ifelse((x - head_node)[1] >= 0, atan((head_node - x)[2]/(head_node - x)[1]), atan((head_node - x)[2]/(head_node - x)[1]) + pi)}})
-	angle_permutations <- permn(ideal_met_angles)
-	new_angles <- angle_permutations[which.min(lapply(angle_permutations, function(x){sum((x - actual_met_angles)^2, na.rm = TRUE)}))][[1]]
-					
-	for(metab in c(1:length(sub_posn[,1]))){
-		if(is.na(sub_posn[metab,][1])){
-			sub_posn[metab,] <- head_node + newlen*c(cos(new_angles[metab]), sin(new_angles[metab]))
-			}
-		}
-	sub_posn
-	}
-	
-	
 	
 	
 	
