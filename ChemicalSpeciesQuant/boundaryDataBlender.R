@@ -26,6 +26,7 @@ compComp <- data.frame(t(sapply(compositionFile$AltName, function(x){
 compComp[compComp$name == "(1->3)-beta-D-glucan", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5) #one oxygen shared bc of condensation
 compComp[compComp$name == "glycogen", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5)
 compComp[compComp$name == "mannan", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5)
+compComp[compComp$name == "polyphosphate", colnames(compComp) %in% c("O", "P")] <- c(4, 1)
 compComp[is.na(compComp)] <- 0
 compComp[,-c(1:2)] <- apply(compComp[,-c(1:2)], c(1,2), as.numeric)
 compComp <- compComp[,c(TRUE, TRUE, colSums(compComp[,-c(1:2)]) != 0)]
@@ -35,6 +36,13 @@ atomicMasses <- data.frame(element = c("C", "H", "N", "O", "P", "S"), mass = c(1
 compositionFile$MW <- t(t(compComp[,-c(1,2)])) %*% t(t(c(atomicMasses[,2])))
 compositionFile$weightPerUn <- as.numeric(compositionFile$StoiCoef) * compositionFile$MW
 #compositionFile$weight_per_t[compositionFile$Class == "Energy Balance"] <- NA
+
+if(any(compositionFile$MW == 0)){
+  print("incompatible MW")  
+  }
+
+
+
 
 class_composition <- sapply(unique(compositionFile$Class), function(x){sum(compositionFile$weightPerUn[compositionFile$Class == x])}) * -1
 class_composition <- data.frame(Category = names(class_composition[names(class_composition) != "Energy Balance"]), Abundance = unname(class_composition[names(class_composition) != "Energy Balance"]))
@@ -97,6 +105,7 @@ chemostatInfo$DWperCell = chemostatInfo$DWperML * (1/1000) / chemostatInfo$VolFr
 
 proteinFrac <- read.table('BulkComposition/Protein_data.txt',sep='\t', header = T)
 proteinFrac <- proteinFrac[chmatch(proteinFrac$condition, comp_by_cond$CV_table$condition),]
+
 CV_table[,"AA flux" := sqrt(proteinFrac$assayVariance)/proteinFrac$fraction,]
 
 aaRelAbunds <- compositionFile[compositionFile$Class == "Amino Acid",]
@@ -122,6 +131,14 @@ glycerolFrac <- glycerolFrac[chmatch(glycerolFrac$condition, comp_by_cond$CV_tab
 CV_table[,"glycerol washout" := sqrt(glycerolFrac$assayVariance)/glycerolFrac$fraction,]
 
 comp_by_cond$moles_per_cell[compositionFile$MetName == "glycerol",] <- t(t(t((glycerolFrac$fraction * chemostatInfo$DWperCell))) %*% t(1/compositionFile$MW[compositionFile$MetName == "glycerol"]))
+
+## polyphosphate production ##
+
+polyphosphateFrac <- read.table('BulkComposition/PPfrac_data.txt',sep='\t', header = T)
+polyphosphateFrac <- polyphosphateFrac[chmatch(polyphosphateFrac$condition, comp_by_cond$CV_table$condition),]
+CV_table[,"polyphosphate flux" := sqrt(polyphosphateFrac$assayVariance)/polyphosphateFrac$fraction,]
+
+comp_by_cond$moles_per_cell[compositionFile$MetName == "polyphosphate",] <- t(t(t((polyphosphateFrac$fraction * chemostatInfo$DWperCell))) %*% t(1/compositionFile$MW[compositionFile$MetName == "polyphosphate"]))
 
 
 
@@ -154,6 +171,8 @@ comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dGTP",
 
 #scaling energy usage by cell weight relative to default weight.
 
+load('BulkComposition/protSpecQuantOut.Rdata')
+
 comp_by_cond$grams_per_cell <- comp_by_cond$moles_per_cell * (t(t(compositionFile$MW)) %*% t(rep(1,n_c)))
 
 cond_dryweight <- sapply(unique(dry_weight_perCell_DFmelt$Condition), function(x){
@@ -182,25 +201,82 @@ weightStackDF <- melt(weightAndSum)
 colnames(weightStackDF)[4:5] <- c("Condition", "Abundance")
 
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "top", 
-  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line")) 
+  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line"),
+  strip.background = element_rect(fill = "darkgoldenrod1")) 
 
 weightStackDF$fraction <- sapply(1:length(weightStackDF[,1]), function(x){
   weightStackDF$Abundance[x]/sum(weightStackDF$Abundance[weightStackDF$Condition == weightStackDF$Condition[x]], na.rm = TRUE)
   })
 
+weightStackDF$Class <- factor(weightStackDF$Class)
+
+#### Confidence intervals for pg per cell ###
+
+weightStackDF <- weightStackDF[grep('p0.05H', weightStackDF$Condition, invert = T),]
+weightStackDF$Limitation <- toupper(sapply(as.character(weightStackDF$Condition), function(x){strsplit(x, split = '')[[1]][1]}))
+weightStackDF$DR <- sapply(as.character(weightStackDF$Condition), function(x){paste(strsplit(x, split = '')[[1]][-1], collapse = "")})
+
+class_sum_wpc <- acast(weightStackDF, formula = Class ~ Condition, sum, value.var = "Abundance")
+cumsum_height <- apply(class_sum_wpc, 2, cumsum)
+class_sum_melt <- data.frame(melt(class_sum_wpc), melt(cumsum_height)[,3])
+colnames(class_sum_melt) <- c("Class", "Condition", "Abundance", "cumsum")
+class_sum_melt$SE <- NA
+
+class_sum_melt$SE[class_sum_melt$Class == "Amino Acid"] <- CV_table$"AA flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_melt$SE[class_sum_melt$Class == "Carbohydrates"] <- CV_table$"sugar polymer flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_melt$SE[class_sum_melt$Class == "Glycerol"] <- CV_table$"glycerol washout"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_melt$SE[class_sum_melt$Class == "Nucleic Acid"] <- CV_table$"NTP flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_melt$SE[class_sum_melt$Class == "Polyphosphates"] <- CV_table$"polyphosphate flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_melt <- class_sum_melt[!is.na(class_sum_melt$SE),]
+class_sum_melt$lb <- class_sum_melt$cumsum - class_sum_melt$SE*class_sum_melt$Abundance
+class_sum_melt$ub <- class_sum_melt$cumsum + class_sum_melt$SE*class_sum_melt$Abundance
+class_sum_melt$Limitation <- toupper(sapply(as.character(class_sum_melt$Condition), function(x){strsplit(x, split = '')[[1]][1]}))
+class_sum_melt$DR <- sapply(as.character(class_sum_melt$Condition), function(x){paste(strsplit(x, split = '')[[1]][-1], collapse = "")})
+
+
+#### Confidence intervals for % comp ####
+
+class_sum_fraction <- acast(weightStackDF, formula = Class ~ Condition, sum, value.var = "fraction")
+cumsum_height <- apply(class_sum_fraction, 2, cumsum)
+class_sum_fraction_melt <- data.frame(melt(class_sum_fraction), melt(cumsum_height)[,3])
+colnames(class_sum_fraction_melt) <- c("Class", "Condition", "Abundance", "cumsum")
+class_sum_fraction_melt$SE <- NA
+
+class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Amino Acid"] <- CV_table$"AA flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Carbohydrates"] <- CV_table$"sugar polymer flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Glycerol"] <- CV_table$"glycerol washout"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Nucleic Acid"] <- CV_table$"NTP flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Polyphosphates"] <- CV_table$"polyphosphate flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_fraction_melt <- class_sum_fraction_melt[!is.na(class_sum_fraction_melt$SE),]
+class_sum_fraction_melt$lb <- class_sum_fraction_melt$cumsum - class_sum_fraction_melt$SE*class_sum_fraction_melt$Abundance
+class_sum_fraction_melt$ub <- class_sum_fraction_melt$cumsum + class_sum_fraction_melt$SE*class_sum_fraction_melt$Abundance
+class_sum_fraction_melt$lbnonstack <- class_sum_fraction_melt$Abundance - class_sum_fraction_melt$SE*class_sum_fraction_melt$Abundance
+class_sum_fraction_melt$ubnonstack <- class_sum_fraction_melt$Abundance + class_sum_fraction_melt$SE*class_sum_fraction_melt$Abundance
+
+class_sum_fraction_melt$Limitation <- toupper(sapply(as.character(class_sum_fraction_melt$Condition), function(x){strsplit(x, split = '')[[1]][1]}))
+class_sum_fraction_melt$DR <- sapply(as.character(class_sum_fraction_melt$Condition), function(x){paste(strsplit(x, split = '')[[1]][-1], collapse = "")})
+
+#levels(class_sum_fraction_melt$Class)[levels(class_sum_fraction_melt$Class) == "Lipid-related"] <- "Glycerol"
+#levels(class_sum_melt$Class)[levels(class_sum_melt$Class) == "Lipid-related"] <- "Glycerol"
+#levels(weightStackDF$Class)[levels(weightStackDF$Class) == "Lipid-related"] <- "Glycerol"
+
+
 #plot condition specific composition from experimental measurements
 
-class_comp_plot <- ggplot(weightStackDF, aes(y = Abundance, factor(Condition), fill = factor(Class))) + barplot_theme
-class_comp_plot + geom_bar(colour = "black", stat = "identity") + scale_y_continuous("pg per cell", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(name = "Class", palette = "Set1")
+cbPalette <- c("#56B4E9", "#D55E00", "#E69F00", "#009E73", "#F0E442", "#999999", "#CC79A7")
+
+ggplot() + geom_bar(data = weightStackDF, aes(y = Abundance, x = DR, fill = factor(Class)), colour = "black", stat = "identity") + scale_y_continuous("pg per cell +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette) +
+  geom_errorbar(data = class_sum_melt, aes(x = DR, ymin = lb, ymax = ub), color = "WHITE") + barplot_theme + facet_grid(~ Limitation) + ggtitle("Total macromolecules and composition greatly varies across growth conditions")
 ggsave(file = "condition_composition.pdf", height = 12, width = 20)
 
-class_comp_plot <- ggplot(weightStackDF, aes(y = fraction, factor(Condition), fill = factor(Class))) + barplot_theme + facet_grid(Class ~ ., scale = "free_y")
-class_comp_plot + geom_bar(colour = "black", stat = "identity") + scale_y_continuous("Fraction of dry weight") + scale_x_discrete("Experimental condition") + scale_fill_brewer(name = "Class", palette = "Set1")
-ggsave(file = "facet_composition.pdf", height = 12, width = 20)
+
+ggplot() + geom_bar(data = weightStackDF, aes(y = fraction, x = DR, fill = factor(Class)), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette) +
+  geom_errorbar(data = class_sum_fraction_melt, aes(x = DR, ymin = lbnonstack, ymax = ubnonstack), color = "black") + barplot_theme + facet_grid(Class ~ Limitation, scale = "free") + ggtitle("Relative abundance of macromolecules varies across growth conditions")
+ggsave(file = "facet_composition.pdf", height = 18, width = 20)
 
 
-class_comp_plot <- ggplot(weightStackDF[!is.na(weightStackDF$Abundance),], aes(y = Abundance, factor(Condition), fill = factor(Class))) + barplot_theme
-class_comp_plot + geom_bar(stat = "identity", position = "fill") + scale_y_continuous("Fraction of cellular material", expand = c(0,0)) + scale_x_discrete("Experimental condition") + scale_fill_brewer(name = "Class", palette = "Set1")
+ggplot() + geom_bar(data = weightStackDF[!is.na(weightStackDF$Abundance),], aes(y = fraction, x = DR, fill = factor(Class), position = "fill"), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette) +
+  geom_errorbar(data = class_sum_fraction_melt, aes(x = DR, ymin = lb, ymax = ub), color = "white") + barplot_theme + facet_grid( ~ Limitation, scale = "free") + ggtitle("Fractional composition of macromolecules varies across growth conditions")
 ggsave(file = "fractional_composition.pdf", height = 12, width = 20)
 
 
@@ -305,9 +381,12 @@ mediaSummary <- NULL
 SPM <- SPM[chmatch(chemostatInfo$condition, SPM$condition),]
 SPM$SDconcensus <- median(SPM$phosphateSD/(SPM$ceiling - SPM$phosphateUptake))*(SPM$ceiling - SPM$phosphateUptake) #use a fixed coefficient of variation 13%
 
+SPM$maxSD <- mapply(function(x,y){max(x, y)}, x = SPM$phosphateSD, y = SPM$SDconcensus)
+
+
 # take a consensus SD for p-lim and !p-lim
 
-SPM_out <- data.frame(condition = SPM$condition, specie = "phosphate", change = SPM$phosphateUptake, sd = SPM$phosphateSD, lb = 0, ub = SPM$ceiling, type = "uptake")
+SPM_out <- data.frame(condition = SPM$condition, specie = "phosphate", change = SPM$phosphateUptake, sd = SPM$maxSD, lb = 0, ub = SPM$ceiling, type = "uptake")
 mediaSummary <- rbind(mediaSummary, SPM_out)
 
 ### NMR data - glucose -> EtOH, Ac, glycerol 
@@ -318,14 +397,16 @@ for(a_specie_n in 1:length(speciesOfInterest[,1])){
   NMR_data_subset$condition <- factor(NMR_data_subset$condition, levels = chemostatInfo$condition)
   NMR_data_subset <- NMR_data_subset[order(NMR_data_subset$condition),]
   NMR_data_subset$consensusSD <- NMR_data_subset$estimate * median(NMR_data_subset$se/NMR_data_subset$estimate) #take a consensus SD using a fixed CV
+  NMR_data_subset$maxSD <-  mapply(function(x,y){max(x, y)}, x = NMR_data_subset$se, y = NMR_data_subset$consensusSD)
   
   if(speciesOfInterest$type[a_specie_n] == "uptake"){
+    
     mediaComp <- nutrientFile[nutrientFile$X == speciesOfInterest$modelName[a_specie_n],-1]
     upper_bound <- unname(unlist(sapply(as.character(NMR_data_subset$condition), function(x){mediaComp[names(mediaComp) == nutrientFileConv$mediaName[nutrientFileConv$shortName == strsplit(x, '')[[1]][1]]]})))
-    NMR_out <- data.frame(condition = NMR_data_subset$condition, specie = speciesOfInterest$modelName[a_specie_n], change = (upper_bound - NMR_data_subset$estimate/1000), sd = NMR_data_subset$consensusSD/1000, lb = 0, ub = upper_bound, type = "uptake")
+    NMR_out <- data.frame(condition = NMR_data_subset$condition, specie = speciesOfInterest$modelName[a_specie_n], change = (upper_bound - NMR_data_subset$estimate/1000), sd = NMR_data_subset$maxSD/1000, lb = 0, ub = upper_bound, type = "uptake")
     
   }else{
-    NMR_out <- data.frame(condition = NMR_data_subset$condition, specie = speciesOfInterest$modelName[a_specie_n], change = NMR_data_subset$estimate/1000, sd = NMR_data_subset$consensusSD/1000, lb = 0, ub = Inf, type = "excretion")
+    NMR_out <- data.frame(condition = NMR_data_subset$condition, specie = speciesOfInterest$modelName[a_specie_n], change = NMR_data_subset$estimate/1000, sd = NMR_data_subset$maxSD/1000, lb = 0, ub = Inf, type = "excretion")
     }
   
   mediaSummary <- rbind(mediaSummary, NMR_out)
@@ -390,7 +471,7 @@ compositionFile_Extended$varCategory[grep('Cell Wall Steroids', compositionFile_
 compositionFile_Extended$varCategory[grep('Sulfate', compositionFile_Extended$MetName)] <- "sulfate flux"
 compositionFile_Extended$varCategory[grep('Maintenance ATP hydrolysis', compositionFile_Extended$Class)] <- "Maintenance ATP hydrolysis"
 compositionFile_Extended$varCategory[compositionFile_Extended$MetName == "glycerol"] <- "glycerol washout"
-
+compositionFile_Extended$varCategory[compositionFile_Extended$MetName == "polyphosphate"] <- "polyphosphate flux"
 
 ### Final output -> FBA_run ####
 

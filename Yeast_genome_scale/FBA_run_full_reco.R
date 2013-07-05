@@ -41,12 +41,27 @@ rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), 
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
+#### add additional reactions ####
+rxnFileAppend <- read.delim("customRxns.txt", sep = "\t")
+rxnFile <- rbind(rxnFile, rxnFileAppend)
+
+customMets <- read.delim("customMets.txt", sep = "\t")
+corrFileAppend <- customMets[,colnames(customMets) %in% c("SpeciesID", "SpeciesName", "SpeciesType", "Compartment")]
+corrFile <- rbind(corrFile, corrFileAppend)
+
+rxnparFileAppend <- customMets[,colnames(customMets) %in% c("SpeciesID", "SpeciesType", "Evidence")]
+colnames(rxnparFile) <- colnames(rxnparFileAppend)
+rxnparFile <- rbind(rxnparFile, rxnparFileAppend)
+
 #### Load files describing boundary conditions and reaction reversibility from ecoli ####
 metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
 #compositionFile <- read.delim("../Yeast_comp_energy.txt") #energy required to assimilate biomass components
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
+
+
+#### add additional reactions to rxnFile & corrFile
 
 
 reactions = unique(rxnFile$ReactionID)
@@ -59,8 +74,6 @@ enzymes <- rxnIDtoGene(reactions)
 if(file.exists("yeast_stoi.R")){
   load("yeast_stoi.R")
 } else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
-
-
 
 ### use Vito's implementation of Elad's component contribution free energey prediction ###
 
@@ -96,15 +109,13 @@ reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.
 #### Associate rxns with enzyme ascertainment in proteomics s.t. flux can favor measured pathways ####
 
 enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
+rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
 
 prot_matches <- sapply(enzymes, function(x){
   rxMatches <- chmatch(strsplit(x, '/')[[1]], rownames(enzyme_abund))
-  rxMatches[!is.na(rxMatches)]
+  length(rxMatches[!is.na(rxMatches)]) != 0
   })
 
-prot_measured <- unlist(lapply(prot_matches, function(x){
-  ifelse(length(x) != 0, max(rowSums(enzyme_abund[x,] != 0)), 0)
-  }))
 
 rxn_pathway <- read.delim("../KEGGrxns/yeastNameDict.tsv") #pathways associated with a protein
 
@@ -126,9 +137,13 @@ centralCrxnMatch <- sapply(enzymes, function(x){
   sum(strsplit(x, '/')[[1]] %in% centralCmatchGenes) != 0
   })
 
+# favor flux through cytosolic ATPase, + transport of ATP, ADP + Pi to restrict the wasting of excess energy to a single reaction
 
-prot_penalty <- (ncol(enzyme_abund) - prot_measured)/(2*ncol(enzyme_abund)) + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
+ATPbreakdownRxns <- c("r_0249", "r_1149", "r_1150", "r_1167", "r_1168", "r_1459", "r_1460", "r_1461", "r_1462", "r_1463")
 
+
+prot_penalty <- (1 - prot_matches)/2 + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
+prot_penalty[(reactions %in% ATPbreakdownRxns)] <- 0
 
 
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
@@ -150,8 +165,8 @@ for(i in 1:n_c){
   measured_bounds$ub <- measured_bounds$ub*chemostatInfo$actualDR[i]
   
   #remove phosphate because empirical uptake rates far exceed capacity of biomass assimilation
-  measured_bounds <- data.frame(measured_bounds)
-  measured_bounds[measured_bounds$specie == "phosphate", colnames(measured_bounds) %in% c("change", "sd")] <- NA
+  #measured_bounds <- data.frame(measured_bounds)
+  #measured_bounds[measured_bounds$specie == "phosphate", colnames(measured_bounds) %in% c("change", "sd")] <- NA
   measured_bounds <- data.table(measured_bounds)
   
   
@@ -162,7 +177,7 @@ for(i in 1:n_c){
   if(chemostatInfo$limitation[i] == "u"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))}
   if(chemostatInfo$limitation[i] %in% c("c", "p", "n")){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- NA}
   
-  #define observed fluxes per culture volume #perhaps eventually scale to the intracellular volume where these fluxes occur
+  #define observed fluxes per culture volume #scaled to intracellular volume later
   biomass_match <- data.frame(specie = comp_by_cond$compositionFile$MetName, AltName = comp_by_cond$compositionFile$AltName,change = unname(-1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$condition[i]]*chemostatInfo$actualDR[i]))
   biomass_list <- list()
   
@@ -183,7 +198,7 @@ for(i in 1:n_c){
     if(component %in% colnames(comp_by_cond$CV_table)){
       biomass_list[[component]]$SD = as.numeric(subset(comp_by_cond$CV_table, comp_by_cond$CV_table$condition == chemostatInfo$condition[i], component))
       }else{
-        biomass_list[[component]]$SD = 1/50
+        biomass_list[[component]]$SD = 1/10
       }
     }
   
@@ -460,7 +475,7 @@ for(l in 1:length(labelz)){
 	}
 
 rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
-
+rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE)
 
 #look for rxns that produce CO2 and make them irreversible
 
@@ -470,7 +485,6 @@ rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
 #co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
 
 #reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
-
 
 
 
@@ -878,7 +892,7 @@ if(QPorLP == "QP"){
       }
     
     
-    ### Optional flux checks ####
+    ### Optional flux checks ###
     
     #z <- maxFlux() # which reactions can carry flux (slow)
     #z <- loosenFlux(balanceStoi) # allow for free flux through a defined reaction of choice (with provided stoichiometry)
@@ -1004,7 +1018,7 @@ rxn_search(named_stoi, 'cytochrome')
 trackedMet <- 'ferricytochrome'
 
 
-############## Mass balance of individual conditions ####### 
+########### Mass balance of individual conditions ####### 
 
 ele_df_melt <- data.table(melt(composition_balance, id.vars = c("reactions", "condition", "element", "exchange", "color")))
 ele_df_melt[,limitation := chemostatInfo$limitation[chmatch(ele_df_melt$condition, chemostatInfo$condition)],]
@@ -1015,7 +1029,8 @@ ele_df_melt[,shortvar := factor(ifelse(variable == "netFlux", "OPT", "EXP"), lev
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "bottom", 
     panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), legend.key.width = unit(3, "line"),
     strip.background = element_rect(fill = "coral1"))
-    
+
+pdf(file = "massBalance.pdf", height = 15, width = 15)
 for(an_element in unique(ele_df_melt$element)){
   elemental_mat <- subset(ele_df_melt,element == an_element,)
   
@@ -1025,12 +1040,13 @@ for(an_element in unique(ele_df_melt$element)){
   elemental_barplot <- ggplot(elemental_mat, aes(x = exchange, y = value, fill = color)) + barplot_theme + facet_grid(limitation + shortvar ~ GR) + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 5), labels = boundary_label$reaction[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions], breaks = boundary_label$color[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions])
   print(elemental_barplot + geom_bar(stat = "identity", position = "stack") + ggtitle(paste("Experimental and Optimized -- ", an_element, " -- mass balance")))
   }
+dev.off()
 
 
     
 
 
-######################
+########### Generate a flux matrix of reactions carrying flux in some condition, as which deviations account for the L2 penalty #####
 
 rxNames <- data.frame(reactionID = unique(Sinfo$reaction), Name = unique(Sinfo$reaction))
 rxNames$Name[grep('r_[0-9]+', rxNames$Name)] = unname(rxnIDtoEnz(rxNames$Name[grep('r_[0-9]+', rxNames$Name)]))
@@ -1052,8 +1068,8 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
   panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line")) 
 
 
-ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(condition), y = resid_st*-1)) + facet_wrap(~ reactions, ncol = 2) + geom_bar(stat = "identity") + barplot_theme + scale_y_continuous("predicted - experimental flux / sd(experimental") + ggtitle("Fit of experimental and optimized flux")
-ggsave("flux_residuals.pdf", width = 8, height = 20)
+ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(condition), y = resid_st*-1)) + facet_wrap(~ reactions, ncol = 3) + geom_bar(width = 0.75, stat = "identity") + barplot_theme + scale_y_continuous("predicted - experimental flux / sd(experimental)") + ggtitle("Fit of experimental and optimized flux")
+ggsave("flux_residuals.pdf", width = 18, height = 20)
   
 
 ### for now only look at reactions which carry flux in >= 80% of conditions
@@ -1066,7 +1082,16 @@ std_flux_rxnName <- std_flux
 rownames(std_flux_rxnName) <- apply(rxNames, 1, function(x){ifelse(x[1] == x[2], x[1], paste(x, collapse = '_'))})
 std_flux_rxnName <- std_flux_rxnName[grep('boundary|composition', rownames(std_flux_rxnName), invert = T),]
 
-write.output(std_flux_rxnName, "Flux_analysis/fluxCarried.tsv")
+
+
+write.output(std_flux_rxnName, "Flux_analysis/fluxCarriedHM.tsv")
+
+rawFlux <- fluxMat
+rownames(rawFlux) <- rxNames$reactionID
+rawFlux <- rawFlux[grep('bookkeeping', rownames(rawFlux), invert = T),]
+
+write.table(rawFlux, file = "Flux_analysis/fluxCarriedSimple.tsv", quote = F, sep = "\t", col.names = TRUE, row.names = T)
+
 
 npc <- 5
 impSVD <- svd(std_flux_rxnName, nu = npc, nv = npc)
@@ -1105,18 +1130,6 @@ scatter_theme <- barplot_theme <- theme(text = element_text(size = 20, face = "b
 
 
 ggplot(rxnsMelt, aes(x = factor(Condition), y = Flux)) + geom_point(size = 3, col = "coral1")+  facet_wrap( ~ Rxn, ncol = 2, scale = "free_y") + scatter_theme + scale_x_discrete("Condition") + scale_y_continuous("Flux Carried") + ggtitle("Flux through random reactions")
-
-
-for(row_check in 1:25){
-if(sum(fluxMat_per_cellVol[row_check,] <= 0) == 0){
-  plot_bounds <- c(0, max(fluxMat_per_cellVol[row_check,]))
-  } else if(sum(fluxMat_per_cellVol[row_check,] <= 0) == n_c){
-    plot_bounds <- c(min(fluxMat_per_cellVol[row_check,]), 0)
-} else{plot_bounds <- c(min(fluxMat_per_cellVol[row_check,]), max(fluxMat_per_cellVol[row_check,]))}
-print(plot(fluxMat_per_cellVol[row_check,] ~ chemostatInfo$actualDR[1:n_c], pch = 16, cex = 2, col = factor(chemostatInfo$limitation[1:n_c]), xlim = c(0, 0.3), ylim = plot_bounds, xlab = "DR", ylab = "flux per cell volume (moles/mL cell volume per hr)"))
-}
-
-  
 
 
 
@@ -1269,7 +1282,7 @@ Scollapse <- sapply(unique(Sinfo$reaction), function(x){
     })
 Scollapse <- Scollapse[grep('bookkeeping', rownames(Scollapse), invert = T),grep('bookkeeping', colnames(Scollapse), invert = T)]
 
-rxNames
+
 
 relevant_species <- list()
 relevant_species$reactions = rxNames[grep('bookkeeping', rxNames$reactionID, invert = T),]
