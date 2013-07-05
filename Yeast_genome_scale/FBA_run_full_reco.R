@@ -61,9 +61,6 @@ rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
 
 
-#### add additional reactions to rxnFile & corrFile
-
-
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
@@ -103,6 +100,17 @@ for(rxN in 1:nrow(thermAnnotate)){
   reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
   }
 reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
+
+#### Elemental composition of metabolites ####
+
+modelMetComp <- read.table("../ChemicalSpeciesQuant/stoiMetsComp.tsv", header = TRUE)
+
+MetCompAppend <- modelMetComp[1:nrow(customMets),]
+MetCompAppend$ID <- customMets$SpeciesID
+MetCompAppend$name <- customMets$SpeciesName
+MetCompAppend[,!(colnames(MetCompAppend) %in% c("ID", "name"))] <- NA
+
+modelMetComp <- rbind(modelMetComp, MetCompAppend)
 
 
 
@@ -165,8 +173,8 @@ for(i in 1:n_c){
   measured_bounds$ub <- measured_bounds$ub*chemostatInfo$actualDR[i]
   
   #remove phosphate because empirical uptake rates far exceed capacity of biomass assimilation
-  #measured_bounds <- data.frame(measured_bounds)
-  #measured_bounds[measured_bounds$specie == "phosphate", colnames(measured_bounds) %in% c("change", "sd")] <- NA
+  measured_bounds <- data.frame(measured_bounds)
+  measured_bounds[measured_bounds$specie == "phosphate", colnames(measured_bounds) %in% c("change", "sd")] <- NA
   measured_bounds <- data.table(measured_bounds)
   
   
@@ -951,13 +959,11 @@ if(QPorLP == "QP"){
     
     ### Compare the elemental composition of all boundary constraints ### 
     
-    modelMetComp <- read.table("../ChemicalSpeciesQuant/stoiMetsComp.tsv", header = TRUE)
-    
     boundary_label <- data.frame(reaction = residualFlux$reactions, color = NA)
     
     boundary_label$color[boundary_label$reaction %in% paste(free_flux, "boundary")] <- brewer.pal(sum(boundary_label$reaction %in% paste(free_flux, "boundary")), "Dark2")
     boundary_label$color[is.na(boundary_label$color)][grep('boundary', boundary_label$reaction[is.na(boundary_label$color)])] <- brewer.pal(length(grep('boundary', boundary_label$reaction[is.na(boundary_label$color)])), "Set3")
-    boundary_label$color[grep('composition', boundary_label$reaction)] <- brewer.pal(length(grep('composition', boundary_label$reaction)), "Pastel2")
+    boundary_label$color[grep('composition', boundary_label$reaction)] <- c(brewer.pal(length(grep('composition', boundary_label$reaction))-1, "Pastel2"), "brown1")
     
     boundary_stoichiometry <- qpModel$A[,sapply(residualFlux$reactions, function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
     boundary_stoichiometry <- boundary_stoichiometry[rowSums(boundary_stoichiometry != 0) != 0,]
@@ -986,36 +992,10 @@ if(QPorLP == "QP"){
     }  
   } 
 
-reaction_info('r_0282')
-reaction_info('r_0249')
-rxnFile[rxnFile$ReactionID == "r_0005",]
-trackedMet = '^NAD\\(\\+\\)'
-
-trackMetConversion('^2-oxoglutarate', T)
-trackMetConversion('^lipoamide', T)
-trackMetConversion('S\\(8\\)-succinyldihydrolipoamide', T)
-trackMetConversion('succinyl-CoA', T)
-trackMetConversion('^succinate', T)
-trackMetConversion('^FADH2', T)
-trackMetConversion('NADH', T)
-
-trackMetConversion('^glyoxylate')
-trackMetConversion('^NAD\\(\\+\\)', T)
-trackMetConversion('isocitrate', T)
-trackMetConversion('ubiquinol-6', T)
-trackMetConversion('cytochrome', T)
-trackMetConversion('^ATP', F)
-trackMetConversion('^ADP', F)
-trackMetConversion('^H\\+$', F)
-trackMetConversion('oxygen', T)
-trackMetConversion('bicarbonate', F)
-
-trackMetConversion('hydrogen peroxide', F)
-trackMetConversion('thioredoxin disulfide', F)
-
-rxn_search(named_stoi, 'cytochrome')
-
-trackedMet <- 'ferricytochrome'
+#reaction_info('r_0249')
+#rxnFile[rxnFile$ReactionID == "r_0005",]
+#trackedMet = '^NAD\\(\\+\\)'
+#trackMetConversion('^2-oxoglutarate', T)
 
 
 ########### Mass balance of individual conditions ####### 
