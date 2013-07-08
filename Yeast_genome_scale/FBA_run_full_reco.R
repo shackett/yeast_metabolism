@@ -145,13 +145,16 @@ centralCrxnMatch <- sapply(enzymes, function(x){
   sum(strsplit(x, '/')[[1]] %in% centralCmatchGenes) != 0
   })
 
+### add an exception for FBPase
+centralCrxnMatch[names(centralCrxnMatch) %in% 'r_0859'] <- FALSE
+
 # favor flux through cytosolic ATPase, + transport of ATP, ADP + Pi to restrict the wasting of excess energy to a single reaction
 
-ATPbreakdownRxns <- c("r_0249", "r_1149", "r_1150", "r_1167", "r_1168", "r_1459", "r_1460", "r_1461", "r_1462", "r_1463")
+ATPbreakdownRxns <- c("r_0249", "r_1149", "r_1150", "r_1167", "r_1168", "r_1459", "r_1460", "r_1461", "r_1462", "r_1463", "r_1868")
 
 
 prot_penalty <- (1 - prot_matches)/2 + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
-prot_penalty[(reactions %in% ATPbreakdownRxns)] <- 0
+prot_penalty[(reactions %in% ATPbreakdownRxns)] <- 0.1
 
 
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
@@ -904,8 +907,17 @@ if(QPorLP == "QP"){
     
     #z <- maxFlux() # which reactions can carry flux (slow)
     #z <- loosenFlux(balanceStoi) # allow for free flux through a defined reaction of choice (with provided stoichiometry)
+    #z$x[grep('r_0249', Sinfo$reaction)]
     #FF <- data.frame(rx = 'r_0745_F', flux = 1e1) #complex I ETC
+    #FF <- data.frame(rx = 'r_0249_F', flux = 0.001) 
     #z <- forcedFlux(FF) #Force flux through a reaction to evaluate where it might be plugged up
+    #ffAnalyze <- data.frame(rx = Sinfo$rxDesignation, force = z$x, reference = solvedModel$x)
+    #ffAnalyze[,-1] <- apply(ffAnalyze[,-1], c(1,2), function(x){max(10^-10, x)})
+    #ffAnalyze$log2Fluxchange <- log2(ffAnalyze$force) - log2(ffAnalyze$reference)
+    #plot(log2(ffAnalyze$force) ~ log2(ffAnalyze$reference))
+    #ffAnalyze[abs(ffAnalyze$log2Fluxchange) > 5,][order(ffAnalyze[abs(ffAnalyze$log2Fluxchange) > 5,]$log2Fluxchange),]
+    
+    
     
     #metFeed <- data.frame(mets = metabolites, obj = NA)
     #for(metN in 1:nrow(metFeed)){
