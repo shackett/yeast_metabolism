@@ -156,6 +156,8 @@ ATPbreakdownRxns <- c("r_0249", "r_1149", "r_1150", "r_1167", "r_1168", "r_1459"
 prot_penalty <- (1 - prot_matches)/2 + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
 prot_penalty[(reactions %in% ATPbreakdownRxns)] <- 0.1
 
+####
+#save(list = ls(), file = "FBAinputFiles.Rdata")
 
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
 
@@ -793,6 +795,7 @@ for(i in 1:n_c){
 
 if(QPorLP == "QP"){
 
+  library(Matrix) #for sparse matrix class
   library(gurobi) #interface for gurobi solver
   #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so #a symbolic link was necessary to get gurobi to find its C++ code
 
@@ -804,7 +807,7 @@ if(QPorLP == "QP"){
   flux_elevation_factor <- 1000
   flux_penalty <- 1000/(flux_elevation_factor)
   
-  qpModel$A <- S
+  qpModel$A <- Matrix(S)
   qpModel$rhs <- Fzero #flux balance
   qpModel$sense <- rep("=", times = length(S[,1])) #global flux balance
   qpModel$lb <- rep(0, times = length(S[1,])) #all fluxes are greater than zero
@@ -1020,7 +1023,7 @@ ele_df_melt[,shortvar := factor(ifelse(variable == "netFlux", "OPT", "EXP"), lev
 
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "bottom", 
     panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), legend.key.width = unit(3, "line"),
-    strip.background = element_rect(fill = "coral1"))
+    strip.background = element_rect(fill = "coral1"), panel.margin = unit(1, "lines"))
 
 pdf(file = "massBalance.pdf", height = 15, width = 15)
 for(an_element in unique(ele_df_melt$element)){
@@ -1029,8 +1032,9 @@ for(an_element in unique(ele_df_melt$element)){
   involvedRxns <- elemental_mat[,sum(value != 0), by = reactions]
   elemental_mat <- elemental_mat[reactions %in% involvedRxns[V1 != 0,]$reactions,]
   
-  elemental_barplot <- ggplot(elemental_mat, aes(x = exchange, y = value, fill = color)) + barplot_theme + facet_grid(limitation + shortvar ~ GR) + scale_x_discrete("", expand = c(0,0)) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = 5), labels = boundary_label$reaction[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions], breaks = boundary_label$color[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions])
-  print(elemental_barplot + geom_bar(stat = "identity", position = "stack") + ggtitle(paste("Experimental and Optimized -- ", an_element, " -- mass balance")))
+  elemental_barplot <- ggplot(elemental_mat, aes(x = exchange, y = value, fill = color)) + barplot_theme + facet_grid(limitation + shortvar ~ GR) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = ifelse(length(unique(elemental_mat$reactions)) < 5, 2, 5)), labels = boundary_label$reaction[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions], breaks = boundary_label$color[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions]) +
+    scale_y_continuous("Flux per element (moles / hour * mL cellular volume)") + scale_x_discrete("", expand = c(0,0)) + ggtitle(paste("Experimental and Optimized -- ", an_element, " -- mass balance"))
+  print(elemental_barplot + geom_bar(stat = "identity", position = "stack"))  
   }
 dev.off()
 
@@ -1284,45 +1288,58 @@ relevant_species$metabolites = rownames(Scollapse)[rowSums(Scollapse[,colnames(S
 
 if(update_layout == TRUE){
   
-	#updating an existing position file
-	metSty.old <- read.delim("metSty.tsv", sep = "\t", header = TRUE)
-	rxnSty.old <- read.delim("rxnSty.tsv", sep = "\t", header = TRUE)
-	
+  #updating an existing position file
+  metSty.old <- read.delim("metSty.tsv", sep = "\t", header = TRUE)
+  rxnSty.old <- read.delim("rxnSty.tsv", sep = "\t", header = TRUE)
   
   
-	Stotal <- Scollapse[,colnames(Scollapse)[colnames(Scollapse) %in% union(relevant_species$reactions$reactionID, rxnSty.old$ReactionID)]]
-	Stotal <- Stotal[apply(Stotal != 0, 1, sum) != 0,]
-	
-	#new rxns
-	new_rxns <- relevant_species$reactions$reactionID[!(relevant_species$reactions$reactionID %in% rxnSty.old$ReactionID)]
-	new_mets <- rownames(Stotal)[!(rownames(Stotal) %in% metSty.old$SpeciesID)]
-	
-	metSty_bind <- as.data.frame(matrix(NA, ncol = length(metSty.old[1,]), nrow = length(new_mets)))
-	colnames(metSty_bind) <- colnames(metSty.old)
-	for(i in 1:length(new_mets)){
-		metSty_bind[i,c(1:3)] <- corrFile[corrFile$SpeciesID %in% new_mets[i],][,c(1,2,4)]
-		}
-	
-	rxnSty_bind <- as.data.frame(matrix(NA, ncol = length(rxnSty.old[1,]), nrow = length(new_rxns)))
-	colnames(rxnSty_bind) <- colnames(rxnSty.old)
-	for(i in 1:length(new_rxns)){
-	if(new_rxns[i] %in% rxnFile$ReactionID){
-		rxnSty_bind[i,c(1:3)] <- rxnFile[rxnFile$ReactionID %in% new_rxns[i],][1,][c(2,1,3)]
-		}else{
-			rxnSty_bind$ReactionID[i] <- new_rxns[i]
-			}}
-	rxnSty_bind$Reaction[is.na(rxnSty_bind$Reaction)] <- rxnSty_bind$ReactionID[is.na(rxnSty_bind$Reaction)]
   
+  Stotal <- Scollapse[,colnames(Scollapse)[colnames(Scollapse) %in% union(relevant_species$reactions$reactionID, rxnSty.old$ReactionID)]]
+  Stotal <- Stotal[apply(Stotal != 0, 1, sum) != 0,]
   
-	metSty = rbind(metSty.old, metSty_bind)
-	rxnSty = rbind(rxnSty.old, rxnSty_bind)
+  #new rxns
+  new_rxns <- relevant_species$reactions$reactionID[!(relevant_species$reactions$reactionID %in% rxnSty.old$ReactionID)]
+  new_mets <- rownames(Stotal)[!(rownames(Stotal) %in% metSty.old$SpeciesID)]
+  
+  if(length(new_mets) != 0){
+    
+    metSty_bind <- as.data.frame(matrix(NA, ncol = length(metSty.old[1,]), nrow = length(new_mets)))
+    colnames(metSty_bind) <- colnames(metSty.old)
+    for(i in 1:length(new_mets)){
+      metSty_bind[i,c(1:3)] <- corrFile[corrFile$SpeciesID %in% new_mets[i],][,c(1,2,4)]
+    }
+    metSty = rbind(metSty.old, metSty_bind)
+    
+  }else{
+    metSty = rbind(metSty.old) 
+  }
+  
+  if(length(new_rxns) != 0){
+    
+    rxnSty_bind <- as.data.frame(matrix(NA, ncol = length(rxnSty.old[1,]), nrow = length(new_rxns)))
+    colnames(rxnSty_bind) <- colnames(rxnSty.old)
+    for(i in 1:length(new_rxns)){
+      if(new_rxns[i] %in% rxnFile$ReactionID){
+        rxnSty_bind[i,c(1:3)] <- rxnFile[rxnFile$ReactionID %in% new_rxns[i],][1,][c(2,1,3)]
+      }else{
+        rxnSty_bind$ReactionID[i] <- new_rxns[i]
+      }}
+    rxnSty_bind$Reaction[is.na(rxnSty_bind$Reaction)] <- rxnSty_bind$ReactionID[is.na(rxnSty_bind$Reaction)]
+    
+    rxnSty = rbind(rxnSty.old, rxnSty_bind)
+    
+  }else{
+    rxnSty = rxnSty.old
+  }
 	
-	}
+  
+  save(Stotal, metSty, rxnSty, reversibleRx, relevant_species, file = "totalStoiAux.Rdata")
 
-save(Stotal, metSty, rxnSty, reversibleRx, relevant_species, file = "totalStoiAux.Rdata")
+  write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
+  write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
 
-write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
-write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
+  }
+
 
 
 

@@ -396,8 +396,6 @@ for(arxn in reactionInfo$rMech){
   
   if(var(par_likelihood$likelihood) < 10^-10 | all(run_rxn$metabolites == 1)){next} #skip underparameterized reactions - those with essentially no variation
   
-  
-  
   if(length(run_rxn$enzymes[1,]) != 0){
     flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
     rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
@@ -450,9 +448,8 @@ rxnFit_frac_melt <- melt(under_determined_rxnFits_frac, id.vars = c("rxn", "rxnM
 
 
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank()) 
-
-
+  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
+  strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"))
 
 
 
@@ -464,16 +461,26 @@ ggsave("parFitQuality.pdf", height = 20, width = 20)
 
 
 #### plot correlation of flux and prediction ####
-rxnFits_correlation
+
 rxnFits_correlation$rxn <- substr(rownames(rxnFits_correlation), 1, 6)
 rxnFits_correlation$rxnMech <- rownames(rxnFits_correlation)
 
 rxOrder <- data.frame(rx = unique(rxnFits_correlation$rxn), order = rank(sapply(unique(rxnFits_correlation$rxn), function(x){max(rxnFits_correlation$parSpearman[rxnFits_correlation$rxn == x])})))
 rxnFits_correlation$rxnOrder <- sapply(rxnFits_correlation$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
 rxnFits_correlation <- rxnFits_correlation[order(rxnFits_correlation$rxnOrder, rxnFits_correlation$parSpearman),]
+rxnFits_correlation$rxnMech <- factor(rxnFits_correlation$rxnMech, levels = rxnFits_correlation$rxnMech)
+
+rxnFits_correlation <- rxnFits_correlation[,!(colnames(rxnFits_correlation) %in% c("parPearson", "nnlsPearson"))]
+colnames(rxnFits_correlation)[1:2] <- c("Parameteric-Fit", "NNLS")
+
+rxnFit_corr_melt <- melt(rxnFits_correlation, id.vars = c("rxn", "rxnMech", "rxnOrder"))
 
 
-
+rxnFit_frac_plot <- ggplot(data = rxnFit_corr_melt, aes(x = rxnMech, y = value, fill = variable)) + barplot_theme + facet_grid(variable ~ .)
+rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+  scale_y_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2") +
+  ggtitle("Correlation between flux predicted from FBA and from metabolites & enzymes")
+ggsave("parFitSpearman.pdf", height = 20, width = 20)
 
 
 

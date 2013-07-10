@@ -159,7 +159,7 @@ metSty = read.delim("metSty.tsv", header = TRUE, sep = "\t", stringsAsFactors = 
 metSty$y <- metSty$y*-1
 
 rxnSty = read.delim("rxnSty.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
-rxnSty <- rxnSty[sapply(c(1:length(rxnSty[,1])), function(x){c(1:length(rxnSty[,1]))[rxnSty$ReactionID == colnames(stoisub)[x]]}),]
+#rxnSty <- rxnSty[sapply(1:nrow(rxnSty), function(x){c(1:nrow(rxnSty))[rxnSty$ReactionID == colnames(stoisub)[x]]}),]
 rownames(rxnSty) <- NULL
 
 metab.coord <- metSty[!is.na(metSty$x),]
@@ -752,6 +752,35 @@ for(mets in 1:length(met_pos[,1])){
 }
 
 flux_mat <- fluxMat
+
+### adjust flux_match by stoichometry coefficients of boundary components ###
+n_c <- 25
+anabolicFlux <- as.data.frame(matrix(NA, ncol = n_c, nrow = ncol(stoiAppended)))
+rownames(anabolicFlux) <- colnames(stoiAppended); colnames(anabolicFlux) <- colnames(flux_mat)
+
+for(i in 1:nrow(anabolicFlux)){
+  
+  if(rownames(anabolicFlux)[i] == "Maintenance ATP hydrolysis"){
+    
+    anabolicFlux[i,] <- flux_mat[rownames(flux_mat) == "Maintenance ATP hydrolysis composition",] * comp_by_cond$cultureMolarity[rownames(comp_by_cond$cultureMolarity) == "phosphate",1:n_c]*-1 * 
+      chemostatInfo$actualDR[1:n_c] * chemostatInfo$VolFrac_mean[1:n_c]
+    
+  }else{
+    
+    anabolicFlux[i,] <- flux_mat[rownames(flux_mat) == paste(comp_by_cond$compositionFile$varCategory[1:nrow(comp_by_cond$biomassExtensionE)][comp_by_cond$compositionFile$AltName[1:nrow(comp_by_cond$biomassExtensionE)] == strsplit(rownames(anabolicFlux)[i], split = ' to biomass')[[1]][1]], 'composition'),] *
+      comp_by_cond$cultureMolarity[1:nrow(comp_by_cond$biomassExtensionE),][comp_by_cond$biomassExtensionE$name == strsplit(rownames(anabolicFlux)[i], split = ' to biomass')[[1]][1], 1:n_c] *
+      chemostatInfo$actualDR[1:n_c] / chemostatInfo$VolFrac_mean[1:n_c]
+    
+  }
+} ### now all fluxes are in moles / mL intracellular volume - h
+
+flux_mat <- flux_mat[grep('composition', rownames(flux_mat), invert = T),]
+flux_mat <- rbind(flux_mat, anabolicFlux)
+  
+
+
+
+
 col_num <- 6
 edge_sf <- 0.1
 library(colorRamps)
@@ -790,6 +819,7 @@ for(i in 1:length(unique(flux_att[,colnames(flux_att) == "rxn"]))){
 flux_att_red <- flux_att[valid_edge,]
 edge_names2_red <- edge_names2[valid_edge]
 
+
 for(edge in c(1:length(edge_names2_red))){	
   setEdgeLineWidthDirect(plotter, edge_names2_red[edge], as.numeric(flux_att_red[,colnames(flux_att_red) == "width"][edge]))
   setEdgeColorDirect(plotter, edge_names2_red[edge], flux_att_red[,colnames(flux_att_red) == "color"][edge])
@@ -799,7 +829,7 @@ for(edge in c(1:length(edge_names2_red))){
 
 for(edge in c(1:length(noflux_edgename))){	
   setEdgeLineWidthDirect(plotter, noflux_edgename[edge], edge_sf)
-  setEdgeColorDirect(plotter, noflux_edgename[edge], rgb(0,0,0))
+  setEdgeColorDirect(plotter, noflux_edgename[edge], rgb(1,1,1))
 }
 
 redraw(plotter)
@@ -813,16 +843,6 @@ redraw(plotter)
 #setEdgeLineStyleDirect
 #setEdgeLineWidthDirect
 #setEdgeColorDirect
-
-
-
-rx <- 73
-
-
-
-			
-		
-
 
 
 
@@ -866,8 +886,6 @@ write.table(joint.table, file = "joint.table.tsv", sep = "\t", col.names = TRUE,
 
 #get a node position
 getNodePosition(obj, node.names)
-
-
 getNodePosition(plotter, rownames(met_pos))
 
  

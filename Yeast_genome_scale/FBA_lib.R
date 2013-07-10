@@ -121,6 +121,14 @@ rxnIDtoSGD <- function(rxnIDs){
 output
 }
 
+write.output <- function(tab, output){
+  #write an output table in a way where all columns will have a column name
+  #rownames go to 1st column, 1st column name is ``Gene''
+  
+  tab <- data.frame(Gene = rownames(tab), tab, stringsAsFactors = FALSE)
+  write.table(tab, file = output, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+}
+
 
 convert_to_elemental <- function(redStoi, modelMetComp){
   # convert a stoichiometric matrix (with named columns) and "S" IDs as rownames to their elemental constituents
@@ -133,6 +141,7 @@ convert_to_elemental <- function(redStoi, modelMetComp){
   specieEle[specieEle$name == "glycogen", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5)
   specieEle[specieEle$name == "mannan", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5)
   specieEle[specieEle$name == "D-glucose", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 12, 6)
+  specieEle[specieEle$name == "polyphosphate", colnames(specieEle) %in% c("O", "P")] <- c(4, 1)
   specieEle[is.na(specieEle)] <- 0
   specieEle[,-c(1:2)] <- apply(specieEle[,-c(1:2)], c(1,2), as.numeric)
   specieEle <- specieEle[,c(TRUE, TRUE, colSums(specieEle[,-c(1:2)]) != 0)]
@@ -567,72 +576,126 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
 
 
 flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
+  
+  require(data.table)
+  
   # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
   param_interval <- exp(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
   param_interval <- data.frame(cbind(t(param_interval), median = exp(apply(par_markov_chain, 2, median)), MLE = exp(par_markov_chain[which.max(par_likelihood$likelihood),])))
   
-  par_stack <- rep(1, n_c) %*% t(exp(par_markov_chain[which.max(par_likelihood$likelihood),])); colnames(par_stack) <- run_rxn$kineticPars$formulaName
+  n_c <- nrow(run_rxn$metabolites )
+  
+  # take the maximum likelihood estimate
+  par_stack <- rep(1, n_c) %*% t(exp(par_markov_chain[which.max(par_likelihood$likelihood),]))
+  colnames(par_stack) <- run_rxn$kineticPars$formulaName
   occupancy_vals <- data.frame(run_rxn$metabolites, par_stack)
   predOcc <- model.matrix(run_rxn$occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
- 
+  
   enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*run_rxn$enzymes #occupany of enzymes * relative abundance of enzymes
   flux_fit <- nnls(enzyme_activity, run_rxn$flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
   
+  
   fit_summary <- data.frame(residDF = sum(run_rxn$flux != 0) - length(par_stack[1,]), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
   
-  ### using flux fitted from the median parameter set, how much variance is explained
-  fit_summary$parametricFit = anova(lm(run_rxn$flux ~ flux_fit$fitted))$S[1]
-  
-  ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
-  NNLSmetab <- run_rxn$metabolites * -1*(rep(1, n_c) %*% t(sapply(colnames(run_rxn$metabolites), function(x){run_rxn$rxnSummary$rxnStoi[names(run_rxn$rxnSummary$rxnStoi) == names(run_rxn$rxnSummary$metsID2tID)[run_rxn$rxnSummary$metsID2tID == x]]})))
-    
-  if(all(run_rxn$flux < 0)){
-    NNLSanova <- anova(lm(-1*run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)$fitted))
-    fit_summary$NNLS <- ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
-    }else{
-      NNLSanova <- anova(lm(run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)$fitted))
-      fit_summary$NNLS = ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
-    }
-  
-  
-  ### using LS regression, how much variance is explained 
+  ### using LS regression, how much variance is explained
   fit_summary$LS_met = anova(lm(run_rxn$flux ~ run_rxn$metabolites))$S[1]
   fit_summary$LS_enzyme = anova(lm(run_rxn$flux ~ run_rxn$enzymes))$S[1]
   fit_summary$LS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S[1:2])
   fit_summary$TSS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S)
   
-  output <- list()
-    output$fit_summary <- fit_summary
-    output$param_interval <- param_interval
-    output$fitted_flux <- flux_fit$fitted
-  output
+  ### using flux fitted from the MLE parameter set, how much variance is explained
+  #fit_summary$parametricFit = anova(lm(run_rxn$flux ~ flux_fit$fitted+0))$S[1]
+  
+  fit_summary$parametricFit <- fit_summary$TSS-sum((flux_fit$residuals)^2)
+  
+  ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
+  NNLSmetab <- run_rxn$metabolites * -1*(rep(1, n_c) %*% t(unname(run_rxn$rxnSummary$rxnStoi)[chmatch(colnames(run_rxn$metabolites), names(run_rxn$rxnSummary$rxnStoi))]))
+  ### add potential activators and inhibitors
+  if(length(run_rxn$rxnSummary$rxnFormData$Subtype[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))]) != 0){
+    modifiers = data.frame(modifier = run_rxn$rxnSummary$rxnFormData$SubstrateID[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))], direction = ifelse(run_rxn$rxnSummary$rxnFormData$Type[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))] == "act", 1, -1))
+    
+    if(nrow(modifiers) > 1){print("fix code here to allow for multiple modifiers")}
+    
+    modifier_effect <- matrix(run_rxn$metabolites[,chmatch(modifiers$modifier, colnames(run_rxn$metabolites))])
+    colnames(modifier_effect) <- paste(c(modifiers$modifier, "mod"), collapse = "")
+    NNLSmetab <- cbind(NNLSmetab, modifier_effect)
   }
+  NNLSmetab <- NNLSmetab[,apply(NNLSmetab, 2, function(x){var(x) != 0})]
+  
+  if(all(run_rxn$flux < 0)){
+    #NNLSanova <- anova(lm(-1*run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)$fitted +0))
+    #fit_summary$NNLS <- ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
+    
+    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)
+    tpred <-nnls_fit$residuals
+    fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
+  
+    fit_summary$nnlsPearson <- cor(-1*nnls_fit$fitted, run_rxn$flux, method = "pearson")
+    fit_summary$nnlsSpearman <- cor(-1*nnls_fit$fitted, run_rxn$flux, method = "spearman")
+  
+    
+  }else{
+    #NNLSanova <- anova(lm(run_rxn$flux ~ nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)$fitted+0))
+    #fit_summary$NNLS = ifelse(length(NNLSanova$S) != 1, NNLSanova$S[1], NA)
+    
+    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)
+    tpred <- nnls_fit$residuals
+    fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
+    
+    fit_summary$nnlsPearson <- cor(nnls_fit$fitted, run_rxn$flux, method = "pearson")
+    fit_summary$nnlsSpearman <- cor(nnls_fit$fitted, run_rxn$flux, method = "spearman")
+  
+  }
+   
+  ### correlations
+  fit_summary$parPearson <- cor(flux_fit$fitted, run_rxn$flux, method = "pearson")
+  fit_summary$parSpearman <- cor(flux_fit$fitted, run_rxn$flux, method = "spearman")
+  
+  
+  
+  output <- list()
+  output$fit_summary <- fit_summary
+  output$param_interval <- param_interval
+  output$fitted_flux <- flux_fit$fitted
+  output
+}
 
 
 param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
+  
+  ### write common names ###
+  
+  rename_table <- data.frame(tID = colnames(par_markov_chain), commonName = NA, commonPrint = NA)
+  rename_table$commonName[rename_table$tID %in% names(run_rxn$rxnSummary$metNames)] <- unname(run_rxn$rxnSummary$metNames)[chmatch(rename_table$tID[rename_table$tID %in% names(run_rxn$rxnSummary$metNames)], names(run_rxn$rxnSummary$metNames))]
+  rename_table$commonName[rename_table$tID == "keq"] <- "Keq"
+  rename_table$commonPrint <- nameReformat(names = rename_table$commonName, totalChar = 120)
+  
+  named_par_markov_chain <- par_markov_chain
+  colnames(named_par_markov_chain) <- rename_table$commonPrint
+  
   # visualize the joint and marginal distribution of parameter values from the markov chain
   
   par_combinations <- expand.grid(1:length(run_rxn$kineticPars[,1]), 1:length(run_rxn$kineticPars[,1]))
   like_comparison <- ifelse(par_combinations[,1] == par_combinations[,2], TRUE, FALSE)
   
-  max_likelihood <- par_markov_chain[which.max(par_likelihood$likelihood),]
+  max_likelihood <- named_par_markov_chain[which.max(par_likelihood$likelihood),]
   
   par_comp_like <- NULL
   for(i in 1:sum(like_comparison)){
-    par_comp_like <- rbind(par_comp_like, data.frame(xval = par_markov_chain[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(par_markov_chain)[par_combinations[like_comparison,][i,1]],
-         parameter_2 = colnames(par_markov_chain)[par_combinations[like_comparison,][i,1]]))
+    par_comp_like <- rbind(par_comp_like, data.frame(xval = named_par_markov_chain[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]],
+         parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]]))
       }
   
   par_comp_dissimilar <- NULL
   for(i in 1:sum(!like_comparison)){
-    par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = par_markov_chain[,par_combinations[!like_comparison,][i,1]], yval = par_markov_chain[,par_combinations[!like_comparison,][i,2]], 
-          parameter_1 = colnames(par_markov_chain)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(par_markov_chain)[par_combinations[!like_comparison,][i,2]]))
+    par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = named_par_markov_chain[,par_combinations[!like_comparison,][i,1]], yval = named_par_markov_chain[,par_combinations[!like_comparison,][i,2]], 
+          parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,2]]))
       }
   
-  MLEbarplot <- data.frame(xval = max_likelihood[par_combinations[like_comparison,1]], parameter_1 = colnames(par_markov_chain)[par_combinations[like_comparison,1]],
-      parameter_2 = colnames(par_markov_chain)[par_combinations[like_comparison,1]])
+  MLEbarplot <- data.frame(xval = max_likelihood[par_combinations[like_comparison,1]], parameter_1 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]],
+      parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]])
   MLEpoints <- data.frame(xval = max_likelihood[par_combinations[!like_comparison,1]], yval = max_likelihood[par_combinations[!like_comparison,2]],
-      parameter_1 = colnames(par_markov_chain)[par_combinations[!like_comparison,1]], parameter_2 = colnames(par_markov_chain)[par_combinations[!like_comparison,2]])
+      parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,2]])
   
   
   
@@ -640,13 +703,14 @@ param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
 
   par_hist_binwidth = 0.2
   
-  max_density <- max(apply(par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
+  max_density <- max(apply(named_par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
   
   density_trans_inv <- function(x){x*(max_density/20) + max_density/2}
   density_trans <- function(x){(x - max_density/2)/(max_density/20)}
   
   par_comp_dissimilar$yval <- density_trans_inv(par_comp_dissimilar$yval)
   MLEpoints$yval <- density_trans_inv(MLEpoints$yval)
+  
   
   hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), 
       legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
@@ -691,4 +755,21 @@ lik_calc <- function(proposed_params){
   
   }
 
+
+nameReformat <- function(names, totalChar){
+  ### split names into multiple lines if they are too long
+  
+  nameLengths <- data.frame(name = rename_table$commonName, nchar = sapply(rename_table$commonName, function(x){length(strsplit(x, "")[[1]])}))
+  
+  if(!all(nameLengths$nchar < totalChar/nrow(nameLengths))){
+    for(i in c(1:nrow(nameLengths))[nameLengths$nchar >= totalChar/nrow(nameLengths)]){
+      longName <- nameLengths$name[i]
+      #find location of space or - 
+      split_pos <- rev(gregexpr('[ -]', longName)[[1]])[which.min(abs(rev(gregexpr('[ -]', longName)[[1]]) - nameLengths$nchar[i]/2))]
+      substr(longName, split_pos, split_pos) <- "#"
+      nameLengths$name[i] <- gsub("#", '\\\n', longName)
+    }
+  }
+  nameLengths$name
+}
   
