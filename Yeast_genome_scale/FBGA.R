@@ -376,6 +376,7 @@ reactionInfo <- reactionInfo[is.na(reactionInfo$Qvalue) | (!is.na(reactionInfo$Q
 
 rxn_fits <- NULL
 rxn_fit_params <- list()
+fraction_flux_deviation <- NULL
 
 for(arxn in reactionInfo$rMech){
  
@@ -400,6 +401,8 @@ for(arxn in reactionInfo$rMech){
     flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
     rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
     rxn_fit_params[[arxn]] <- flux_fit$param_interval  
+    fraction_flux_deviation <- rbind(fraction_flux_deviation, data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux - run_rxn$flux))/sum(abs(run_rxn$flux))))
+    
   }
   
   
@@ -425,7 +428,8 @@ save(rxn_fit_params, file = "paramDist.Rdata")
 under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
 rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
 under_determined_rxnFits <- under_determined_rxnFits[under_determined_rxnFits$parametricFit > 0 | under_determined_rxnFits$rxn %in% paste(substr(under_determined_rxnFits$rxn[under_determined_rxnFits$parametricFit > 0], 1, 6), "-rm", sep = ""),] # remove parameteric fits which are worse than mean flux
-
+under_determined_rxnFits <- under_determined_rxnFits[!(substr(under_determined_rxnFits$rxn, 1, 6) %in% substr(under_determined_rxnFits$rxn[is.na(under_determined_rxnFits$parPearson)], 1, 6)),] #remove reactions with an undefined correlation - no flux variabilty
+    
 under_determined_rxnFits <- under_determined_rxnFits[,-c(1:2)]
 
 rxnFits_correlation <- under_determined_rxnFits[,colnames(under_determined_rxnFits) %in% c("parPearson", "parSpearman", "nnlsPearson", "nnlsSpearman")]
@@ -462,6 +466,14 @@ ggsave("parFitQuality.pdf", height = 20, width = 20)
 
 #### plot correlation of flux and prediction ####
 
+
+under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
+rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
+under_determined_rxnFits <- under_determined_rxnFits[!(substr(under_determined_rxnFits$rxn, 1, 6) %in% substr(under_determined_rxnFits$rxn[is.na(under_determined_rxnFits$parPearson)], 1, 6)),] #remove reactions with an undefined correlation - no flux variabilty
+under_determined_rxnFits <- under_determined_rxnFits[,-c(1:2)]
+rxnFits_correlation <- under_determined_rxnFits[,colnames(under_determined_rxnFits) %in% c("parPearson", "parSpearman", "nnlsPearson", "nnlsSpearman")]
+
+
 rxnFits_correlation$rxn <- substr(rownames(rxnFits_correlation), 1, 6)
 rxnFits_correlation$rxnMech <- rownames(rxnFits_correlation)
 
@@ -471,20 +483,43 @@ rxnFits_correlation <- rxnFits_correlation[order(rxnFits_correlation$rxnOrder, r
 rxnFits_correlation$rxnMech <- factor(rxnFits_correlation$rxnMech, levels = rxnFits_correlation$rxnMech)
 
 rxnFits_correlation <- rxnFits_correlation[,!(colnames(rxnFits_correlation) %in% c("parPearson", "nnlsPearson"))]
-colnames(rxnFits_correlation)[1:2] <- c("Parameteric-Fit", "NNLS")
+colnames(rxnFits_correlation)[1:2] <- c("NNLS", "Parametric-Fit")
 
 rxnFit_corr_melt <- melt(rxnFits_correlation, id.vars = c("rxn", "rxnMech", "rxnOrder"))
-
+rxnFit_corr_melt$variable <- factor(rxnFit_corr_melt$variable, levels = c("Parametric-Fit", "NNLS"))
 
 rxnFit_frac_plot <- ggplot(data = rxnFit_corr_melt, aes(x = rxnMech, y = value, fill = variable)) + barplot_theme + facet_grid(variable ~ .)
-rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-  scale_y_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2") +
+rxnFit_frac_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+  scale_y_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(-1,1)) + scale_fill_brewer("Prediction Method", palette = "Set2") +
   ggtitle("Correlation between flux predicted from FBA and from metabolites & enzymes")
 ggsave("parFitSpearman.pdf", height = 20, width = 20)
 
 
+####### To deal with the mean flux not being the best reference (in the sense of variance), an alternative comparisoin would be the fractional flux departure: sum of deviations divided by the total flux.
+
+rownames(fraction_flux_deviation) <- fraction_flux_deviation$rxn
+fraction_flux_deviation$rxn <- substr(rownames(fraction_flux_deviation), 1, 6)
+fraction_flux_deviation$rxnMech <- rownames(fraction_flux_deviation)
+
+fraction_flux_deviation <- fraction_flux_deviation[!(fraction_flux_deviation$rxn %in% unique(fraction_flux_deviation$rxn[fraction_flux_deviation$FFD <= 0])),]
+
+rxOrder <- data.frame(rx = unique(fraction_flux_deviation$rxn), order = rank(sapply(unique(fraction_flux_deviation$rxn), function(x){max(fraction_flux_deviation$FFD[fraction_flux_deviation$rxn == x])})))
+fraction_flux_deviation$rxnOrder <- sapply(fraction_flux_deviation$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
+fraction_flux_deviation <- fraction_flux_deviation[order(fraction_flux_deviation$rxnOrder, fraction_flux_deviation$FFD),]
+fraction_flux_deviation$rxnMech <- factor(fraction_flux_deviation$rxnMech, levels = fraction_flux_deviation$rxnMech)
 
 
+FFD_melt <- melt(fraction_flux_deviation, id.vars = c("rxn", "rxnMech", "rxnOrder"))
+FFD_melt$rxnType <- "reversible Michaelis-Menten"
+FFD_melt$rxnType[grep('act', FFD_melt$rxnMech)] <- "+ Activator"
+FFD_melt$rxnType[grep('inh', FFD_melt$rxnMech)] <- "+ Inhibitor"
+FFD_melt$rxnType <- factor(FFD_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator", "+ Inhibitor"))
+
+FFD_plot <- ggplot(data = FFD_melt, aes(x = rxnMech, y = value, fill = rxnType)) + barplot_theme
+FFD_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+  scale_y_continuous(name = "Fractional flux similarity", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") +
+  ggtitle(expression("Fractional flux similarity:" ~ frac(sum(symbol("|")~V^FBA - V^PAR~symbol("|")), sum(symbol("|")~V^FBA~symbol("|")))))
+  ggsave("FFD.pdf", height = 14, width = 20)
 
 
 # make another histogram that shows the explained variance with parametric vs nnls
