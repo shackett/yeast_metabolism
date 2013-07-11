@@ -661,6 +661,184 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
 }
 
 
+calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
+  
+  rxnData <- run_rxn$rxnSummary
+  rxn <- rxnData$rxnID
+  
+  # Calculate the linear B enyzme coefficients by nnls
+  met_abund <- run_rxn$metabolites
+  
+  enz_abund <- run_rxn$enzymes
+  colnames(enz_abund) <- rownames(rxnData$enzymeAbund)
+  
+  # get create the parameternames
+  tIDs <-  colnames(met_abund)
+  
+  # remove all tIDs not included in the reaction
+  tIDs <- tIDs[tIDs %in% rxnData$rxnFormData$SubstrateID]  
+  
+  parNames <- unname(sapply(tIDs,function(x){
+    paste(c('K_',rxnData$rxnID,'_',x),collapse='')
+  }))
+  
+  parNames <- c(parNames,paste('Keq',rxnData$rxnID,sep=''))
+  
+  # find the MLE parameter values
+  nEnz <- nrow(rxnData$enzymeAbund)
+  n_c <- length(rxnData$flux)
+  filML <- par_likelihood$likelihood == max(par_likelihood$likelihood)
+  params <- exp(par_markov_chain[filML,])
+  
+  par_stack <- rep(1, n_c) %*% t(params); 
+  colnames(par_stack) <- parNames
+  
+  
+  # reshape to formulas in order to be suitable for calculating the sensitivities
+  # remove the ~I(
+  form <- paste(sub(paste(paste("E", rxnData$rxnID, sep = "_"), " \\* ", paste("V", rxnData$rxnID, sep = "_"), sep = ""), "1", rxnData$rxnForm)[2], sep = " ")
+  form <- substr(form,3,nchar(form)-5)
+  #form <- gsub('E_r_....\\ \\*\\ V_r_....','',form)
+  
+  ##Calculate the elasticities
+  # write the input matrix
+  
+  elInpmat <- data.frame(met_abund,par_stack)
+  
+  predOcc <- with(elInpmat,eval(parse(text=form)))
+  names(predOcc) <- rownames(elInpmat)
+  
+  colnames(elInpmat) <- gsub('-','',colnames(elInpmat))
+  colnames(elInpmat) <- gsub('\\.','',colnames(elInpmat))
+  
+  elastMat <- elInpmat
+  elastMat[,] <- NA
+  
+  eq <- eval(parse(text = paste('expression(',form,')')))
+  
+  #calculate elasticities
+  for (fac in colnames(elInpmat)){
+    #take the devirate
+    dform <- D(eq,fac)
+    elastMat[,fac] <- with(elInpmat,eval(dform))
+  }
+  
+  # until now we have the sensitivities, for the elasticities divide by the value at the point,
+  # and multiply by the parameter value at the point
+  elastMat <- elastMat /  predOcc
+  elastMat <- elastMat * elInpmat
+  
+  
+  ## prepare things for plotting
+  plotmat <- data.frame(t(elastMat))
+  plotmat$ID <- row.names(plotmat)
+  plotmat <- melt(plotmat, id = 'ID',variable.name='Condition',value.name='Elasticity')
+  
+  # Add the original parameter values
+  
+  parmat <- data.frame(t(elInpmat))
+  parmat$ID <- row.names(parmat)
+  parmat <- melt(parmat, id = 'ID',variable.name='Condition',value.name='Value')
+  plotmat$Value <- parmat$Value
+  
+  plotmat$Type <- 'Parameter'
+  plotmat[grep('^t',plotmat$ID),'Type']  <- 'Metabolite'
+  
+  plotmat <- plotmat[c(grep('^t',plotmat$ID),grep('^K',plotmat$ID)),]
+  
+  # which metabolite is the parameter associated with?
+  plotmat$metID <- sapply(plotmat$ID,function(x){
+    substr(x,nchar(x)-5,nchar(x))
+  }) 
+  
+  #delete the meatbolites without a parameter
+  plotmat <- plotmat[!(!(plotmat$ID %in% plotmat[plotmat$Type == 'Parameter',colnames(plotmat)=='metID']) &
+                         plotmat$Type == 'Metabolite'), ]
+  
+  plotmat$keq <- sapply(plotmat$ID,function(x){substr(x,1,4) == 'Keqr'})
+  plotmat <- plotmat[order(plotmat$metID,plotmat$Condition,plotmat$Type), ]
+  
+  # calculate occupancies
+  plotmat$Occupancy[plotmat$Type == 'Metabolite'] <- log10(plotmat$Value[plotmat$Type == 'Metabolite']/plotmat$Value[plotmat$Type == 'Parameter' & !plotmat$keq ])
+  
+  # get the names of the parameters
+  plotmat$Name <-sapply(plotmat$ID,function(x){
+    x <-substr(x,nchar(x)-5,nchar(x))
+    rxnData$metNames[x]})
+  
+  fil <- is.na(plotmat$Name)           
+  plotmat$Name[fil] <- plotmat$ID[fil]
+  plotmat$Name <- unname(unlist(plotmat$Name))
+  
+  # split long names to multiple line names
+  plotmat$Name<- unname(sapply(plotmat$Name, function(name_int){
+    if(length(strsplit(name_int, split = "")[[1]]) >= 25){
+      split_name <- strsplit(name_int, split = "")[[1]]
+      split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(20 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
+      split_name[split_pois] <- "\n"
+      paste(split_name, collapse = "")
+    }else{name_int}
+  }))
+  
+  # make a cap for the elasticities
+  plotmat$Elasticity[plotmat$Elasticity > 10] <- 10
+  plotmat$Elasticity[plotmat$Elasticity < -10] <- -10
+  
+  # make a background colouring matrix
+  plotmat$Limitation <- unname(unlist(sapply(plotmat$Condition,function(x){
+    substring(x,1,1)
+  })))
+  plotmat$Growthlab <- unname(unlist(sapply(plotmat$Condition,function(x){
+    substring(x,2,nchar(as.character(x)))
+  })))
+  plotmat$Growth<- as.numeric(as.factor(plotmat$Growthlab))
+  plotmat$Groups <- paste(plotmat$Limitation,plotmat$Type,sep='')
+  
+  backmat <- data.frame(xstart = seq(0.5,20.5,5), xend = seq(5.5,25.5,5), Limitation = unique(plotmat$Limitation))
+  
+  # reorder stuff, to get the factor order reasonable
+  
+  fil <- grep('Keqr_',plotmat$Name)
+  plotmat <- rbind(plotmat[-fil,],plotmat[fil,])
+  
+  plotmat$Name <- factor(plotmat$Name,levels = unique(plotmat$Name))
+  # Plot it
+  ### Plot the elasticies ###
+  p <- ggplot()+  
+    geom_rect(data = backmat, aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf,fill = Limitation), alpha = 0.2) +
+    scale_fill_brewer(palette='Pastel1',guide = 'none')+
+    geom_line(data=plotmat,aes(x=Growth,y=Elasticity,colour=Name,linetype=Type))+
+    facet_grid(~Limitation )+
+    scale_colour_brewer(palette='Set1')+
+    scale_x_continuous(breaks=1:5,labels=unique(plotmat$Growthlab),expand=c(0.05,0.05))+
+    theme(axis.text.x = element_text(angle=90,vjust=.50),panel.background= element_rect(fill = '#EDEDED'))+
+    labs(title = rxnData$reaction,x='dilution rate [1/h]')
+  
+  if(max(abs(plotmat$Elasticity))>1){
+    p<- p+scale_y_continuous(breaks=floor(min(plotmat$Elasticity)):ceiling(max(plotmat$Elasticity)),expand=c(0.05,0.05))
+  }
+  
+  elPlots <- list()
+  elPlots$elast <- p
+  
+  ### Plot the occupancies ###
+  p <- ggplot()+  
+    geom_rect(data = backmat, aes(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf,fill = Limitation), alpha = 0.2) +
+    scale_fill_brewer(palette='Pastel1',guide = 'none')+
+    geom_line(data=plotmat[plotmat$Type == 'Metabolite',],aes(x=Growth,y=Occupancy,colour=Name,linetype=Type))+
+    facet_grid(~Limitation )+
+    scale_colour_brewer(palette='Set1')+
+    scale_y_continuous(limits = c(-max(abs(plotmat$Occupancy[plotmat$Type == 'Metabolite'])),max(abs(plotmat$Occupancy[plotmat$Type == 'Metabolite']))),expand=c(0.05,0.05))+
+    scale_x_continuous(breaks=1:5,labels=unique(plotmat$Growthlab),expand=c(0.05,0.05))+
+    theme(axis.text.x = element_text(angle=90,vjust=.50),panel.background= element_rect(fill = '#EDEDED'))+
+    labs(title = rxnData$reaction,y='log10( [met] / kM )',x='dilution rate [1/h]')
+  
+  elPlots$occ <- p
+  return(elPlots)
+} 
+
+
+
 param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
   
   ### write common names ###
