@@ -1333,7 +1333,7 @@ if(update_layout == TRUE){
   }
 	
   
-  save(Stotal, metSty, rxnSty, reversibleRx, relevant_species, file = "totalStoiAux.Rdata")
+  save(Stotal, metSty, rxnSty, reversibleRx, corrFile, relevant_species, file = "totalStoiAux.Rdata")
 
   write.table(metSty, file = "metSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)
   write.table(rxnSty, file = "rxnSty.tsv", sep = "\t", row.names = FALSE, col.names = TRUE)

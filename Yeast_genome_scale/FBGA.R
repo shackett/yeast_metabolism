@@ -370,6 +370,8 @@ Qthresh <- 0.1
 reactionInfo$Qvalue <- NA
 reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
 
+#save(list = ls(), file = "validParameterSets.Rdata")
+
 ### reduce reactions of interest to primary forms and reparameterizations ###
 
 reactionInfo <- reactionInfo[is.na(reactionInfo$Qvalue) | (!is.na(reactionInfo$Qvalue) & reactionInfo$Qvalue < Qthresh),]
@@ -417,6 +419,9 @@ for(arxn in reactionInfo$rMech){
   print(species_plots[[2]])
   print(species_plots[[3]])
   print(species_plots[[4]])
+  elastPlots <- calcElast(run_rxn, par_markov_chain, par_likelihood)
+  print(elastPlots$elast)
+  print(elastPlots$occ) 
   dev.off()
   
   }
