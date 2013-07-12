@@ -419,30 +419,13 @@ X^{*}_{ij} &= X_{ij} - \delta^{o}_{j}\label{normalizeC}
 <<normalizeProtAbund, dependson = "EMprep", cache = TRUE>>=
 #load('../BulkComposition/protSpecQuantOut.Rdata')
 
-sampleChemoInfo <- conditions[sapply(proteomicsBlocking$Condition, function(x){c(1:length(conditions[,1]))[conditions$condition == x]}),] #align chemostat conditions to tech replicates
-
-#added_conds <- conditions[conditions$condition == "p0.30",]; added_conds$condition <- "p0.30_ORBI"
-#conditions <- rbind(conditions, added_conds)
-
-#cond_info <- sapply(colnames(good_light), function(cond){
-#	if(strsplit(cond, "")[[1]][1] == "L"){
-#		tmp <- cond
-#		}else{
-#			tmp <- paste(c(tolower(strsplit(cond, "")[[1]][1]), strsplit(cond, "")[[1]][-1]), collapse = "")
-#			}
-#		c(1:length(conditions[,1]))[conditions$condition == tmp]
-#		})
-
-#conditions <- conditions[cond_info,]
+sampleChemoInfo <- conditions[sapply(proteomicsBlocking$Condition, function(x){c(1:length(conditions[,1]))[conditions$condition == x]}),] #align chemostat conditions 
 
 initial_offset = log2(apply(good_light/good_heavy, 2, median, na.rm = TRUE))
 
 abundMat <- abundMat + rep(1, times = length(abundMat[,1])) %*% t(-1*initial_offset)
 
 @
-
-%\caption{Concentration of proteins (mg) per $\mu$L cellular volume.  The top panel contains the raw transformed protein concentrations.  It is notable that some treatments are measured poorly, with a great discordance between technical replicates.  There is a strong linear trend across dilution rates within each limitation, so this could serve as a fitted value for each condition.  To minimize the influence of outliers, we want to find a point estimate of the concentration of protein in each condition that balances the actual possibly noisy value measured, with the predicted value from the structure of the data.  The balance of using the experimental measurement or the fitted value is determined by how noisy the experimental measurement is relative to the residual mean square error of the regression fit.}
-
 
 
 \small
