@@ -9,7 +9,6 @@ library(combinat)
   				
 met_assigner <- function(head_node, rxn_angle, sub_posn, newlen){
 						
-	#assign metabolites to angles radiating from a node such that minimize the sum of squared angle adjustment
 	#returns a filled in version of sub_posn
 					
 	nmets <- length(sub_posn[,1])
@@ -707,22 +706,28 @@ plotter = new.CytoscapeWindow("yeastie4", graph = metabGraph)
 #options(help.ports=2120)
 displayGraph(plotter)
 
+#### Position primary metabolites ###
+
 setNodePosition(plotter, rownames(met_pos)[!is.na(met_pos[,1])], met_pos$x[!is.na(met_pos[,1])], -1*met_pos$y[!is.na(met_pos[,1])])
 setNodePosition(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "sub", sep = "_"),rxn_nodes[,1][!is.na(rxn_nodes[,1])], -1*rxn_nodes[,2][!is.na(rxn_nodes[,1])])
 setNodePosition(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,3])], "prod", sep = "_"),rxn_nodes[,3][!is.na(rxn_nodes[,3])], -1*rxn_nodes[,4][!is.na(rxn_nodes[,3])])
+
+#### Position reaction cofactors and add appropriate aesthetics ###
 
 setNodePosition(plotter, cofactor_layout$name, cofactor_layout$x, -1*cofactor_layout$y)
 setNodeSizeDirect(plotter, cofactor_layout$name, 2)
 setNodeShapeDirect(plotter, cofactor_layout$name, "diamond")
 
+#### Hide all of the reaction nodes ###
 
-#hide all of the reaction nodes
 setNodeFillOpacityDirect(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "sub", sep = "_"), 0)
 setNodeFillOpacityDirect(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "prod", sep = "_"), 0)
 setNodeBorderOpacityDirect(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "sub", sep = "_"), 0)
 setNodeBorderOpacityDirect(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "prod", sep = "_"), 0)
 setNodeSizeDirect(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "sub", sep = "_"), 0.01)
 setNodeSizeDirect(plotter, paste(rownames(rxn_nodes)[!is.na(rxn_nodes[,1])], "prod", sep = "_"), 0.01)
+
+#### Set default aesthetics ###
 
 setDefaultNodeSize(plotter, 2)
 setDefaultNodeFontSize(plotter, 0.5)
@@ -736,6 +741,29 @@ setDefaultNodeLabelColor(plotter, '#FFFFFF') # white node labels
 showGraphicsDetails(plotter, TRUE) #make it so that cytoscape doesn't suppress labels when zoomed out
 
 redraw(plotter)
+
+
+######## substitute nodes for jpeg structures ########
+
+sIDstructures <- data.frame(file = list.files(file.path("chebiStructures", "structureImages")))
+sIDstructures$sID = sub('.jpg', '', sIDstructures$file)
+
+met_pos_image <- met_pos[!is.na(met_pos$x),]
+met_pos_image$nodeName = rownames(met_pos_image)
+met_pos_image$sID = rownames(met_pos_image)
+met_pos_image$sID[met_pos_image$sID %in% split.metab$new_name] <- split.metab$metabolite[chmatch(met_pos_image$sID[met_pos_image$sID %in% split.metab$new_name], split.metab$new_name)]
+
+met_pos_image <- met_pos_image[met_pos_image$sID %in% sIDstructures$sID,]
+
+
+for(k in 1:nrow(met_pos_image)){
+  setNodeImageDirect(plotter, met_pos_image$nodeName[k], file.path("file:///Users/Sean/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/chebiStructures/structureImages", paste(met_pos_image$sID[k], ".jpg", sep = "")))
+  }
+setNodeSizeDirect(plotter, met_pos_image$nodeName, 5)
+setNodeLabelDirect(plotter, met_pos_image$nodeName, met_pos_image$display_name)
+setNodeLabelColorDirect(plotter, met_pos_image$nodeName, '#FF0033')
+
+#################
 
 #setEdgeLabelRule(obj, edge.attribute.name)
 #setEdgeLabelWidthDirect(obj, edge.names, new.value)
@@ -751,9 +779,10 @@ for(mets in 1:length(met_pos[,1])){
   }
 }
 
-flux_mat <- fluxMat
 
 ### adjust flux_match by stoichometry coefficients of boundary components ###
+
+flux_mat <- fluxMat
 n_c <- 25
 anabolicFlux <- as.data.frame(matrix(NA, ncol = n_c, nrow = ncol(stoiAppended)))
 rownames(anabolicFlux) <- colnames(stoiAppended); colnames(anabolicFlux) <- colnames(flux_mat)
@@ -785,6 +814,8 @@ col_num <- 6
 edge_sf <- 0.1
 library(colorRamps)
 
+
+
 flux_att <- color_by_flux(flux_mat, col_num, edge_sf)
 edge_names <- sapply(c(1:length(flux_att[,1])), function(x){paste(flux_att[,colnames(flux_att) == "source"][x], flux_att[,colnames(flux_att) == "dest"][x], sep = "~")})
 all_edges <- cy2.edge.names(metabGraph)
@@ -797,12 +828,23 @@ edge_names2 <- unname(unlist(sapply(edge_names, function(x){
   }
 })))
 
+#### Initialization
+
+setEdgeTargetArrowShapeDirect(plotter, all_edges, "No Arrow")
+setEdgeSourceArrowShapeDirect(plotter, all_edges, "No Arrow")
+
+####
+
+
+
 valid_edge <- edge_names2 %in% all_edges
 
 noflux_edge <- !(names(all_edges) %in% edge_names)
 noflux_edgename <- unname(all_edges[noflux_edge])
 
 
+
+#### ??? ###
 
 frac_match <- rep(NA, times = length(unique(flux_att[,colnames(flux_att) == "rxn"])))
 for(i in 1:length(unique(flux_att[,colnames(flux_att) == "rxn"]))){
@@ -816,16 +858,49 @@ for(i in 1:length(unique(flux_att[,colnames(flux_att) == "rxn"]))){
 }
 
 
-flux_att_red <- flux_att[valid_edge,]
+
+#### set primary reaction edge width, color and arrow ###
+
+flux_att_red <- data.frame(flux_att[valid_edge,])
 edge_names2_red <- edge_names2[valid_edge]
 
-
 for(edge in c(1:length(edge_names2_red))){	
-  setEdgeLineWidthDirect(plotter, edge_names2_red[edge], as.numeric(flux_att_red[,colnames(flux_att_red) == "width"][edge]))
-  setEdgeColorDirect(plotter, edge_names2_red[edge], flux_att_red[,colnames(flux_att_red) == "color"][edge])
+  setEdgeLineWidthDirect(plotter, edge_names2_red[edge], as.numeric(flux_att_red$width[edge]))
+  setEdgeColorDirect(plotter, edge_names2_red[edge], flux_att_red$color[edge])
 }
 
 
+
+#### color cofactor edges as the reactant-product link ###
+
+reactantProdCon <- data.frame(flux_att[intersect(grep('sub|prod', flux_att[,colnames(flux_att) == "source"]), grep('sub|prod', flux_att[,colnames(flux_att) == "dest"])),])
+reactantProdRxnNames <- edge_names2[intersect(grep('sub|prod', flux_att[,colnames(flux_att) == "source"]), grep('sub|prod', flux_att[,colnames(flux_att) == "dest"]))]
+colored_edges_num <- NULL
+
+
+
+for(rxn in 1:nrow(reactantProdCon)){
+  if(length(grep(reactantProdCon$rxn[rxn], noflux_edgename)) != 0){
+    setEdgeLineWidthDirect(plotter, noflux_edgename[grep(reactantProdCon$rxn[rxn], noflux_edgename)], as.numeric(reactantProdCon$width[rxn]))
+    setEdgeColorDirect(plotter, noflux_edgename[grep(reactantProdCon$rxn[rxn], noflux_edgename)], reactantProdCon$color[rxn])
+    colored_edges_num <- c(colored_edges_num, noflux_edgename[grep(reactantProdCon$rxn[rxn], noflux_edgename)])
+    }
+  }
+noflux_edgename <- noflux_edgename[!(noflux_edgename %in% colored_edges_num)]
+
+
+setEdgeTargetArrowShapeDirect(plotter, reactantProdRxnNames[reactantProdCon$flip == "1"], "Arrow")
+setEdgeTargetArrowColorDirect(plotter, reactantProdRxnNames[reactantProdCon$flip == "1"], reactantProdCon$color[reactantProdCon$flip == "1"])
+setEdgeSourceArrowShapeDirect(plotter, reactantProdRxnNames[reactantProdCon$flip == "0"], "Arrow")
+setEdgeSourceArrowColorDirect(plotter, reactantProdRxnNames[reactantProdCon$flip == "0"], reactantProdCon$color[reactantProdCon$flip == "0"])
+setEdgeTargetArrowOpacityDirect(plotter, reactantProdRxnNames, 100); setEdgeSourceArrowOpacityDirect(plotter, reactantProdRxnNames, 100)
+
+redraw(plotter)
+
+getArrowShapes(plotter)
+
+
+#### overwrite edges which don't carry flux ####
 
 for(edge in c(1:length(noflux_edgename))){	
   setEdgeLineWidthDirect(plotter, noflux_edgename[edge], edge_sf)

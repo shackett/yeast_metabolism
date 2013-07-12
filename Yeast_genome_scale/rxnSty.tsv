@@ -883,3 +883,28 @@
 "acetate boundary"	NA	NA	NA	NA	NA	NA
 "r_0659"	"L-hydroxyproline dehydrogenase (NAD)"	"c_10"	NA	NA	NA	NA
 "r_0660"	"L-hydroxyproline dehydrogenase (NADP)"	"c_10"	NA	NA	NA	NA
+"r_0064"	"3-isopropylmalate dehydrogenase"	"c_02"	NA	NA	NA	NA
+"r_0114"	"acetyl-CoA ACP transacylase"	"c_10"	NA	NA	NA	NA
+"r_0341"	"cysteine synthase"	"c_02"	NA	NA	NA	NA
+"r_0395"	"dTMP kinase"	"c_02"	NA	NA	NA	NA
+"r_0428"	"fatty acyl-ACP synthase (n-C8:0ACP), lumped reaction"	"c_10"	NA	NA	NA	NA
+"r_0455"	"fatty-acyl-ACP synthase (n-C10:0ACP)"	"c_10"	NA	NA	NA	NA
+"r_0456"	"fatty-acyl-ACP synthase (n-C12:0ACP)"	"c_10"	NA	NA	NA	NA
+"r_0775"	"nucleoside-diphosphate kinase (ATP:dTDP)"	"c_02"	NA	NA	NA	NA
+"r_0794"	"orotidine-5'-phosphate decarboxylase"	"c_02"	NA	NA	NA	NA
+"r_0974"	"serine O-acetyltransferase"	"c_02"	NA	NA	NA	NA
+"H+ boundary"	"H+ boundary"	NA	NA	NA	NA	NA
+"glycerol boundary"	"glycerol boundary"	NA	NA	NA	NA	NA
+"sugar polymer flux composition"	"sugar polymer flux composition"	NA	NA	NA	NA	NA
+"AA flux composition"	"AA flux composition"	NA	NA	NA	NA	NA
+"NTP flux composition"	"NTP flux composition"	NA	NA	NA	NA	NA
+"dNTP flux composition"	"dNTP flux composition"	NA	NA	NA	NA	NA
+"steroid flux composition"	"steroid flux composition"	NA	NA	NA	NA	NA
+"sulfate flux composition"	"sulfate flux composition"	NA	NA	NA	NA	NA
+"glycerol washout composition"	"glycerol washout composition"	NA	NA	NA	NA	NA
+"Maintenance ATP hydrolysis composition"	"Maintenance ATP hydrolysis composition"	NA	NA	NA	NA	NA
+"r_0187"	"aldehyde dehydrogenase (2-phenylethanol, NAD)"	"c_02"	NA	NA	NA	NA
+"r_0189"	"aldehyde dehydrogenase (2-phenylethanol, NADP)"	"c_02"	NA	NA	NA	NA
+"r_1866"	"polyphosphate kinase"	"c_02"	NA	NA	NA	NA
+"polyphosphate flux composition"	"polyphosphate flux composition"	NA	NA	NA	NA	NA
+"r_1868"	"Misc ATP hydrolysis"	"c_02"	NA	NA	NA	NA

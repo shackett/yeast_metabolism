@@ -1213,7 +1213,9 @@ prot_abund_final[prot_abund_final == 0] <- NA
 
 n_prot <- length(prot_abund_final[1,])	
 
-write.output(t(prot_abund_final), "proteinAbundance.tsv")
+impute_abund  <- impute.knn(as.matrix(t(prot_abund_final)), k = 10, rowmax = 0.8)$data
+
+write.output(impute_abund, "proteinAbundance.tsv")
 
 @
 

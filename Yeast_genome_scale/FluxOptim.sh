@@ -1,6 +1,12 @@
 #!/bin/sh
 
-for a_run in 0 1 2 3 4 5 6 7 8 9
+
+echo "$1" #provided number of chunks
+for a_chunk in `seq 1 $1`
 do
-  qsub -l 1day -cwd -sync n Rscript FluxOptimClus.R runNum=$a_run
+  for a_run in `seq 0 9`
+  do
+    qsub -l 1day -cwd -sync n Rscript FluxOptimClus.R runNum=$a_run chunk=$a_chunk
+  done
 done
+

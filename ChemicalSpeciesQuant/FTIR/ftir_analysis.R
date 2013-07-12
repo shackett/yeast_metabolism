@@ -37,14 +37,16 @@ for(cmpd in unique(FTIR_file_info$Compound)){
 			wavelengths <- run_data_file[,1]
 			}
 		if(sum(wavelengths != run_data_file[,1]) != 0){
-			print(paste("wavelengths don't match for", run))
+			print(paste("wavelengths don't match for", runN))
 			}
 		
 		absorbance <- cbind(absorbance, run_data_file[,2])
 		
 		}
 	
-	rownames(absorbance) <- wavelengths; colnames(absorbance) <- paste("R", c(1:length(cmpd_info[,1])), sep = "")
+  
+  
+	rownames(absorbance) <- wavelengths[wavelengths %in% run_data_file[,1]]; colnames(absorbance) <- paste("R", c(1:length(cmpd_info[,1])), sep = "")
 	
 	#remove effect of negative baseline
 	absorbance <- absorbance - apply(absorbance, 2, min)

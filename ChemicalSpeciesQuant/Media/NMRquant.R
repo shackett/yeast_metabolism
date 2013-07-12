@@ -136,6 +136,7 @@ NMR_point_estimate <- cbind(NMR_point_estimate, data.frame(limitation = unlist(c
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 20, face = "bold"), panel.background = element_blank(), legend.position = "none", 
             panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.line = element_line(), axis.text.x = element_text(angle = 90)) 
 
+#NMR_point_estimate  <- NMR_point_estimate[NMR_point_estimate$peak %in% c("Ethanol", "Acetate", "Glucose", "Glycerol"),]
   
 NMRbarplot <- ggplot(NMR_point_estimate, aes(x = factor(condition), y = estimate, fill = factor(limitation))) + facet_grid(peak ~ ., scale = "free_y") + barplot_theme
 NMRbarplot + geom_bar(stat = "identity") + ggtitle("Concentration of metabolites (and unknowns) in chemostat effluent") + scale_fill_brewer(palette = "Set2") + 

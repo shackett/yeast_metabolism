@@ -6,7 +6,6 @@ library(ggplot2)
 chemoStat <- read.table("releventDR.csv", sep = ",", header = TRUE)
 chemoStat <- chemoStat[apply(is.na(chemoStat), 1, sum) < 2,]
 
-chemoStat$coult
 
 #plot(chemoStat$colterVol.uL.mL ~ chemoStat$PCMVol.mL)
 #the coulter counter under-estimates volume by ~20%
