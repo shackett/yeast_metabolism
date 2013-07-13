@@ -32,7 +32,7 @@ library(knitr)
 library(ggplot2)
 library(reshape2)
 
-opts_knit$set(progress = TRUE, verbose = TRUE)
+opts_knit$set(progress = TRUE, verbose = TRUE, stop_on_error = 1)
 opts_chunk$set(echo = FALSE, fig.width = 15, fig.height = 15)
 
 
@@ -324,7 +324,7 @@ for(inst in unique(bioRepPlot$Instrument)){
 
 @
 
-<<>>=
+<<lICvSN>>=
 SNvsIC <- data.frame(melt((log2(lightIC) + log2(heavyIC))/2),melt(peptideSN)[,3])
 colnames(SNvsIC) <- c("peptide", "condition", "meanIC", "SN")
 SNvsIC <- SNvsIC[apply(data.frame(is.finite(SNvsIC[,3]), is.finite(SNvsIC[,4])), 1, sum) == 2,]
@@ -332,17 +332,17 @@ SNvsIC <- SNvsIC[apply(data.frame(is.finite(SNvsIC[,3]), is.finite(SNvsIC[,4])),
 hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line")) 
 
 LHscatter <- ggplot(SNvsIC, aes(y = SN, x = meanIC)) + hex_theme + scale_x_continuous("meanIC", expand = c(0.02,0.02)) + scale_y_continuous("SN", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
-LHscatter + geom_hex(bins = 200)
+LHscatter + geom_hex(bins = 200) + ggtitle("signal:noise ~ log2 average IC")
 @
 
-<<>>=
+<<lICvlSN>>=
 LHscatter <- ggplot(SNvsIC[SNvsIC$SN > 2^-5,] , aes(y = log2(SN), x = meanIC)) + hex_theme + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
-LHscatter + geom_hex(bins = 200)
+LHscatter + geom_hex(bins = 200) + ggtitle("log2 signal:noise ~ log2 average IC")
 @
 
 
-<<>>=
-ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
+<<preOutlierSNspline>>=
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Average log10 SN") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3)) + ggtitle("average standard deviation by pooled signal noise of raw data")
 @
 
 
@@ -638,7 +638,7 @@ LHscatter <- ggplot(bioRepPlot, aes(y = experimental, x = reference)) + facet_gr
 LHscatter + geom_hex(bins = 200) + ggtitle("p0.05H ~ p0.05L")
 @
 
-<<>>=
+<<LHfiltered, fig.height = 10, fig.width = 15>>=
 LHscatter <- ggplot(bioRepPlot[bioRepPlot$outlier_type == "valid",], aes(y = experimental, x = reference)) + facet_grid(~ Instrument + Set, scales = "free") + hex_theme + scale_x_continuous("log2 N-15 labelled p0.05", expand = c(0.02,0.02)) + scale_y_continuous("log2 Unlabelled p0.05", expand = c(0.01,0.01)) + scale_fill_gradientn(name = "Counts", colours = rainbow(7))
 LHscatter + geom_hex(bins = 200) + ggtitle("p0.05H ~ p0.05L Filtered")
 @
@@ -680,7 +680,7 @@ bin_dist_plot <- NULL
     
 }
 
-ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = logIC, y = MLE_var, color = "blue", size = 3))
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = logIC, y = MLE_var, color = "blue", size = 3)) + ggtitle("Average binned variance versus mean H/L ion count")
 @
 
 <<pooled_variance_SN, dependson = "pooled_variance_setup">>=
@@ -716,18 +716,18 @@ for(inst in unique(bioRepPlot$Instrument)){
     
 }
 
-ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous(" average log10-SN") + scale_y_continuous("average pooled standard deviation") + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3)) + ggtitle("Average binned variance versus log signal:noise")
 @
 
-<<>>=
-ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous("Log average H/L IC") + scale_y_continuous("average pooled standard deviation", limits = c(0,1)) + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3))
+<<pooled_variance_SN_high>>=
+ggplot() + facet_grid(~ instrument) + geom_line(data = var_spline_plot$spline, aes(x = x, y = y, color = "RED", size = 2)) + scatter_theme + scale_x_continuous(" average log10-SN") + scale_y_continuous("average pooled standard deviation", limits = c(0,1)) + scale_color_identity() + scale_size_identity() + geom_point(data = var_spline_plot$bins, aes(x = log10(SN), y = MLE_var, color = "blue", size = 3)) + ggtitle("Average binned variance versus log signal:noise, ceiling of sd = 1")
 @
 
-<<>>=
+<<prunedSNbarplot>>=
 bioRepPlot_outlier <- bioRepPlot
 bioRepPlot_outlier$outlier_type[is.na(bioRepPlot_outlier$outlier_type)] <- "valid"
 bioRepPlot_outlier_plot <- ggplot(data = bioRepPlot_outlier, aes(x = SN, fill = outlier_type)) + facet_wrap(~ outlier_type, scales = "free_y")
-bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c(0,0)) + scale_x_continuous(expand = c(0,0))
+bioRepPlot_outlier_plot + geom_bar(binwidth = 5) + scale_y_continuous(expand = c(0,0)) + scale_x_continuous(expand = c(0,0)) + ggtitle("Signal:Noise of pruned and valid peptides")
 @
 
 
@@ -1224,7 +1224,7 @@ xtable(table(div_max), caption = "Number of peptides not-conforming to some gene
 
 \begin{figure}
 <<EMlikplot, echo = FALSE>>=
-plot(log(abs(diff(whole_data_logL))), xlab = "Iteration", ylab = "log change in log-likelihood", pch = 16)
+plot(whole_data_logL, xlab = "Iteration", ylab = "log change in log-likelihood", pch = 16)
 @
 \caption{Log-likelihood of EM.  First stage (black) allows for a peptide to partially match proteins and partially diverge from the trend, the second stage (orange) thresholds such that a peptide is entirely accounted for by protein trends or entirely departs from plausible trends}
 \end{figure}
@@ -1271,12 +1271,12 @@ print(xtable(rbind(matchCountsTab, c("average match", signif(sum(matchCountsTab$
 @
   
   
-\begin{figure}
-<<rawHM, echo = FALSE, cache = TRUE>>=
-heatmap.2(t(prot_abund_final), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = greenred(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "white", breaks = seq(-1*max(range(prot_abund_final, na.rm = TRUE)), max(range(prot_abund_final, na.rm = TRUE)), by = max(range(prot_abund_final, na.rm = TRUE))/250))
-@
-\caption{Relative protein abundance across \Sexpr{n_c} conditions, after running EM}
-\end{figure}
+%\begin{figure}
+%<<rawHM, echo = FALSE, cache = TRUE>>=
+%heatmap.2(t(prot_abund_final), trace = "none", Colv = NULL, dendrogram = "row", na.color = "white", col = greenred(500), labRow = FALSE, symkey = TRUE, scale = "none", denscol = "white", breaks = seq(-1*max(range(prot_abund_final, na.rm = TRUE)), max(range(prot_abund_final, na.rm = TRUE)), by = max(range(prot_abund_final, na.rm = TRUE))/250))
+%@
+%\caption{Relative protein abundance across \Sexpr{n_c} conditions, after running EM}
+%\end{figure}
 
 
 
@@ -1346,7 +1346,7 @@ pc_plot_df$PC <- factor(pc_plot_df$PC, levels = paste("PC", c(1:npc)))
 
 factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol =2, scales = "free_y") + scale_x_discrete("Experimental condition") + scale_y_continuous("Principal Component Value") + theme(panel.grid.minor = element_blank(), panel.background = element_rect(fill = "aliceblue"), strip.background = element_rect(fill = "cadetblue1"), text = element_text(size = 15), axis.text.x = element_text(angle = 90), title = element_text(size = 25, face = "bold"))
 factor_plot <- factor_plot + geom_line()
-ggsave(plot = factor_plot, "figure/PC_traces.pdf", width = 18, height = 10)
+#ggsave(plot = factor_plot, "figure/PC_traces.pdf", width = 18, height = 10)
  @
 
 \begin{figure}[h!]
@@ -1356,12 +1356,13 @@ ggsave(plot = factor_plot, "figure/PC_traces.pdf", width = 18, height = 10)
 \end{figure}
 
 <<plot_proteinTrends, dependson = "MVimputeData", cache = TRUE, warning = FALSE, cache = TRUE>>=
-#tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
-#tmp <- as.matrix(tmp)
-#tmp[!(tmp %in% c(0,1))] <- 1 
-#prior_mat_logical <- cbind(as.matrix(unique_mappingMat), tmp)
-#prior_mat_logical <- prior_mat_logical == 1
-#possibleMap <- Matrix(prior_mat_logical)
+tmp <- Matrix(diag(rep(prior_p_div, times = n_p))); colnames(tmp) <- paste(unique_pepNames, "divergent", sep = "_")
+tmp <- as.matrix(tmp)
+tmp[!(tmp %in% c(0,1))] <- 1 
+prior_mat_logical <- cbind(as.matrix(unique_mappingMat), tmp)
+prior_mat_logical <- prior_mat_logical == 1
+possibleMap <- Matrix(prior_mat_logical)
+
 @
 
 See NPT1 for a pathological example.  If all peptides are called divergent then the protein trend should be initialized as the median for each condition
@@ -1436,8 +1437,12 @@ geneLocal <- sapply(col_orfNames, function(orfNames){
     colSums(gfp[matches,GFPlocalizationCols]) != 0
     }
 })
+
+
 #remove low frequency categories and identify unlocalized with NA
+valid_compartments <- colnames(gfp)[GFPlocalizationCols][rowSums(geneLocal, na.rm = T) > 15]
 geneLocal <- geneLocal[rowSums(geneLocal, na.rm = T) > 15,]
+rownames(geneLocal) <- valid_compartments
 #geneLocal[,colSums(geneLocal) == 0] <- NA
                            
 localizationDF <- cbind(t(geneLocal), t(impute_abund))
@@ -1477,18 +1482,15 @@ trans_svd <- svd(transcript_brauer, nu = n_trans_pc, nv = n_trans_pc)
 
 #switch reference from C0.30 (paper says C0.25, but C0.30 is correct) to P0.05 by using fitting a n_trans_pc principal component projection of the data and then taking the difference between these two conditions for each gene.  
 
-offset_projection <- trans_svd$u %*% diag(trans_svd$d[1:n_trans_pc]) %*% t(trans_svd$v[sapply(c("ClimD.3", "PlimD.05.2") , function(cond){c(1:length(transcript_brauer[1,]))[colnames(transcript_brauer) == cond]}),])
+offset_projection <- trans_svd$u %*% diag(trans_svd$d[1:n_trans_pc]) %*% t(trans_svd$v[sapply(c("ClimD.25", "PlimD.05.2") , function(cond){c(1:length(transcript_brauer[1,]))[colnames(transcript_brauer) == cond]}),])
 transc_renorm_offset <- offset_projection[,2] - offset_projection[,1]
 
 transcript_brauer <- transcript_brauer - transc_renorm_offset
 
+transcript_brauer <- transcript_brauer[,grep('^S', colnames(transcript_brauer), invert = T)]
 
-transcript.condition <- as.data.frame(matrix(NA, ncol = 36, nrow = 2))
-colnames(transcript.condition) <- colnames(transcript_brauer)
-rownames(transcript.condition) <- c("limitation", "GR")
-limitations <- c("C", "N", "P", "S", "L", "U")
-transcript.condition[1,] <- rep(limitations, each = 6)
-transcript.condition[2,] <- rep(c(0.05, 0.10, 0.15, 0.20, 0.25, 0.30), times = 6)
+
+transcript.condition <- read.delim("TranscriptomicsChemostatsActualDR.tsv") # import chemostat dilution rates
 
 #missing mappings
 missing_on_array <- colnames(impute_abund)[!(colnames(impute_abund) %in% rownames(transcript_brauer))]
@@ -1509,7 +1511,7 @@ load('~/Desktop/Composition/RNA_abundance/RNAabundance.R')
 
 prot_cond <- as.data.frame(matrix(NA, ncol = n_c, nrow = 2))
 prot_cond <- sapply(rownames(impute_abund), function(cond){
-	c(unlist(strsplit(cond, '[0-9]+'))[1], unlist(strsplit(cond, '[A-Z]'))[2])
+	c(unlist(strsplit(cond, '[0-9]+'))[1], unlist(strsplit(cond, '[a-zA-Z]'))[2])
 	})
 colnames(prot_cond) <- rownames(impute_abund)
 rownames(prot_cond) <- c("limitation", "GR")
@@ -1521,13 +1523,13 @@ prot_cond$realDR <- sapply(1:length(prot_cond[,1]), function(cond){
 prot_cond_bu <- prot_cond
 prot_cond <- prot_cond[!is.na(prot_cond$realDR),]
 
-DR_change_mat <- matrix(0, nrow = length(transcript.condition[1,]), ncol = length(prot_cond[,1]))
-colnames(DR_change_mat) <- rownames(prot_cond); rownames(DR_change_mat) <- colnames(transcript.condition)
+DR_change_mat <- matrix(0, nrow = nrow(transcript.condition), ncol = length(prot_cond[,1]))
+colnames(DR_change_mat) <- rownames(prot_cond); rownames(DR_change_mat) <- colnames(transcript_brauer)
 for(cond in 1:length(prot_cond[,1])){
 	#find the 2 closest DR within the same limitation
-	c_match <- c(1:length(transcript.condition[1,]))[transcript.condition[1,] %in% prot_cond[cond,]$limitation]
-	flanking_match <- c_match[order(abs(as.numeric(transcript.condition[2,c_match]) - prot_cond[cond,]$realDR))[1:2]]
-	lb_diff <- (prot_cond$realDR[cond] - as.numeric(transcript.condition[2,flanking_match])[1])/diff(as.numeric(transcript.condition[2,flanking_match]))
+	c_match <- c(1:nrow(transcript.condition))[transcript.condition$Nutrient %in% toupper(prot_cond$limitation[cond])]
+	flanking_match <- c_match[order(abs(as.numeric(transcript.condition$GR[c_match]) - prot_cond[cond,]$realDR))[1:2]]
+	lb_diff <- (prot_cond$realDR[cond] - as.numeric(transcript.condition$GR[flanking_match])[1])/diff(as.numeric(transcript.condition$GR[flanking_match]))
 	DR_change_mat[flanking_match,cond] <- c((1-lb_diff), lb_diff)
 	}
 	
@@ -1596,37 +1598,6 @@ PTscatter_plotter
 ggsave(plot = PTscatter_plotter, "globalPTcomp.pdf", width = 10, height = 10)
 @
 \caption{Global correlation between relative protein abundance and relative transcript abundance. The pearson and spearman correlations between non-thresholded relative-abundances are \Sexpr{PTcor[1]} and \Sexpr{PTcor[2]} respectively.}
-\end{figure}
-
-\begin{figure}
-<<globalPTregressed, dependson = c("PTcor", "globalPTcomp"), echo = FALSE>>=
-library(reshape)
-
-protSlopes <- lm(shared_prot ~ factor(prot_cond$limitation) + factor(prot_cond$limitation) * prot_cond$realDR)$coef
-protSlopes <- protSlopes[6:10,]; rownames(protSlopes) <- levels(factor(prot_cond$limitation))
-
-transSlopes <- lm(shared_trans ~ factor(prot_cond$limitation) + factor(prot_cond$limitation) * prot_cond$realDR)$coef
-transSlopes <- transSlopes[6:10,]; rownames(transSlopes) <- levels(factor(prot_cond$limitation))
-
-PTcor <- signif(c(cor(c(protSlopes), c(transSlopes), method = "pearson"), cor(c(protSlopes), c(transSlopes), method = "spearman")), 3)
-
-pool_thresh <- 10
-protSlopes[protSlopes < -1 * pool_thresh] <- -1 * pool_thresh; protSlopes[protSlopes > pool_thresh] <- pool_thresh
-transSlopes[transSlopes < -1 * pool_thresh] <- -1 * pool_thresh; transSlopes[transSlopes > pool_thresh] <- pool_thresh
-
-
-PTscatterDF <- cbind(melt(protSlopes), melt(transSlopes)$value)
-colnames(PTscatterDF) <- c("Condition", "Gene", "Transcript", "Protein")
-
-hex_bin_max <- 500
-n_hex_breaks <- 8
-hex_breaks <- round(exp(seq(0, log(500), by = log(500)/8)))
-
-PTscatter_plotter <- ggplot(cbind(PTscatterDF, z = 1), aes(x = Protein, y = Transcript, z = z)) + scale_x_continuous("Relative protein abundance", expand = c(0.02,0.02)) + scale_y_continuous("Relative transcript abundance", expand = c(0.02,0.02)) + scale_fill_gradient(name = "Counts", low = "black", high = "firebrick1", trans = "log", breaks = hex_breaks, labels = hex_breaks) + hex_theme
-PTscatter_plotter + geom_hex()  
-
-@
-\caption{Correlation between by-condition slopes protein and transcript relative abundance. The pearson and spearman correlations between non-thresholded relative-abundances are \Sexpr{PTcor[1]} and \Sexpr{PTcor[2]} respectively.}
 \end{figure}
 
 
@@ -1771,7 +1742,7 @@ clusterN_plot + geom_bar(stat = "identity")
 Read in cluster assignments from Cluster2.0
 
 <<prot_clust>>=
-
+#
 if(unq_matches_only == TRUE){
 	prot_kmeans_ass <- read.delim("run_Unq/relAbundMatrix_K_G20.kgg")
 	}
@@ -1805,12 +1776,17 @@ clust_datatype <- centroid_size_adj; clust_datatype[clust_datatype == 1] <- "Pro
 
 clust_plot_df1 <- data.frame(condition = c(clust_xval), abundance = c(clust_yval), cluster = c(clust_num), dataType = as.factor(c(clust_datatype)), clustersize = c(centroid_size_adj))
 
+clust_plot_df1$condition_name <- rownames(impute_abund)[clust_plot_df1$condition]
 @
 
 \begin{figure}[h!]
 <<protclustplot, dependson = "prot_clust", echo = FALSE>>=
-clust_plotterer <- ggplot(clust_plot_df1, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
-clust_plotterer + geom_point()
+
+scatter_facet_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure1"), legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 0.5, color = "black"), axis.text.x = element_text(angle = 90), strip.background = element_rect(fill = "coral")) 
+
+clust_plotterer <- ggplot(clust_plot_df1, aes(x = condition_name, y = abundance, colour = dataType, size = clustersize/2)) + facet_wrap( ~ cluster, ncol = 4) + scale_size_area(guide = "none") + scale_colour_discrete(guide = "none")
+
+clust_plotterer + geom_point() + scatter_facet_theme
 @
 \caption{Trace of proteins in a cluster (teal) and the centroid itself (orange)}
 \end{figure}
@@ -1842,7 +1818,7 @@ clust_plotterer + geom_point()
 
 
 <<tn_clust>>=
-
+#
 if(unq_matches_only == TRUE){
 	pt_kmeans_ass <- read.delim("run_Unq/TPdiffMatrix_K_G20.kgg")
 	}
@@ -1877,12 +1853,16 @@ clust_datatype <- centroid_size_adj; clust_datatype[clust_datatype == 1] <- "Pro
 
 clust_plot_df2 <- data.frame(condition = c(clust_xval), abundance = c(clust_yval), cluster = c(clust_num), dataType = as.factor(c(clust_datatype)), clustersize = c(centroid_size_adj))
 
+clust_plot_df2$condition_name <- rownames(impute_abund)[clust_plot_df2$condition]
 @
 
 \begin{figure}
 <<tnclustplot, dependson = "tn_clust", echo = FALSE>>=
-clust_plotterer <- ggplot(clust_plot_df2, aes(x = condition, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_area(range = c(1,2), guide = "none") + scale_colour_discrete(guide = "none")
-clust_plotterer + geom_point()
+
+scatter_facet_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure1"), legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 0.5, color = "black"), axis.text.x = element_text(angle = 90), strip.background = element_rect(fill = "coral")) 
+
+clust_plotterer <- ggplot(clust_plot_df2, aes(x = condition_name, y = abundance, colour = dataType, size = clustersize)) + facet_wrap( ~ cluster, ncol = 4) + scale_size_area(guide = "none") + scale_colour_discrete(guide = "none")
+clust_plotterer + geom_point() + scatter_facet_theme
 @
 \caption{Trace of proteins - transcript differences; clusters (teal) and the centroid itself (orange)}
 \end{figure}
@@ -2000,6 +1980,7 @@ plot_protein_lattice(unlist(prot_abundMatchedIndex), possibleMap, prot_abund_fin
 
 \begin{figure}[h!]
 <<dispProtScatter, dependson = c("badCorrCompare1", "setup")>>=
+ 
 shared_prot_tmp <- shared_prot[,gene_index]; shared_trans_tmp <- shared_trans[,gene_index]
 colnames(shared_prot_tmp) <- colnames(shared_trans_tmp) <- unname(orf2common(colnames(shared_prot)[gene_index])) 
                            
@@ -2009,12 +1990,17 @@ divCompDf$limitation <- sapply(as.character(divCompDf$condition), function(el){s
 divCompDf$gene <- factor(divCompDf$gene, levels = colnames(shared_prot_tmp))
 divCompDf$class <- rep(corrClass, each = length(shared_prot_tmp[,1]))
 
-scatter_facet_theme <- theme(text = element_text(size = 16, face = "bold"), title = element_text(size = 20, face = "bold"), panel.background = element_blank(), legend.position = "top", 
-  panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 0.5)) 
+
+
+scatter_facet_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 0.25, color = "black", linetype = "longdash"), axis.text.x = element_text(angle = 90),
+strip.background = element_rect(fill = "cadetblue2")) 
                                                       
 divScatterPlot <- ggplot(divCompDf, aes(x = Transcript_Abundance, y = Protein_Abundance, col = factor(limitation), fill = factor(limitation))) + scatter_facet_theme  + facet_wrap(~ gene, ncol = 5, scales = "free")# +  facet_grid(class ~ ., margins = "gene") 
-print(divScatterPlot + geom_point(aes(size = 2)) + scale_x_continuous(name = "Transcript relative abundance") + scale_y_continuous(name = "Protein relative abundance") + scale_colour_discrete(guide = "none") + scale_fill_discrete(name = "Limitation") + scale_size_continuous(guide = "none") + geom_smooth(method = lm, aes(fill = factor(limitation), alpha = as.numeric(0))) + scale_alpha_continuous(guide = "none", range = c(0.2,0.2)))
+#print(divScatterPlot + geom_point(aes(size = 2)) + scale_x_continuous(name = expression(log[2] ~ "Transcript relative abundance")) + scale_y_continuous(name = expression(log[2] ~ "Protein relative abundance")) + scale_colour_discrete(guide = "none") + scale_fill_discrete(name = "Limitation") + scale_size_continuous(guide = "none") + geom_smooth(method = lm, aes(fill = factor(limitation), alpha = as.numeric(0))) + scale_alpha_continuous(guide = "none", range = c(0.2,0.2)))
 
+print(divScatterPlot + geom_point(aes(size = 2)) + scale_x_continuous(name = expression(log[2] ~ "Transcript relative abundance")) + scale_y_continuous(name = expression(log[2] ~ "Protein relative abundance")) + scale_colour_discrete(guide = "none") + scale_fill_discrete(name = "Limitation") + scale_size_continuous(guide = "none") + geom_smooth(method = lm, aes(fill = NULL, alpha = as.numeric(0))) + scale_alpha_continuous(guide = "none", range = c(0,0)))
+
+ggsave("PTgoodBadCompare.pdf", height = 15, width = 25)
 @
 
 \caption{Comparison of the transcriptional versus protein relative abundance patterns for the most poorly-correlated and well-correlated examples}

@@ -7,15 +7,12 @@ library(gplots)
 library(ggplot2)
 
 ### Convert bruker files to UCSF format - select the highest level folder 
-cf()
-
+#cf()
 ### open UCSF files
-fs()
-
+#fs()
 ### open region of interest (roi) tab
-roi()
-
-write.table(roiTable, "RoiTable.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = F)
+#roi()
+#write.table(roiTable, "RoiTable.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = F)
 
 ##### Analysis #######
 
@@ -121,7 +118,12 @@ for(t in 1:length(treatment_mat[1,])){
 
 for(j in 1:length(treatment_mat[1,])){
   
-  outputDF <- data.frame(condition = colnames(treatment_mat)[j], peak = colnames(NMRmatrix_HM), estimate = apply(NMRmatrix_HM[treatment_mat[,j] == 1,], 2, mean), se = apply(NMRmatrix_HM[treatment_mat[,j] == 1,], 2, sd)/sqrt(colSums(!is.na(NMRmatrix_HM[treatment_mat[,j] == 1,]))))
+  data_subset <- NMRmatrix_HM[treatment_mat[,j] == 1,]
+  if(j == 5){data_subset[rownames(data_subset) == "c0.30_2", colnames(data_subset) == "Ethanol"] <- NA}
+  if(j == 23){data_subset[rownames(data_subset) == "u0.05_1", colnames(data_subset) == "Ethanol"] <- NA}
+  if(j == 27){data_subset[rownames(data_subset) == "u0.30_1", colnames(data_subset) == "Ethanol"] <- NA}
+  
+  outputDF <- data.frame(condition = colnames(treatment_mat)[j], peak = colnames(NMRmatrix_HM), estimate = apply(data_subset, 2, mean, na.rm = T), se = apply(data_subset, 2, sd, na.rm = T)/sqrt(colSums(!is.na(data_subset))))
   outputDF$lb <- outputDF$estimate - 1.96*outputDF$se
   outputDF$ub <- outputDF$estimate + 1.96*outputDF$se
   rownames(outputDF) <- NULL
@@ -138,8 +140,10 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
 
 #NMR_point_estimate  <- NMR_point_estimate[NMR_point_estimate$peak %in% c("Ethanol", "Acetate", "Glucose", "Glycerol"),]
   
-NMRbarplot <- ggplot(NMR_point_estimate, aes(x = factor(condition), y = estimate, fill = factor(limitation))) + facet_grid(peak ~ ., scale = "free_y") + barplot_theme
+
+NMRbarplot <- ggplot(NMR_point_estimate[NMR_point_estimate$peak %in% c("Ethanol", "Acetate", "Glucose", "Glycerol"),], aes(x = factor(condition), y = estimate, fill = factor(limitation))) + facet_grid(peak ~ ., scale = "free_y") + barplot_theme
 NMRbarplot + geom_bar(stat = "identity") + ggtitle("Concentration of metabolites (and unknowns) in chemostat effluent") + scale_fill_brewer(palette = "Set2") + 
   geom_errorbar(aes(ymin = lb, ymax = ub)) + scale_x_discrete("Chemostat condition") + scale_y_continuous("Concentration (mM)")
+
 ggsave("mediaComposition.pdf", width = 14, height = 22)
 write.table(NMR_point_estimate, "mediaComposition_NMR.tsv", sep = "\t", row.names = FALSE, col.names = TRUE, quote = F)

@@ -403,7 +403,11 @@ for(arxn in reactionInfo$rMech){
     flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
     rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
     rxn_fit_params[[arxn]] <- flux_fit$param_interval  
-    fraction_flux_deviation <- rbind(fraction_flux_deviation, data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux - run_rxn$flux))/sum(abs(run_rxn$flux))))
+    
+    ### Take the fractional flux departure and dot-product between FBA and parametric vector
+  
+    fraction_flux_deviation <- rbind(fraction_flux_deviation, data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux - run_rxn$flux))/sum(abs(run_rxn$flux)),
+    dotProduct = sum(flux_fit$fitted/sqrt(sum((flux_fit$fitted)^2)) * run_rxn$flux/sqrt(sum((run_rxn$flux)^2)))))
     
   }
   
@@ -421,11 +425,8 @@ for(arxn in reactionInfo$rMech){
   print(species_plots[[4]])
   elastPlots <- calcElast(run_rxn, par_markov_chain, par_likelihood)
   print(elastPlots$elast)
-<<<<<<< HEAD
   print(elastPlots$occ) 
-=======
-  print(elastPlots$occ)
->>>>>>> f0eec101b584f1365fc5abf42dcecfe64e0772ac
+
   dev.off()
   
 }
@@ -509,6 +510,8 @@ ggsave("parFitSpearman.pdf", height = 20, width = 20)
 rownames(fraction_flux_deviation) <- fraction_flux_deviation$rxn
 fraction_flux_deviation$rxn <- substr(rownames(fraction_flux_deviation), 1, 6)
 fraction_flux_deviation$rxnMech <- rownames(fraction_flux_deviation)
+dotProduct_df <- fraction_flux_deviation[,!(colnames(fraction_flux_deviation) %in% "FFD")]
+fraction_flux_deviation <- fraction_flux_deviation[,!(colnames(fraction_flux_deviation) %in% "dotProduct")]
 
 fraction_flux_deviation <- fraction_flux_deviation[!(fraction_flux_deviation$rxn %in% unique(fraction_flux_deviation$rxn[fraction_flux_deviation$FFD <= 0])),]
 
@@ -529,6 +532,35 @@ FFD_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_d
   scale_y_continuous(name = "Fractional flux similarity", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") +
   ggtitle(expression("Fractional flux similarity:" ~ frac(sum(symbol("|")~V^FBA - V^PAR~symbol("|")), sum(symbol("|")~V^FBA~symbol("|")))))
 ggsave("FFD.pdf", height = 14, width = 20)
+
+###### Dot Product between v-FBA and V-PAR #######
+
+dotProduct_df <- dotProduct_df[!(dotProduct_df$rxn %in% dotProduct_df$rxn[is.nan(dotProduct_df$dotProduct)]),]
+
+rxOrder <- data.frame(rx = unique(dotProduct_df$rxn), order = rank(sapply(unique(dotProduct_df$rxn), function(x){max(dotProduct_df$dotProduct[dotProduct_df$rxn == x])})))
+dotProduct_df$rxnOrder <- sapply(dotProduct_df$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
+dotProduct_df <- dotProduct_df[order(dotProduct_df$rxnOrder, dotProduct_df$dotProduct),]
+dotProduct_df$rxnMech <- factor(dotProduct_df$rxnMech, levels = dotProduct_df$rxnMech)
+
+
+DP_melt <- melt(dotProduct_df, id.vars = c("rxn", "rxnMech", "rxnOrder"))
+DP_melt$rxnType <- "reversible Michaelis-Menten"
+DP_melt$rxnType[grep('act', DP_melt$rxnMech)] <- "+ Activator"
+DP_melt$rxnType[grep('inh', DP_melt$rxnMech)] <- "+ Inhibitor"
+DP_melt$rxnType <- factor(DP_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator", "+ Inhibitor"))
+DP_melt$angle <- acos(DP_melt$value) * 180/pi
+
+DP_plot <- ggplot(data = DP_melt, aes(x = rxnMech, y = value, fill = rxnType)) + barplot_theme
+DP_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+  scale_y_continuous(name = "Unit dot product", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") +
+  ggtitle(expression("Unit dot product:" ~ sum(frac(V^FBA, symbol("|")~V^FBA~symbol("|"))~"*"~frac(V^PAR, symbol("|")~V^PAR~symbol("|")))))
+  ggsave("dotProduct.pdf", height = 14, width = 20)
+
+DP_plot <- ggplot(data = DP_melt, aes(x = rxnMech, y = 90 - angle, fill = rxnType)) + barplot_theme
+DP_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+  scale_y_continuous(name = "Angle", expand = c(0,0), limits = c(0,90), breaks = seq(0,90, by = 10), labels = rev(seq(0,90, by = 10))) + scale_fill_brewer("Prediction Method", palette = "Set1") +
+  ggtitle(expression("Angle between "~ V^FBA ~ "&" ~ V^PAR))
+  ggsave("VecAngle.pdf", height = 14, width = 24)
 
 
 # make another histogram that shows the explained variance with parametric vs nnls
