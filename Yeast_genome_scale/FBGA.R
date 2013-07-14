@@ -83,6 +83,8 @@ for(rxN in c(1:length(rxnList_all))){
 
 
 ####### Narrow the previous list to only rxns which carry flux #####
+### When considering reactions which carry zero flux under a subset of conditions, analyze reactions both when v = 0, and by removing conditions where v = 0 ### 
+rmCondList <- data.frame() # reactions which will be duplicated with some conditions rmoved
 
 rxnList <- rxnf[substr(names(rxnf),1,6) %in% flux_summary$IDs$reactionID]
 
@@ -91,6 +93,13 @@ for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactio
   idx <- names(rxnList)[grep(flux_summary$IDs$reactionID[rxN],names(rxnList))]
   if(length(kegg_subset[,1]) == 0 | length(idx) ==0){next}
   
+  #Add the rxns with lacking fluxes to the rmCondList
+  if (any(flux_summary$cellularFluxes[rxN,] == 0)){
+    rmCondList <- rbind(rmCondList ,data.frame(rxn = flux_summary$IDs$reactionID[rxN],
+                       cond = paste(names(flux_summary$cellularFluxes[rxN,])[flux_summary$cellularFluxes[rxN,] == 0],collapse=';'),
+                       source = 'zeroFluxes', nZero = sum(flux_summary$cellularFluxes[rxN,] == 0)))
+  }
+  
   for (entry in names(rxnList)[grep(flux_summary$IDs$reactionID[rxN],names(rxnList))]){
     rxnList[[entry]]$reaction = flux_summary$IDs$Name[rxN]
     rxnList[[entry]]$pathway = kegg_subset$pathway
@@ -98,8 +107,33 @@ for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactio
     rxnList[[entry]]$enzymeAbund = enzyme_abund[unlist(sapply(strsplit(kegg_subset$genes, split = '[/:]')[[1]], function(x){grep(x, rownames(enzyme_abund))})),]
     rxnList_all[[entry]]$flux <- rxnList[[entry]]$flux <- flux_summary$cellularFluxes[rxN,]
   }
-  
 }
+
+
+# Apply the changes of rmCondList
+# add a copied entry without the mentioned conditions for all rows in the rm
+
+rmCondList <- rmCondList[rmCondList$nZero < 10,]
+
+for (i in 1:nrow(rmCondList)){
+  rxN <- which(flux_summary$IDs$reactionID == rmCondList$rxn[i])
+  for (entry in names(rxnList)[grep(flux_summary$IDs$reactionID[rxN],names(rxnList))]){
+    nEntry <- paste(entry,'_rmCond',sep='')
+    rxnList[[nEntry]] <- rxnList[[entry]]
+    conds <- strsplit(rmCondList$cond[i],';')[[1]]
+    conds <- c(conds,toupper(conds))
+    rxnList[[nEntry]]$flux <- rxnList[[nEntry]]$flux[!names(rxnList[[nEntry]]$flux) %in% conds]
+    rxnList[[nEntry]]$rxnMet <- rxnList[[nEntry]]$rxnMet[!rownames(rxnList[[nEntry]]$rxnMet) %in% conds,]
+    rxnList[[nEntry]]$enzymeAbund <- rxnList[[nEntry]]$enzymeAbund[,!names(rxnList[[nEntry]]$enzymeAbund) %in% conds]
+    rxnList[[nEntry]]$listEntry <- paste(rxnList[[nEntry]]$listEntry, '_rmCond',sep='')
+    
+    rxnList_all[[nEntry]] <- rxnList[[nEntry]]
+    
+  }
+}
+
+
+
 save(rxnList_all, file = "all_rxnList.Rdata")
 
 

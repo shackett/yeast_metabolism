@@ -65,11 +65,12 @@ lik_calc <- function(proposed_params){
   
   }
 
-n_c <- length(rxnList_form[[1]]$flux)
 
 ############# Body ###########
 
 for(rxN in 1:length(rxnList_form)){
+  
+  n_c <- length(rxnList_form[[rxN]]$flux)
   
   rxnSummary <- rxnList_form[[rxN]]
   
