@@ -530,11 +530,15 @@ reaction_info_FBGA <- function(rxnName){
 ########## Functions used in optimization of fitted flux versus actual flux ############
 
 species_plot <- function(run_rxn, flux_fit, chemostatInfo){
+  
+  require(data.table)
+  
   #generate a list of four plots:
-  #1: Flux predicted from FBA versus parametric form
-  #2: Flux predicted from FBA - actual
-  #3: Relationship between metabolites/enzyme levels and condition
-  #4: Relationship between metabolite/enzyme levels and flux carried
+  #1: Flux predicted from FBA versus parametric form - plot1
+  #2: Flux predicted from FBA versus parametric form - plot2
+  #3: Flux predicted from FBA ~ GR
+  #4: Relationship between metabolites/enzyme levels and condition
+  #5: Relationship between metabolite/enzyme levels and flux carried
   
   output_plots <- list()
   
@@ -542,14 +546,30 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
       panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
       legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
 
-  flux_plot <- data.frame(FBA = run_rxn$flux, Parametric = flux_fit$fitted_flux, condition = chemostatInfo$limitation, DR = chemostatInfo$actualDR)
-  output_plots$flux_plot <- ggplot() + geom_path(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = 2)) + scatter_theme +
-    geom_point(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = DR*50)) + scale_size_identity() + 
-    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2)
+  chemoInfoSubset <- chemostatInfo[chmatch(rownames(flux_fit$fitted_flux), chemostatInfo$condition),]
+  DRordering <- data.frame(DRs = c(0.05, 0.11, 0.16, 0.22, 0.30), order = 1:5)
+  chemoInfoSubset$DRorder <- DRordering$order[chmatch(as.character(chemoInfoSubset$DRgoal), as.character(DRordering$DRs))]
+    
   
+  flux_plot_alt <- data.frame(FBA = run_rxn$flux, Parametric = flux_fit$fitted_flux, condition = chemoInfoSubset$limitation, DR = chemoInfoSubset$DRorder)
+  flux_range <- range(c(0, flux_plot_alt$FBA, flux_plot_alt$Parametric))
+  
+  output_plots$flux_plot1 <- ggplot() + scatter_theme +
+    geom_text(data = flux_plot_alt, aes(x = FBA, y = Parametric, col = condition, label = DR), size = 10) + scale_size_identity() + 
+    scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2) + 
+    xlim(flux_range[1], flux_range[2]) + ylim(flux_range[1], flux_range[2])
+  
+  flux_plot <- data.frame(FBA = run_rxn$flux, Parametric = flux_fit$fitted_flux, condition = chemoInfoSubset$limitation, DR = chemoInfoSubset$actualDR)
+  #output_plots$flux_plot2 <- ggplot() + geom_path(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = 2)) + scatter_theme +
+  #  geom_point(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = DR*50)) + scale_size_identity() + 
+  #  scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2) +
+  #  xlim(flux_range[1], flux_range[2]) + ylim(flux_range[1], flux_range[2])
+  
+  FBA_flux_range <- range(c(0, flux_plot_alt$FBA))
   output_plots$FBA_flux <- ggplot() + geom_path(data = flux_plot, aes(x = DR, y = FBA, col = condition, size = 2)) + scatter_theme +
     geom_point(data = flux_plot, aes(x = DR, y = FBA, col = condition, size = DR*50)) + scale_size_identity() + 
-    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux determined using FBA")
+    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux determined using FBA") +
+    ylim(FBA_flux_range[1], FBA_flux_range[2])
     
   all_species <- data.frame(run_rxn$enzymes, run_rxn$metabolites)
   colnames(all_species) <- run_rxn$all_species$commonName
@@ -557,15 +577,15 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   all_species_tab <- run_rxn$all_species[colSums(all_species != 1) != 0,]
   all_species <- all_species[,colSums(all_species != 1) != 0]
   
-  species_df <- melt(data.frame(all_species, condition = chemostatInfo$limitation, DR = chemostatInfo$actualDR, flux = run_rxn$flux), id.vars = c("condition", "DR", "flux"))
+  species_df <- melt(data.frame(all_species, condition = chemoInfoSubset$limitation, DR = chemoInfoSubset$actualDR, flux = run_rxn$flux), id.vars = c("condition", "DR", "flux"))
   
   output_plots$species <- ggplot() + geom_path(data = species_df, aes(x = DR, y = value, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free_y") +
     scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_y_continuous("Relative concentration") +
-    ggtitle("Relationship between metabolites/enzyme levels and condition")
+    ggtitle("Relationship between metabolites/enzyme levels and condition") + expand_limits(y = 0)
   
   output_plots$flux_species <- ggplot() + geom_path(data = species_df, aes(x = value, y = flux, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free") +
     scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_x_continuous("Relative concentration") +
-    geom_point(data = species_df, aes(x = value, y = flux, col = condition, size =  DR*30)) + ggtitle("Relationship between metabolite/enzyme levels and flux carried")
+    geom_point(data = species_df, aes(x = value, y = flux, col = condition, size =  DR*30)) + ggtitle("Relationship between metabolite/enzyme levels and flux carried") + expand_limits(y = 0)
   
   output_plots
   }
@@ -578,6 +598,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
 flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   require(data.table)
+  require(nnls)
   
   # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
   param_interval <- exp(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
@@ -593,7 +614,6 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*run_rxn$enzymes #occupany of enzymes * relative abundance of enzymes
   flux_fit <- nnls(enzyme_activity, run_rxn$flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
-  
   
   fit_summary <- data.frame(residDF = sum(run_rxn$flux != 0) - length(par_stack[1,]), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
   
@@ -647,8 +667,6 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   fit_summary$parPearson <- cor(flux_fit$fitted, run_rxn$flux, method = "pearson")
   fit_summary$parSpearman <- cor(flux_fit$fitted, run_rxn$flux, method = "spearman")
   
-  
-  
   output <- list()
   output$fit_summary <- fit_summary
   output$param_interval <- param_interval
@@ -658,6 +676,8 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
 
 
 calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
+  
+  require(reshape2)
   
   rxnData <- run_rxn$rxnSummary
   rxn <- rxnData$rxnID
@@ -729,6 +749,7 @@ calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
   plotmat <- data.frame(t(elastMat))
   plotmat$ID <- row.names(plotmat)
   plotmat <- melt(plotmat, id = 'ID',variable.name='Condition',value.name='Elasticity')
+  colnames(plotmat) <- c("ID", "Condition", "Elasticity")
   
   # Add the original parameter values
   
@@ -736,6 +757,7 @@ calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
   parmat$ID <- row.names(parmat)
   parmat <- melt(parmat, id = 'ID',variable.name='Condition',value.name='Value')
   plotmat$Value <- parmat$Value
+  colnames(parmat) <- c("ID", "Condition", "Value")
   
   plotmat$Type <- 'Parameter'
   plotmat[grep('^t',plotmat$ID),'Type']  <- 'Metabolite'
@@ -790,7 +812,7 @@ calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
   plotmat$Growth<- as.numeric(as.factor(plotmat$Growthlab))
   plotmat$Groups <- paste(plotmat$Limitation,plotmat$Type,sep='')
   
-  backmat <- data.frame(xstart = seq(0.5,20.5,5), xend = seq(5.5,25.5,5), Limitation = unique(plotmat$Limitation))
+  backmat <- data.frame(xstart = seq(0.5,20.5,20/length(unique(plotmat$Limitation))), xend = seq(5.5,25.5,20/length(unique(plotmat$Limitation))), Limitation = unique(plotmat$Limitation))
   
   # reorder stuff, to get the factor order reasonable
   
@@ -905,6 +927,7 @@ calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
   
   # Calculate the linear B enyzme coefficients by nnls
   met_abund <- run_rxn$metabolites
+  n_c <- nrow(met_abund)
   
   enz_abund <- run_rxn$enzymes
   colnames(enz_abund) <- rownames(rxnData$enzymeAbund)

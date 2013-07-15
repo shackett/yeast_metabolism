@@ -380,9 +380,14 @@ reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parS
 
 reactionInfo$changeP <- NA
 
-for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | reactionInfo$modification != ""]){
+for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$modification %in% c("", "rmCond"))]){
   rxn_eval <- reactionInfo[rx,]
-  rxn_ref <- reactionInfo[reactionInfo$reaction == rxn_eval$reaction & reactionInfo$form == "rm" & reactionInfo$modification == "",]
+  if(length(grep('rmCond', rxn_eval$modification)) == 0){
+    rxn_ref <- reactionInfo[reactionInfo$reaction == rxn_eval$reaction & reactionInfo$form == "rm" & reactionInfo$modification == "",]
+  }else{
+    rxn_ref <- reactionInfo[reactionInfo$reaction == rxn_eval$reaction & reactionInfo$form == "rm" & reactionInfo$modification == "rmCond",]
+  }
+  
   likDiff <- rxn_eval$ML - rxn_ref$ML
   
   if(rxn_eval$npar == rxn_ref$npar){
@@ -404,7 +409,7 @@ Qthresh <- 0.1
 reactionInfo$Qvalue <- NA
 reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
 
-#save(list = ls(), file = "validParameterSets.Rdata")
+save(list = ls(), file = "validParameterSets.Rdata")
 
 ### reduce reactions of interest to primary forms and reparameterizations ###
 
@@ -430,10 +435,10 @@ for(arxn in reactionInfo$rMech){
   load(paste(c("FBGA_files/paramSets/", param_run_info$file[param_run_info$index == par_likelihood$index[1]]), collapse = ""))
   run_rxn <- run_summary[[arxn]]
   
-  
   if(var(par_likelihood$likelihood) < 10^-10 | all(run_rxn$metabolites == 1)){next} #skip underparameterized reactions - those with essentially no variation
   
   if(length(run_rxn$enzymes[1,]) != 0){
+    
     flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
     rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
     rxn_fit_params[[arxn]] <- flux_fit$param_interval  
@@ -457,9 +462,9 @@ for(arxn in reactionInfo$rMech){
   print(species_plots[[2]])
   print(species_plots[[3]])
   print(species_plots[[4]])
-  elastPlots <- calcElast(run_rxn, par_markov_chain, par_likelihood)
-  print(elastPlots$elast)
-  print(elastPlots$occ) 
+  #elastPlots <- calcElast(run_rxn, par_markov_chain, par_likelihood)
+  #print(elastPlots$elast)
+  #print(elastPlots$occ) 
 
   dev.off()
   
