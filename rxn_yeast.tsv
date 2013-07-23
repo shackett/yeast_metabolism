@@ -1,0 +1,9 @@
+Reaction	ReactionID	Compartment	Metabolite	MetName	StoiCoef
+(R)-lactate:ferricytochrome-c 2-oxidoreductase	r_0001	exchange	s_0025	(R)-lactate [cytoplasm]	-1.0
+(R)-lactate:ferricytochrome-c 2-oxidoreductase	r_0001	exchange	s_0709	ferricytochrome c [mitochondrion]	-2.0
+(R)-lactate:ferricytochrome-c 2-oxidoreductase	r_0001	exchange	s_0710	ferrocytochrome c [mitochondrion]	2.0
+(R)-lactate:ferricytochrome-c 2-oxidoreductase	r_0001	exchange	s_1399	pyruvate [cytoplasm]	1.0
+(R)-lactate:ferricytochrome-c 2-oxidoreductase	r_0001	exchange	e_0151	DLD1 [mitochondrial membrane]
+(R)-lactate:ferricytochrome-c 2-oxidoreductase	r_0001	exchange	e_0268	DLD3 [mitochondrial membrane]
+(R)-lactate:ferricytochrome-c 2-oxidoreductase	r_0001	exchange	e_0255	CYC7 [mitochondrial membrane]
+(R)-lactate:ferricytochrome-c 2-oxidoreductase	r_0001	exchange	e_0531	CYC1 [mitochondrial membrane]

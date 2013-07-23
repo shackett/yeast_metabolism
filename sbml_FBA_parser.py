@@ -1,5 +1,9 @@
+
 import sys
+sys.path.append("/Users/Sean/Documents/MiscProgramsPackages/build/src/bindings/python")
+
 import itertools
+import re
 from libsbml import *
 
 
@@ -25,6 +29,7 @@ def get_chain_down(node, *names):
 	if len(names) == 0:
 		return [node]
 	children = get_children(node, names[0])
+	
 	if len(children) == 0:
 		# there were no children with that name
 		return []
@@ -39,20 +44,33 @@ def write_resource_file(model, outfile):
 	#Species types are a specific metabolite/enzyme... ignoring localization.  
 	#This framework also includes the references tying the internal names to
 	#external standardized metabolite and yeast protein names
+	
 	outf = open(outfile, "w")
-	speciesT = model.getListOfSpeciesTypes()
+	speciesT = model.getListOfSpecies()
+	
+	
+	count = 0
 	for ele in speciesT:
+		
+		count += 1
+		
 		annotation = ele.getAnnotation()
+		
 		if annotation == None:
 			print "No annotation:", ele.getName()
 			continue
-		#print dir(annotation)
+		
 		children = get_chain_down(annotation, "RDF", "Description", None, "Bag", "li")
-		for c in children:
+		
+		for c in children:			
 			ret = "\t".join((ele.getId(), ele.getName(),
-							 c.getAttributes().getValue("rdf:resource")))
+							 c.getAttributes().getValue("resource")))
 			outf.write(ret + "\n")
-
+		
+		#if count > 10:
+	#		break
+	outf.close()
+	
 def write_compartment_file(model, outfile):
 	"""
 	write a tab delimited file where each line is one resource, in the form
@@ -71,6 +89,8 @@ def write_compartment_file(model, outfile):
 	comp_outf.close()
 
 
+
+
 def IDdict(model):
 	""" Create a correspondence between species type designation and ID """
 	name_corr = dict()
@@ -79,8 +99,9 @@ def IDdict(model):
 		name_corr[lst.getId()] = lst.getSpeciesType()
 	return name_corr
 
-def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
-, use_modifiers = "TRUE"):
+
+
+def write_rxn(model, outfile, TSdict, use_modifiers = "TRUE"):
 
 	"""writes a rxn-file describing the stoichiometry and (optionally) modifiers of a
 	chemical reaction.  writes a spec-file describing the association between a metabolite/
@@ -88,7 +109,6 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 	also notes the compartment.  optionally writes reaction parameters and reaction kinetics."""
 	
 	listrxn = model.getListOfReactions()
-	listspecT = model.getListOfSpeciesTypes()
 	listspec = model.getListOfSpecies()
 	listcomp = model.getListOfCompartments()
 	
@@ -104,21 +124,13 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 	, "Compartment"))
 	spec_outf.close()
 	
-	if rxn_par_found == "TRUE":
-		rxn_par_outfile = "".join(("rxn_par_", outfile, ".tsv"))
-		par_outf = open(rxn_par_outfile, 'w')
-		par_outf.write("%s\t%s\t%s\t%s\n" % ("ReactionID", "ParID", "Value", "Units"))
-		par_outf.close()
 	
-		rxn_kinetic_outfile = "".join(("rxn_kinetic_", outfile, ".tsv"))
-		kin_outf = open(rxn_kinetic_outfile, 'w')
-		kin_outf.write("%s\t%s\t%s\n" % ("ReactionID", "ParID", "Formula"))
-		kin_outf.close()
-	
-	#correspondence between internal name and a common name
+		
+	#correspondence between internal name (sID) and a common name
 	met_namedict = dict()
-	for spect in listspecT:
+	for spect in listspec:
 		met_namedict[spect.getId()] = spect.getName()
+		
 	
 	#correspondence between internal name, unique chemical name and compartment
 	comp_dict = dict()
@@ -126,9 +138,10 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 	spec_outf = open(spec_outfile, 'a')	
 	for spec in listspec:
 		comp_dict[spec.getId()] = spec.getCompartment()
-		name_trans[spec.getId()] = spec.getSpeciesType()
+		name_trans[spec.getId()] = TSdict[spec.getId()]
+		
 		spec_outf.write("%s\t%s\t%s\t%s\n" % (spec.getId(), 
-		met_namedict[spec.getSpeciesType()], spec.getSpeciesType(), spec.getCompartment()))
+		met_namedict[spec.getId()], TSdict[spec.getId()], spec.getCompartment()))
 	spec_outf.close()	
 	
 	for rxn in listrxn:
@@ -138,31 +151,64 @@ def write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE"
 		
 		rxn_outf = open(rxn_outfile, 'a')
 		for lst in rxn.getListOfReactants():
+			
 			rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), 
-			met_namedict[name_trans[lst.getSpecies()]], lst.getStoichiometry()*-1))
+			met_namedict[lst.getSpecies()], lst.getStoichiometry()*-1))
 			
 		for lst in rxn.getListOfProducts():
 			rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), 
-			met_namedict[name_trans[lst.getSpecies()]], lst.getStoichiometry()))
+			met_namedict[lst.getSpecies()], lst.getStoichiometry()))
 		
 		if use_modifiers == "TRUE":
 			for lst in rxn.getListOfModifiers():
-				rxn_outf.write("%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), met_namedict[name_trans[lst.getSpecies()]]))
-		rxn_outf.close()	
-				
-		if rxn_par_found == "TRUE":
+				rxn_outf.write("%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), met_namedict[lst.getSpecies()]))
+	
+	
+		### Get reaction annotations ###
+	
+		annotation = rxn.getAnnotation()
 		
-			parameters = list(rxn.getKineticLaw().getListOfParameters())
-			if len(parameters) > 0:
-				par_outf = open(rxn_par_outfile, 'a')
-				for p in parameters:
-					par_outf.write("%s\t%s\t%s\t%s\n" % (rxn.getId(), p.getId(), 
-					p.getValue(), p.getUnits()))
-				par_outf.close()
+		if annotation == None:
+			print "No annotation:", rxn.getName()
+			continue
+		
+		children = get_chain_down(annotation, "RDF", "Description", None, "Bag", "li")
+		rxn_ref = []
+		for c in children:	
+			rxn_ref.append(c.getAttributes().getValue("resource"))
+		
+		print rxn.getName()
+		print rxn.getNotes().getNumChildren()
+		print rxn.getNotes().getChild(0).getNumChildren()
+		print dir(rxn.getNotes().getChild(0).getChild(0))
+		print rxn.getNotes().getChild(0).getChild(0).getName()
+		
+		#print dir(rxn.getNotes().getChild(0).getAttributes())
+		#print rxn.getNotes().getChild(0).getAttributes().getValue(0)
+		#print ",".join(rxn_ref)
+	
+		### Get enzymes (and complexes) ###
+		
+		notes = rxn.getNotes()
+		
+		if notes == None:
+			print "No enzymes:", rxn.getName()
+			continue
+		
+		children = get_chain_down(notes, "body", "p")
+		#print dir(children)
+		
+		#print children.getNumAttribues()
+		rxn_prot = []
+		for c in children:	
+			rxn_prot.append(c.getAttributes().getValue("p"))
+		print rxn_prot
+		
+		
+		break
+	rxn_outf.close()	
 				
-			kin_outf = open(rxn_kinetic_outfile, 'a')
-			kin_outf.write("%s\t%s\n" % (rxn.getId(), rxn.getKineticLaw().getFormula()))
-			kin_outf.close()
+		
 			
 
 def reaction_class(rxn, comp_dict):
@@ -177,12 +223,69 @@ def reaction_class(rxn, comp_dict):
 		return "exchange"
 	
 	
-	
 def unique_list(seq):
     keys = {}
     for e in seq:
         keys[e] = 1
     return keys.keys()	
+
+
+def define_groups(textModel):
+
+	""" Read through and define groups (since they are not defined in libsbml and
+	create a dictionary associating sID with tID """
+
+	tID = re.compile('groups:group groups')
+	sID = re.compile('groups:member')
+	TSdict = dict()
+
+	for line in textModel:
+	
+		if tID.search(line):
+			tIDstore = re.search('groups:id="(.*?)" groups:name=', line).group(1)
+		
+		elif sID.search(line):
+			TSdict[re.search('groups:symbol="(.*?)"/>', line).group(1)] = tIDstore	
+		
+	return TSdict
+
+
+
+
+def write_directionality(textModel, outfile):
+
+	""" Read through and scrape FluxBounds recording rID, bound and constraint direction """
+	
+	flux_bound_outfile = "".join(("flux_dir_", outfile, ".tsv"))
+	flux_outf = open(flux_bound_outfile, 'w')
+	flux_outf.write("%s\t%s\t%s\n" % ("ReactionID", "Reversible", "FluxBound"))
+	
+	rIDrev = dict()
+	rxLine = re.compile('<reaction')
+	
+	rIDbound = dict()
+	fluxBoundLine = re.compile('fbc:fluxBound fbc:reaction')
+	
+	for line in textModel:
+		
+		if rxLine.search(line):
+			rIDrev[re.search('" id="(.*?)" name="', line).group(1)] = re.search('reversible="(.*?)" fast=', line).group(1)
+		if fluxBoundLine.search(line):
+			rIDbound[re.search('fbc:reaction="(.*?)" fbc:', line).group(1)] = re.search('fbc:operation="(.*?)" fbc:value', line).group(1)
+	
+	for ID in rIDrev.keys():
+		if ID not in rIDbound.keys():
+			rIDbound[ID] = "reversible"
+			
+	for ID in rIDrev.keys():
+		flux_outf.write("%s\t%s\t%s\n" % (ID, rIDrev[ID], rIDbound[ID]))
+	
+			
+			
+	
+	
+	
+	
 	
 ### MAIN ###
 
@@ -200,14 +303,24 @@ xmlfile = sys.argv[1]
 outfile = sys.argv[2]
 reader = SBMLReader()
 doc = reader.readSBML(xmlfile)
+
 model = doc.getModel()
+textModel = list(open(xmlfile,'r'))
+
+
+
+
 
 species_par_outfile = "".join(("species_par_", outfile, ".tsv"))
 write_resource_file(model, species_par_outfile)
+
 write_compartment_file(model, outfile)
 
-write_rxn(model, outfile, rxn_par_found = "TRUE", rxn_kineticForm = "TRUE", 
-use_modifiers = "TRUE")
+TSdict = define_groups(textModel)
+
+write_directionality(textModel, outfile)
+
+write_rxn(model, outfile, TSdict, use_modifiers = "TRUE")
 
 
  
