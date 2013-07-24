@@ -101,7 +101,7 @@ def IDdict(model):
 
 
 
-def write_rxn(model, outfile, TSdict, use_modifiers = "TRUE"):
+def write_rxn(model, outfile, TSdict, rIDtoEnz, use_modifiers = "TRUE"):
 
 	"""writes a rxn-file describing the stoichiometry and (optionally) modifiers of a
 	chemical reaction.  writes a spec-file describing the association between a metabolite/
@@ -124,7 +124,10 @@ def write_rxn(model, outfile, TSdict, use_modifiers = "TRUE"):
 	, "Compartment"))
 	spec_outf.close()
 	
-	
+	rxn_par_outfile = "".join(("rxn_par_", outfile, ".tsv"))
+	rxn_par_outf = open(rxn_par_outfile, 'w')
+	rxn_par_outf.write("%s\t%s\t%s\n" % ("ReactionID", "Enzymes", "Annotation"))
+	rxn_par_outf.close()
 		
 	#correspondence between internal name (sID) and a common name
 	met_namedict = dict()
@@ -144,69 +147,62 @@ def write_rxn(model, outfile, TSdict, use_modifiers = "TRUE"):
 		met_namedict[spec.getId()], TSdict[spec.getId()], spec.getCompartment()))
 	spec_outf.close()	
 	
+	rxn_outf = open(rxn_outfile, 'a')
 	for rxn in listrxn:
 		
-	### Get the reactants and products and their stoichiometries, along with any rxn modifiers
+		### Get the reactants and products and their stoichiometries, along with any rxn modifiers
 		rxn_location = reaction_class(rxn, comp_dict)
+		rID = rxn.getId()
 		
-		rxn_outf = open(rxn_outfile, 'a')
 		for lst in rxn.getListOfReactants():
 			
-			rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), 
+			rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rID, rxn_location, lst.getSpecies(), 
 			met_namedict[lst.getSpecies()], lst.getStoichiometry()*-1))
 			
 		for lst in rxn.getListOfProducts():
-			rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), 
+			rxn_outf.write("%s\t%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rID, rxn_location, lst.getSpecies(), 
 			met_namedict[lst.getSpecies()], lst.getStoichiometry()))
 		
 		if use_modifiers == "TRUE":
 			for lst in rxn.getListOfModifiers():
-				rxn_outf.write("%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rxn.getId(), rxn_location, lst.getSpecies(), met_namedict[lst.getSpecies()]))
+				rxn_outf.write("%s\t%s\t%s\t%s\t%s\n" % (rxn.getName(), rID, rxn_location, lst.getSpecies(), met_namedict[lst.getSpecies()]))
+	
+	rxn_outf.close()
 	
 	
-		### Get reaction annotations ###
 	
+	
+	rxn_par_outf = open(rxn_par_outfile, 'a')
+	for rxn in listrxn:
+	
+		### write reaction annotations - chiefly kegg rxn and enzymes
+	
+		rID = rxn.getId()
+		
 		annotation = rxn.getAnnotation()
 		
 		if annotation == None:
 			print "No annotation:", rxn.getName()
-			continue
+			rxn_ref = 'NA'
+		else:
+			
+			children = get_chain_down(annotation, "RDF", "Description", None, "Bag", "li")
+			rxn_ref = []
+			for c in children:
+				rxn_ref.append(c.getAttributes().getValue("resource"))
+			rxn_ref = ",".join(rxn_ref)
+						
+		if rID not in rIDtoEnz.keys():
+			Enz = 'NA'
+		else:
+			Enz = rIDtoEnz[rID]
 		
-		children = get_chain_down(annotation, "RDF", "Description", None, "Bag", "li")
-		rxn_ref = []
-		for c in children:	
-			rxn_ref.append(c.getAttributes().getValue("resource"))
-		
-		print rxn.getName()
-		print rxn.getNotes().getNumChildren()
-		print rxn.getNotes().getChild(0).getNumChildren()
-		print dir(rxn.getNotes().getChild(0).getChild(0))
-		print rxn.getNotes().getChild(0).getChild(0).getName()
-		
-		#print dir(rxn.getNotes().getChild(0).getAttributes())
-		#print rxn.getNotes().getChild(0).getAttributes().getValue(0)
-		#print ",".join(rxn_ref)
-	
-		### Get enzymes (and complexes) ###
-		
-		notes = rxn.getNotes()
-		
-		if notes == None:
-			print "No enzymes:", rxn.getName()
-			continue
-		
-		children = get_chain_down(notes, "body", "p")
-		#print dir(children)
-		
-		#print children.getNumAttribues()
-		rxn_prot = []
-		for c in children:	
-			rxn_prot.append(c.getAttributes().getValue("p"))
-		print rxn_prot
+		rxn_par_outf.write("%s\t%s\t%s\n" % (rID, Enz, rxn_ref))
 		
 		
-		break
-	rxn_outf.close()	
+	rxn_par_outf.close()	
+		
+		
 				
 		
 			
@@ -279,13 +275,26 @@ def write_directionality(textModel, outfile):
 			
 	for ID in rIDrev.keys():
 		flux_outf.write("%s\t%s\t%s\n" % (ID, rIDrev[ID], rIDbound[ID]))
+
+
+
+
+def reaction_enzymes(textModel):
 	
-			
-			
+	rIDfind = re.compile('reaction metaid')
+	Enzfind = re.compile('<p>GENE_ASSOCIATION:')
 	
+	rIDtoEnz = dict()
 	
+	for line in textModel:
+		
+		if rIDfind.search(line):
+			rIDstore = re.search('" id="(.*?)" name="', line).group(1)
+		
+		if Enzfind.search(line):
+			rIDtoEnz[rIDstore] = re.search('<p>GENE_ASSOCIATION:(.*?)</p>', line).group(1)
 	
-	
+	return rIDtoEnz
 	
 ### MAIN ###
 
@@ -311,16 +320,18 @@ textModel = list(open(xmlfile,'r'))
 
 
 
+
 species_par_outfile = "".join(("species_par_", outfile, ".tsv"))
 write_resource_file(model, species_par_outfile)
 
 write_compartment_file(model, outfile)
 
-TSdict = define_groups(textModel)
-
 write_directionality(textModel, outfile)
 
-write_rxn(model, outfile, TSdict, use_modifiers = "TRUE")
+
+TSdict = define_groups(textModel)
+rIDtoEnz = reaction_enzymes(textModel)
+write_rxn(model, outfile, TSdict, rIDtoEnz, use_modifiers = "TRUE")
 
 
  
