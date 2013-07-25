@@ -18,7 +18,7 @@ write_stoiMat = function(metabolites, reactions, corrFile, rxnFile, internal_nam
 	rownames(stoiMat) <- metName	
 	colnames(stoiMat) <- rxnName
 
-	for (i in 1:length(rxnFile[,1])){
+	for (i in 1:nrow(rxnFile)){
 		stoiMat[c(1:length(metabolites))[metabolites == rxnStoi$Metabolite[i]], c(1:length(reactions))[reactions == rxnStoi$ReactionID[i]]] <- rxnStoi$StoiCoef[i]		}
 
 	if (internal_names == FALSE){
@@ -29,13 +29,16 @@ write_stoiMat = function(metabolites, reactions, corrFile, rxnFile, internal_nam
 			}
 	}
 
+
+
+
 perfect.match <- function(source, query, corrFile){
-all_char <- "[[:graph:][:space:]]"
-	
-tmp <- corrFile[grep(source, query)[!(grep(source, query) %in% union(grep(paste(all_char, source, sep = ""), query), grep(paste(source, all_char, sep = ""), query)))],]
-if(length(tmp[,1]) == 0){tmp <- corrFile[grep(source, query, fixed = TRUE),]}
-tmp
-	}
+  all_char <- "[[:graph:][:space:]]"
+  
+  tmp <- corrFile[grep(source, query)[!(grep(source, query) %in% union(grep(paste(all_char, source, sep = ""), query), grep(paste(source, all_char, sep = ""), query)))],]
+  if(length(tmp[,1]) == 0){tmp <- corrFile[grep(source, query, fixed = TRUE),]}
+  tmp
+}
 
 
 rxn_search = function(stoiMat, search_string, is_rxn = TRUE, index = FALSE){
@@ -79,7 +82,7 @@ is.not.zero = function(vec){
 	length(vec[vec!=0]) != 0
 	}	
 	
-######### fxns to convert between IDs and species ######
+######### Functions to convert between IDs and species ######
 
 metIDtoSpec <- function(meta, includeComp = F){
 	if(includeComp){
@@ -105,10 +108,10 @@ rxnIDtoGene <- function(rxns){
 
 metToCHEBI <- function(mets){
 	#associate species IDs and CHEBI ids where available/applicable
-	if(length(grep("chebi", rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]])) == 0){
+	if(length(grep("chebi", specparFile$Annotation[specparFile$SpeciesID == mets])) == 0){
 		NA
 		}else{
-	unlist(strsplit(rxnparFile[,3][rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID %in% mets]], split = "%3A"))[2]	
+	  unlist(strsplit(specparFile$Annotation[specparFile$SpeciesID == mets], split = "CHEBI:"))[2]	
 	}}
 
 rxnIDtoSGD <- function(rxnIDs){
@@ -129,6 +132,34 @@ write.output <- function(tab, output){
   write.table(tab, file = output, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 }
 
+elemental_composition <- function(metabolites){
+    
+    ### Determine the elemental composition of all metabolites with valid ChEBI IDs ###
+    ### & write to a table ###
+  
+    metComp <- read.delim('../Yeast_reconstruction/Sequences/METeleComp.tsv') # from seq_parser.py > elements_formula
+    
+    met_chebi <- unlist(sapply(metabolites, metToCHEBI))
+    
+    
+    met_chebi_comp <- metComp[metComp$ID %in% met_chebi,]
+    met_chebi_comp <- met_chebi_comp[,c(TRUE, TRUE, apply(met_chebi_comp[,-c(1,2)], 2, sum) != 0)]
+    
+    ele_comp <- lapply(met_chebi, function(x){
+      if(length(met_chebi_comp[met_chebi_comp$ID %in% x,]) != 0){
+        met_chebi_comp[met_chebi_comp$ID %in% x,]}
+    })
+    
+    #matrix of elemental abundance of species corresponding to rows of the stoichiometric matrix
+    ele_comp_mat <- matrix(NA, nrow = length(metabolites), ncol = length(ele_comp[[1]])-2); rownames(ele_comp_mat) <- metabolites; colnames(ele_comp_mat) <- names(ele_comp[[1]])[-c(1:2)]
+    for(el in 1:length(metabolites)){
+      if(length(unlist(ele_comp[[el]][-c(1:2)])) != 0){
+        ele_comp_mat[el,] <- unlist(ele_comp[[el]][-c(1:2)])
+      }
+    }
+    
+    write.table(data.frame(ID = metabolites, name = unname(metIDtoSpec(metabolites)),ele_comp_mat), file = "../ChemicalSpeciesQuant/stoiMetsComp.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = F) #dump for boundary condition determination in boundaryDataBlender.R
+  }
 
 convert_to_elemental <- function(redStoi, modelMetComp){
   # convert a stoichiometric matrix (with named columns) and "S" IDs as rownames to their elemental constituents
@@ -156,6 +187,23 @@ convert_to_elemental <- function(redStoi, modelMetComp){
       }
   
   }
+
+
+gene_pathways <- function(kegg_enzyme_dict){
+  #generate a per-gene pathway annotation if one is not already generated
+  
+  genes_to_pathways = read.delim("http://rest.kegg.jp/link/pathway/sce", header = FALSE); colnames(genes_to_pathways) <- c("gene", "pathwayCode")
+  pathway_names = read.delim("http://rest.kegg.jp/list/pathway/sce", header = FALSE); colnames(pathway_names) <- c("pathwayCode", "pathway")
+  genes_to_pathways$gene <- gsub('sce:', '', genes_to_pathways$gene)
+  pathway_names$pathway <- sapply(pathway_names$pathway, function(x){strsplit(x, split = " - Sacc")[[1]][1]})
+  pathway_names$pathway <- sapply(pathway_names$pathway, function(x){strsplit(x, split = " - yeast")[[1]][1]})
+  pathway_match <- merge(genes_to_pathways, pathway_names)
+  kegg_enzyme_dict$PATHWAY <- sapply(kegg_enzyme_dict$SYST, function(x){
+    paste(pathway_match$pathway[pathway_match$gene == x], collapse = "__")
+  })
+  write.table(kegg_enzyme_dict, "../KEGGrxns/yeastNameDict.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
+  }
+
 
 
 
@@ -542,9 +590,13 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   output_plots <- list()
   
-  scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", 
-      panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
+  scatter_theme <- theme(text = element_text(size = 50, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+      panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
       legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
+
+  #scatter_theme <- theme(text = element_text(size = 50, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", 
+  #    panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
+  #    legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
 
   chemoInfoSubset <- chemostatInfo[chmatch(rownames(flux_fit$fitted_flux), chemostatInfo$condition),]
   DRordering <- data.frame(DRs = c(0.05, 0.11, 0.16, 0.22, 0.30), order = 1:5)
@@ -555,7 +607,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   flux_range <- range(c(0, flux_plot_alt$FBA, flux_plot_alt$Parametric))
   
   output_plots$flux_plot1 <- ggplot() + scatter_theme +
-    geom_text(data = flux_plot_alt, aes(x = FBA, y = Parametric, col = condition, label = DR), size = 10) + scale_size_identity() + 
+    geom_text(data = flux_plot_alt, aes(x = FBA, y = Parametric, col = condition, label = DR), size = 20) + scale_size_identity() + 
     scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2) + 
     xlim(flux_range[1], flux_range[2]) + ylim(flux_range[1], flux_range[2])
   
@@ -568,7 +620,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   FBA_flux_range <- range(c(0, flux_plot_alt$FBA))
   output_plots$FBA_flux <- ggplot() + geom_path(data = flux_plot, aes(x = DR, y = FBA, col = condition, size = 2)) + scatter_theme +
     geom_point(data = flux_plot, aes(x = DR, y = FBA, col = condition, size = DR*50)) + scale_size_identity() + 
-    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux determined using FBA") +
+    scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA") +
     ylim(FBA_flux_range[1], FBA_flux_range[2])
     
   all_species <- data.frame(run_rxn$enzymes, run_rxn$metabolites)
@@ -579,12 +631,17 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   species_df <- melt(data.frame(all_species, condition = chemoInfoSubset$limitation, DR = chemoInfoSubset$actualDR, flux = run_rxn$flux), id.vars = c("condition", "DR", "flux"))
   
+  scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+      panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
+      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
+
+  
   output_plots$species <- ggplot() + geom_path(data = species_df, aes(x = DR, y = value, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free_y") +
-    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_y_continuous("Relative concentration") +
+    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_y_continuous("Relative concentration") +
     ggtitle("Relationship between metabolites/enzyme levels and condition") + expand_limits(y = 0)
   
   output_plots$flux_species <- ggplot() + geom_path(data = species_df, aes(x = value, y = flux, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free") +
-    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set2") + scale_x_continuous("Relative concentration") +
+    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_x_continuous("Relative concentration") +
     geom_point(data = species_df, aes(x = value, y = flux, col = condition, size =  DR*30)) + ggtitle("Relationship between metabolite/enzyme levels and flux carried") + expand_limits(y = 0)
   
   output_plots

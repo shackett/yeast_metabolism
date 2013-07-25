@@ -35,11 +35,14 @@ for ln in KEGG:
 		KEGGtoRxn[keggID] = 'NA'
 		
 	if RID.search(ln):
-		KEGGtoEC[keggID] = KEGGtoRxn[keggID = ''.join(ln.split('RN:')[1])
+	
+		#print re.sub('\n', '', ln.split('RN:')[1])[1]
+		#print re.sub('\n', '', "".join(ln.split('RN:')[1]))
+		KEGGtoRxn[keggID] = ''.join(re.sub('\n|', '', ln.split('RN:')[1]))
 		
 	
 	if ln_split[0] == "DEFINITION":
-		re.sub('\n', '', " ".join(ln_split[1:]))
+		KEGGtoEC[keggID] = re.sub('\n', '', " ".join(ln_split[1:]))
 	
 	if ln_split[1] == organism:
 		if keggID == "K07019":
@@ -64,7 +67,7 @@ outf.write("SYST\tSGD\tKEGG\tNAME\tRID\n")
 	
 for gene in SYSTtoKEGG.keys():
 	outf.write("%s\t%s\t%s\t%s\t%s\n" % (
-	gene, SYSTtoSGD[gene], SYSTtoKEGG[gene], KEGGtoEC[SYSTtoKEGG[gene]], KEGGtoRxn[SYSTtoKEGG[gene]
+	gene, SYSTtoSGD[gene], SYSTtoKEGG[gene], KEGGtoEC[SYSTtoKEGG[gene]], KEGGtoRxn[SYSTtoKEGG[gene]]
 	))
 outf.close()
 

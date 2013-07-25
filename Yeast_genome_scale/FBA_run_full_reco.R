@@ -11,7 +11,7 @@ setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 source("FBA_lib.R")
 
 options(stringsAsFactors = FALSE)
-inputFilebase = "yeast"
+
 
 # Specify whether growth optimization should be through linear programming (LP) - maximizing biomass given nutrients or 
 # through quadratic programming (QP) - optimally matching experimental boundary fluxes to optimized ones.
@@ -36,25 +36,28 @@ if(shadow_prices){
 
 
 #### Load SBML files describing metabolites, rxn stoichiometry ####
+inputFilebase = "yeast"
 rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
-rxnparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE, stringsAsFactors = FALSE)
+rxnparFile = read.delim(paste("rxn_par_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
+specparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
+fluxDirFile <- read.delim(paste("flux_dir_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
 #### add additional reactions ####
-rxnFileAppend <- read.delim("customRxns.txt", sep = "\t")
-rxnFile <- rbind(rxnFile, rxnFileAppend)
+#rxnFileAppend <- read.delim("customRxns.txt", sep = "\t")
+#rxnFile <- rbind(rxnFile, rxnFileAppend)
 
-customMets <- read.delim("customMets.txt", sep = "\t")
-corrFileAppend <- customMets[,colnames(customMets) %in% c("SpeciesID", "SpeciesName", "SpeciesType", "Compartment")]
-corrFile <- rbind(corrFile, corrFileAppend)
+#customMets <- read.delim("customMets.txt", sep = "\t")
+#corrFileAppend <- customMets[,colnames(customMets) %in% c("SpeciesID", "SpeciesName", "SpeciesType", "Compartment")]
+#corrFile <- rbind(corrFile, corrFileAppend)
 
-rxnparFileAppend <- customMets[,colnames(customMets) %in% c("SpeciesID", "SpeciesType", "Evidence")]
-colnames(rxnparFile) <- colnames(rxnparFileAppend)
-rxnparFile <- rbind(rxnparFile, rxnparFileAppend)
+#rxnparFileAppend <- customMets[,colnames(customMets) %in% c("SpeciesID", "SpeciesType", "Evidence")]
+#colnames(rxnparFile) <- colnames(rxnparFileAppend)
+#rxnparFile <- rbind(rxnparFile, rxnparFileAppend)
 
-#### Load files describing boundary conditions and reaction reversibility from ecoli ####
-metComp <- read.delim("METeleComp.tsv", stringsAsFactors = FALSE)
+#### Load files describing boundary conditions and reaction reversibility ####
+
 #compositionFile <- read.delim("../Yeast_comp_energy.txt") #energy required to assimilate biomass components
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
@@ -64,26 +67,27 @@ load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific bo
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
 metabolites <- unique(rxnStoi$Metabolite)
-enzymes <- rxnIDtoGene(reactions)
 
 #### Load or write stoichiometry matrix of reactions and their altered metabolites ####
 
-if(file.exists("yeast_stoi.R")){
-  load("yeast_stoi.R")
-} else {write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
+if(!file.exists("yeast_stoi.R")){write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
+load("yeast_stoi.R")
 
-### use Vito's implementation of Elad's component contribution free energey prediction ###
+### add model annotations of flux direction and reaction reversibility as well as Vito's implementation of Elad's component contribution free energy prediction###
 
-reversibleRx <- data.frame(rx = reactions, reversible = 0, CCdG = NA, CCdGsd = NA, CCdGdir = NA, manual = NA, rxFlip = NA, annotComment = NA)
+reversibleRx <- data.frame(rx = reactions, reversible = 0, CCdG = NA, CCdGsd = NA, CCdGdir = NA, modelRev = NA, modelBound = NA, manual = NA, rxFlip = NA, annotComment = NA)
 
-ccPred <- read.delim("cc_dG_matlab.tsv")
-ccPred$dir <- 0
-ccPred$dir[ccPred$dGr - 1.96*ccPred$dGrSD > 30] <- -1
-ccPred$dir[ccPred$dGr + 1.96*ccPred$dGrSD < -30] <- 1
 
-reversibleRx[chmatch(ccPred$reaction, reversibleRx$rx), colnames(reversibleRx) %in% c("CCdG", "CCdGsd", "CCdGdir")] <- ccPred[,-1]
 
-reversibleRx$reversible[!is.na(reversibleRx$CCdGdir)] <- reversibleRx$CCdGdir[!is.na(reversibleRx$CCdGdir)]
+
+#ccPred <- read.delim("cc_dG_matlab.tsv")
+#ccPred$dir <- 0
+#ccPred$dir[ccPred$dGr - 1.96*ccPred$dGrSD > 30] <- -1
+#ccPred$dir[ccPred$dGr + 1.96*ccPred$dGrSD < -30] <- 1
+
+#reversibleRx[chmatch(ccPred$reaction, reversibleRx$rx), colnames(reversibleRx) %in% c("CCdG", "CCdGsd", "CCdGdir")] <- ccPred[,-1]
+
+#reversibleRx$reversible[!is.na(reversibleRx$CCdGdir)] <- reversibleRx$CCdGdir[!is.na(reversibleRx$CCdGdir)]
 
 #read in manually flipped and directed reactions
 
@@ -103,50 +107,93 @@ reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.
 
 #### Elemental composition of metabolites ####
 
+if(!file.exists("../ChemicalSpeciesQuant/stoiMetsComp.tsv")){elemental_composition(metabolites)}
 modelMetComp <- read.table("../ChemicalSpeciesQuant/stoiMetsComp.tsv", header = TRUE)
 
-MetCompAppend <- modelMetComp[1:nrow(customMets),]
-MetCompAppend$ID <- customMets$SpeciesID
-MetCompAppend$name <- customMets$SpeciesName
-MetCompAppend[,!(colnames(MetCompAppend) %in% c("ID", "name"))] <- NA
 
-modelMetComp <- rbind(modelMetComp, MetCompAppend)
+
+
+#MetCompAppend <- modelMetComp[1:nrow(customMets),]
+#MetCompAppend$ID <- customMets$SpeciesID
+#MetCompAppend$name <- customMets$SpeciesName
+#MetCompAppend[,!(colnames(MetCompAppend) %in% c("ID", "name"))] <- NA
+
+#modelMetComp <- rbind(modelMetComp, MetCompAppend)
 
 
 
 #### Associate rxns with enzyme ascertainment in proteomics s.t. flux can favor measured pathways ####
+### Associate proteins with reactions and format complexes
+
+rxn_enzyme_groups = NULL
+for(rxN in 1:nrow(rxnparFile)){
+  
+  enzymeCombos <- rxnparFile$Enzymes[rxN]
+  
+  if(enzymeCombos == ""){
+    next
+  } # no enzymes
+  
+  enzymeCombos <- strsplit(enzymeCombos, ' OR ')[[1]]
+  
+  for(combo in 1:length(enzymeCombos)){
+    rxn_enzyme_groups <- rbind(rxn_enzyme_groups, data.frame(reaction = rxnparFile$ReactionID[rxN], group = combo, enzyme = regmatches(enzymeCombos[combo], gregexpr('[YQ][A-Z0-9]+[WC]?-?[A-Z]{0,1}', enzymeCombos[combo]))[[1]]))
+  }
+}
+
 
 enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
 rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
 
-prot_matches <- sapply(enzymes, function(x){
-  rxMatches <- chmatch(strsplit(x, '/')[[1]], rownames(enzyme_abund))
-  length(rxMatches[!is.na(rxMatches)]) != 0
+prot_matches <- sapply(unique(rxn_enzyme_groups$reaction), function(x){
+  rxMatches <- rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction == x]
+  length(rownames(enzyme_abund)[rownames(enzyme_abund) %in% rxMatches]) != 0
   })
 
 
-rxn_pathway <- read.delim("../KEGGrxns/yeastNameDict.tsv") #pathways associated with a protein
+
+### Determine which metabolic pathways are associated with a reaction ###
+
+reactionMatches <- data.frame(reactionID = rxnparFile$ReactionID[grep('reaction/', rxnparFile$Annotation)], KEGGrxnID = sapply(grep('reaction/', rxnparFile$Annotation, value = T), function(x){regmatches(x, regexpr('R[0-9]+', x))}))
+
+reactions_to_pathways = read.delim("http://rest.kegg.jp/link/reaction/pathway", header = FALSE); colnames(reactions_to_pathways) <- c("pathwayCode", "RID")
+reactions_to_pathways$RID = sapply(reactions_to_pathways$RID, function(x){sub('rn:', '', x)})
+
+rxPathways = read.delim("http://rest.kegg.jp/list/pathway", header = FALSE); colnames(rxPathways) = c("pathwayCode", "pathway")
+reactions_to_pathways$pathway = rxPathways$pathway[chmatch(reactions_to_pathways$pathwayCode, rxPathways$pathwayCode)]
+
+reactionMatches$pathway = sapply(reactionMatches$KEGGrxnID, function(x){
+  PS = reactions_to_pathways$pathway[reactions_to_pathways$RID == x]
+  PS <- PS[!is.na(PS)]
+  paste(PS, collapse = "__")
+})
+
+
+### Determine which pathways are associated with a protein ###
+
+kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # > generated from keggIDparser.py KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
+if(is.null(kegg_enzyme_dict$PATHWAY)){
+  gene_pathways(kegg_enzyme_dict); kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv")
+}#generate a per-gene pathway annotation if one is not already generated
+
+
+
 
 # favor flux through chosen central carbon metabolism pathways
 
-pathways <- sapply(rxn_pathway$PATHWAY, function(x){strsplit(x, '__')[[1]]})
+pathways <- sapply(reactionMatches$pathway, function(x){strsplit(x, '__')[[1]]})
 unq_pathways <- unique(unlist(pathways))
-centralC <- c("Glycolysis / Gluconeogenesis", "Citrate cycle (TCA cycle)", "Oxidative phosphorylation")
+centralC <- c("Glycolysis / Gluconeogenesis", "Citrate cycle (TCA cycle)")
 
 centralCmatch <- unlist(lapply(pathways, function(x){
   sum(x %in% centralC) != 0
   }))
 
-centralCmatchGenes <- rxn_pathway$SYST[centralCmatch]
-centralCmeasured <- chmatch(centralCmatchGenes, rownames(enzyme_abund))
-centralCmeasured <- centralCmeasured[!is.na(centralCmeasured)]
-
-centralCrxnMatch <- sapply(enzymes, function(x){
-  sum(strsplit(x, '/')[[1]] %in% centralCmatchGenes) != 0
-  })
+centralCrxnMatch <- rep(FALSE, times = length(reactions))
+centralCrxnMatch[reactions %in% reactionMatches$reactionID[centralCmatch]] <- TRUE
 
 ### add an exception for FBPase
-centralCrxnMatch[names(centralCrxnMatch) %in% 'r_0859'] <- FALSE
+centralCrxnMatch[names(centralCrxnMatch) %in% 'r_0449'] <- FALSE
 
 # favor flux through cytosolic ATPase, + transport of ATP, ADP + Pi to restrict the wasting of excess energy to a single reaction
 
@@ -221,7 +268,6 @@ for(i in 1:n_c){
 possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID)), as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID)))
 
 
-
 #### During LP should the similarity of shadow prices across the nutrient landscape be investigated ####
 
 if(generatePhPP){
@@ -272,7 +318,7 @@ compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$Reactio
 
 ## extract the metabolite ID corresponding to the extracellular introduction of nutrients ##
 
-sources <- c("D-glucose", "ammonium", "phosphate", "sulphate", "uracil", "L-leucine")
+sources <- c("D-glucose", "ammonium", '^phosphate \\[extracellular\\]', "sulphate", "uracil", "L-leucine")
 		
 resource_matches <- lapply(sources, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -286,7 +332,7 @@ boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$
 
 
 
-excreted <- unique(mediaSummary$specie[mediaSummary$type == "excretion"])
+excreted <- c('ethanol \\[extracellular\\]', 'acetate \\[extracellular\\]', 'glycerol \\[extracellular\\]')
 
 resource_matches <- lapply(excreted, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -312,7 +358,7 @@ for(x in 1:length(sinks)){
 
 ## freely exchanging metabolites through extracellular compartment ##
 
-free_flux <- c("carbon dioxide", "oxygen", "water", "H+")
+free_flux <- c("carbon dioxide", "oxygen", "H2O", "H+")
 
 resource_matches <- lapply(free_flux, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -323,31 +369,10 @@ for(x in 1:length(free_flux)){
 
 
 skip_me = TRUE
-
-
-
 #### Confirm mass balance of reactions ############
 if(skip_me == FALSE){
-
-met_chebi <- unlist(sapply(metabolites, metToCHEBI))
-met_chebi_comp <- metComp[metComp$ID %in% met_chebi,]
-met_chebi_comp <- met_chebi_comp[,c(TRUE, TRUE, apply(met_chebi_comp[,-c(1,2)], 2, sum) != 0)]
-
-ele_comp <- lapply(met_chebi, function(x){
-	if(length(met_chebi_comp[met_chebi_comp$ID %in% x,]) != 0){
-	met_chebi_comp[met_chebi_comp$ID %in% x,]}
-	})
-
-#matrix of elemental abundance of species corresponding to rows of the stoichiometric matrix
-ele_comp_mat <- matrix(NA, nrow = length(stoiMat[,1]), ncol = length(ele_comp[[1]])-2); rownames(ele_comp_mat) <- rownames(stoiMat); colnames(ele_comp_mat) <- names(ele_comp[[1]])[-c(1:2)]
-for(el in 1:length(stoiMat[1,])){
-	if(length(unlist(ele_comp[[el]][-c(1:2)])) != 0){
-		ele_comp_mat[el,] <- unlist(ele_comp[[el]][-c(1:2)])
-		}
-	}
-
-#write.table(data.frame(ID = metabolites, name = unname(metIDtoSpec(metabolites)),ele_comp_mat), file = "../ChemicalSpeciesQuant/stoiMetsComp.tsv", sep = "\t", col.names = TRUE, row.names = FALSE) #dump for boundary condition determination in boundaryDataBlender.R
-
+  
+#
 missed_compounds <- met_chebi[!is.na(met_chebi)][names(met_chebi[!is.na(met_chebi)]) %in% rownames(ele_comp_mat)[apply(is.na(ele_comp_mat), 1, sum) != 0]]
 
 #create a data.frame of species with a chebi ID, but without a chemical formula match in my composition file
@@ -983,6 +1008,7 @@ if(QPorLP == "QP"){
     boundary_stoichiometry <- qpModel$A[,sapply(residualFlux$reactions, function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
     boundary_stoichiometry <- boundary_stoichiometry[rowSums(boundary_stoichiometry != 0) != 0,]
     boundary_stoichiometry <- boundary_stoichiometry[grep('bookkeeping', rownames(boundary_stoichiometry), invert = T),] 
+    boundary_stoichiometry <- as.matrix(boundary_stoichiometry)
     
     boundary_elements <- convert_to_elemental(boundary_stoichiometry, modelMetComp)
     
@@ -1072,7 +1098,10 @@ ggsave("flux_residuals.pdf", width = 18, height = 20)
 #rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 #fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 
-std_flux <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd))) %*% rep(1, n_c))
+
+
+
+std_flux <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd)*ifelse((apply(fluxMat_per_cellVol, 1, function(x){median(x[x != 0])}) >= 0), 1, -1))) %*% rep(1, n_c))
 
 std_flux_rxnName <- std_flux
 rownames(std_flux_rxnName) <- apply(rxNames, 1, function(x){ifelse(x[1] == x[2], x[1], paste(x, collapse = '_'))})
