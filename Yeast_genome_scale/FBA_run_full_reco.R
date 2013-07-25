@@ -34,8 +34,12 @@ if(shadow_prices){
 # surface could be fitted and an interesting PhPP analysis could be performed.  Analysis of shadow prices is still useful when partials are evaluated only at observed experimental conditions.
  
 
+###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
+##### Load files describing valid reactions, species (their composition) both from the core SBML model and supplemented manual annotations #####
+###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 
-#### Load SBML files describing metabolites, rxn stoichiometry ####
+### Load SBML files describing metabolites, rxn stoichiometry ###
+
 inputFilebase = "yeast"
 rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 rxnparFile = read.delim(paste("rxn_par_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
@@ -44,7 +48,38 @@ specparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""),
 compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 fluxDirFile <- read.delim(paste("flux_dir_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
 
-#### add additional reactions ####
+### Add additional reactions ###
+
+customRx <- "customRxns.txt"
+customList <- parse_custom("customRxns.txt")
+
+rxnFile <- rbind(rxnFile, customList$rxnFile)
+rxnparFile
+corrFile
+specparFile
+fluxDirFile
+
+### Determine unique metabolites and reactions ###
+
+reactions = unique(rxnFile$ReactionID)
+rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
+metabolites <- unique(rxnStoi$Metabolite)
+
+#### Load or write stoichiometry matrix of reactions and their altered metabolites ####
+
+if(!file.exists("flux_cache/yeast_stoi.Rdata")){write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
+load("flux_cache/yeast_stoi.Rdata")
+
+
+### Elemental composition of metabolites ###
+
+if(!file.exists("flux_cache/stoiMetsComp.tsv")){elemental_composition(metabolites)}
+modelMetComp <- read.table("flux_cache/stoiMetsComp.tsv", header = TRUE)
+
+
+
+
+
 #rxnFileAppend <- read.delim("customRxns.txt", sep = "\t")
 #rxnFile <- rbind(rxnFile, rxnFileAppend)
 
@@ -56,7 +91,16 @@ fluxDirFile <- read.delim(paste("flux_dir_", inputFilebase, ".tsv", sep = ""), s
 #colnames(rxnparFile) <- colnames(rxnparFileAppend)
 #rxnparFile <- rbind(rxnparFile, rxnparFileAppend)
 
-#### Load files describing boundary conditions and reaction reversibility ####
+#MetCompAppend <- modelMetComp[1:nrow(customMets),]
+#MetCompAppend$ID <- customMets$SpeciesID
+#MetCompAppend$name <- customMets$SpeciesName
+#MetCompAppend[,!(colnames(MetCompAppend) %in% c("ID", "name"))] <- NA
+
+#modelMetComp <- rbind(modelMetComp, MetCompAppend)
+
+###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
+##### Load files describing boundary conditions and reaction reversibility #####
+###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 
 #compositionFile <- read.delim("../Yeast_comp_energy.txt") #energy required to assimilate biomass components
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
@@ -64,19 +108,16 @@ rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
 
 
-reactions = unique(rxnFile$ReactionID)
-rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
-metabolites <- unique(rxnStoi$Metabolite)
-
-#### Load or write stoichiometry matrix of reactions and their altered metabolites ####
-
-if(!file.exists("yeast_stoi.R")){write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
-load("yeast_stoi.R")
-
 ### add model annotations of flux direction and reaction reversibility as well as Vito's implementation of Elad's component contribution free energy prediction###
 
 reversibleRx <- data.frame(rx = reactions, reversible = 0, CCdG = NA, CCdGsd = NA, CCdGdir = NA, modelRev = NA, modelBound = NA, manual = NA, rxFlip = NA, annotComment = NA)
 
+reversibleRx$modelRev = fluxDirFile$Reversible[chmatch(reversibleRx$rx, fluxDirFile$ReactionID)]
+reversibleRx$modelBound = fluxDirFile$FluxBound[chmatch(reversibleRx$rx, fluxDirFile$ReactionID)]
+
+#table(fluxDirFile$Reversible, fluxDirFile$FluxBound)
+
+reversibleRx$reversible = ifelse(reversibleRx$modelBound == "greaterEqual", 1, 0) # directionality is coded as -1: irreversibly backward, 0: reversible, 1: irreversibly forward
 
 
 
@@ -91,34 +132,24 @@ reversibleRx <- data.frame(rx = reactions, reversible = 0, CCdG = NA, CCdGsd = N
 
 #read in manually flipped and directed reactions
 
-thermAnnotate = read.delim("thermoAnnotate.txt", header = TRUE, sep = "\t")
-for(rxN in 1:nrow(thermAnnotate)){
+#thermAnnotate = read.delim("thermoAnnotate.txt", header = TRUE, sep = "\t")
+#for(rxN in 1:nrow(thermAnnotate)){
   #flip reaction direction (and free energy) if stated directionality is unconventional  
-  if(!is.na(thermAnnotate$flip[rxN]) & thermAnnotate$flip[rxN]){
-    stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]] <- stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]]*-1
-    reversibleRx$reversible[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- reversibleRx$reversible[reversibleRx$rx == thermAnnotate$reaction[rxN]]*-1
-    }
+#  if(!is.na(thermAnnotate$flip[rxN]) & thermAnnotate$flip[rxN]){
+#    stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]] <- stoiMat[,colnames(stoiMat) == thermAnnotate$reaction[rxN]]*-1
+#    reversibleRx$reversible[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- reversibleRx$reversible[reversibleRx$rx == thermAnnotate$reaction[rxN]]*-1
+#    }
   
   #manually define reaction direction
-  reversibleRx$rxFlip[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$flip[rxN]
-  reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
-  }
-reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
-
-#### Elemental composition of metabolites ####
-
-if(!file.exists("../ChemicalSpeciesQuant/stoiMetsComp.tsv")){elemental_composition(metabolites)}
-modelMetComp <- read.table("../ChemicalSpeciesQuant/stoiMetsComp.tsv", header = TRUE)
+#  reversibleRx$rxFlip[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$flip[rxN]
+#  reversibleRx$manual[reversibleRx$rx == thermAnnotate$reaction[rxN]] <- thermAnnotate$direction[rxN]
+#  }
+#reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
 
 
 
 
-#MetCompAppend <- modelMetComp[1:nrow(customMets),]
-#MetCompAppend$ID <- customMets$SpeciesID
-#MetCompAppend$name <- customMets$SpeciesName
-#MetCompAppend[,!(colnames(MetCompAppend) %in% c("ID", "name"))] <- NA
 
-#modelMetComp <- rbind(modelMetComp, MetCompAppend)
 
 
 
@@ -142,6 +173,7 @@ for(rxN in 1:nrow(rxnparFile)){
 }
 
 
+
 enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
 rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
 
@@ -149,6 +181,12 @@ prot_matches <- sapply(unique(rxn_enzyme_groups$reaction), function(x){
   rxMatches <- rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction == x]
   length(rownames(enzyme_abund)[rownames(enzyme_abund) %in% rxMatches]) != 0
   })
+
+### cache files and pass to reaction equation formulation script ###
+
+write.table(rxn_enzyme_groups, file = "flux_cache/rxn_enzyme_groups.tsv", sep = "\t", col.names = T, row.names = F, quote = F) # a data.frame indicating how proteins form catalytic units (monimers, dimers...)
+write.table(prot_matches, file = "flux_cache/prot_matches.tsv", sep = "\t", col.names = T, row.names = F, quote = F) # boolean vector indicating whether a reactio's proteins were ascertained via proteomics
+
 
 
 
