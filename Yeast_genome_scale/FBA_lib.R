@@ -18,30 +18,78 @@ write_stoiMat = function(metabolites, reactions, corrFile, rxnFile, internal_nam
 	rownames(stoiMat) <- metName	
 	colnames(stoiMat) <- rxnName
 
-	for (i in 1:nrow(rxnFile)){
-		stoiMat[c(1:length(metabolites))[metabolites == rxnStoi$Metabolite[i]], c(1:length(reactions))[reactions == rxnStoi$ReactionID[i]]] <- rxnStoi$StoiCoef[i]		}
+  rxStoi <- rxnFile[!is.na(rxnFile$StoiCoef),]
+	for (i in 1:nrow(rxStoi)){
+		stoiMat[c(1:length(metabolites))[metabolites == rxStoi$Metabolite[i]], c(1:length(reactions))[reactions == rxStoi$ReactionID[i]]] <- as.numeric(rxStoi$StoiCoef[i])
+	  }
 
 	if (internal_names == FALSE){
-		save(stoiMat, file = "yeast_stoi.R")} else {
+		save(stoiMat, file = "flux_cache/yeast_stoi.Rdata")} else {
 		rownames(stoiMat) <- metabolites	
 		colnames(stoiMat) <- reactions
-		save(stoiMat, file = "yeast_stoi.R")
+		save(stoiMat, file = "flux_cache/yeast_stoi.Rdata")
 			}
 	}
 
+parse_custom = function(customRx){
+  
+  ### read supplemental reaction files and append to input data.frames ###
+  
+  outputList <- list()
+  
+  inputFile = read.table(customRx, header = F, sep = "\t", fill = T, blank.lines.skip = F)
+  
+  ### Species-level annotation ###
+  
+  input_bound = c(1:nrow(inputFile))[inputFile[,1] == "!Species"] + c(1,-1)
+  spec_input = inputFile[(input_bound[1]+1):input_bound[2],colSums(inputFile[(input_bound[1]+1):input_bound[2],] != "") != 0]
+  colnames(spec_input) <- inputFile[input_bound[1],colSums(inputFile[(input_bound[1]+1):input_bound[2],] != "") != 0]
+  
+  corr = spec_input[,colnames(spec_input) %in% c("SpeciesID", "SpeciesName", "SpeciesType", "Compartment")]
+  outputList$corrFile = corr[match(unique(corr$SpeciesType), corr$SpeciesType),]
+
+  spec_par = spec_input[,colnames(spec_input) %in% c("SpeciesID", "SpeciesName", "Annotation")]
+  outputList$specparFile = spec_par
+  
+  ### Reaction stoichiometry annotation ###
+  
+  input_bound = c(1:nrow(inputFile))[inputFile[,1] == "!Reactions"] + c(1,-1)
+  rxn_input = inputFile[(input_bound[1]+1):input_bound[2],]
+  colnames(rxn_input) <- inputFile[input_bound[1],]
+  
+  outputList$rxnFile = rxn_input
+  
+  ### Reaction flux and references annotation ###
+  
+  input_bound = c(1:nrow(inputFile))[inputFile[,1] == "!Reaction_Parameters"] + c(1,-1)
+  rxPar_input = inputFile[(input_bound[1]+1):input_bound[2],apply(inputFile[(input_bound[1]+1):input_bound[2],], 2, function(x){sum(x[!is.na(x)] != "")}) != 0]
+  colnames(rxPar_input) <- inputFile[input_bound[1],apply(inputFile[(input_bound[1]+1):input_bound[2],], 2, function(x){sum(x[!is.na(x)] != "")}) != 0]
+  
+  outputList$rxnparFile = rxPar_input[,colnames(rxPar_input) %in% c("ReactionID", "Enzymes", "Annotation")]
+  outputList$fluxDirFile = rxPar_input[,colnames(rxPar_input) %in% c("ReactionID", "Reversible", "FluxBound")]
+  
+  return(outputList)
+  
+  }
 
 
-
-perfect.match <- function(source, query, corrFile){
+perfect.match <- function(source, query, corrFile, reduceByLength = F){
   all_char <- "[[:graph:][:space:]]"
   
   tmp <- corrFile[grep(source, query)[!(grep(source, query) %in% union(grep(paste(all_char, source, sep = ""), query), grep(paste(source, all_char, sep = ""), query)))],]
   if(length(tmp[,1]) == 0){tmp <- corrFile[grep(source, query, fixed = TRUE),]}
-  tmp
+  
+  if(reduceByLength){
+    tmp[which.min(abs(sapply(tmp$SpeciesName, function(x){length(unlist(strsplit(x, split = "")))}) - length(unlist(strsplit(source, split = ""))))),]
+    
+    }else{
+      tmp
+    }
+  
 }
 
 
-rxn_search = function(stoiMat, search_string, is_rxn = TRUE, index = FALSE){
+rxn_search = function(search_string, stoiMat = named_stoi, is_rxn = TRUE, index = FALSE){
 	#search by metabolite or reactant and return all reactions and nonzero metabolites.
   #stoiMat rows and columns must be named with metabolite and enzyme common names: named_stoi
 	if (is_rxn == TRUE){
@@ -58,14 +106,14 @@ rxn_search = function(stoiMat, search_string, is_rxn = TRUE, index = FALSE){
 		print("no hits")
 		} else {
 			if(index == TRUE){
-				colz
+				reactions[colz]
 				} else {
 			
 			rxns = stoiMat[,colz]
 			if(is.vector(rxns)){
-				c(colz, rxns[rxns != 0])
+				c(reactions[colz], rxns[rxns != 0])
 				} else {
-					output <- rbind(colz, rxns[apply(rxns, 1, is.not.zero),])
+					output <- rbind(reactions[colz], rxns[apply(rxns, 1, is.not.zero),])
 					colnames(output) = colnames(stoiMat)[colz]
 					output
 					}}
@@ -158,7 +206,7 @@ elemental_composition <- function(metabolites){
       }
     }
     
-    write.table(data.frame(ID = metabolites, name = unname(metIDtoSpec(metabolites)),ele_comp_mat), file = "../ChemicalSpeciesQuant/stoiMetsComp.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = F) #dump for boundary condition determination in boundaryDataBlender.R
+    write.table(data.frame(ID = metabolites, name = unname(metIDtoSpec(metabolites)),ele_comp_mat), file = "flux_cache/stoiMetsComp.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = F) #dump for boundary condition determination in boundaryDataBlender.R
   }
 
 convert_to_elemental <- function(redStoi, modelMetComp){

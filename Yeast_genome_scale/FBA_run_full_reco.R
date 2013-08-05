@@ -15,24 +15,12 @@ options(stringsAsFactors = FALSE)
 
 # Specify whether growth optimization should be through linear programming (LP) - maximizing biomass given nutrients or 
 # through quadratic programming (QP) - optimally matching experimental boundary fluxes to optimized ones.
-QPorLP <- "QP"
-
-#calculate shadow prices to perform phenotypic phase plane analysis
-shadow_prices = FALSE
-if(QPorLP == "QP"){shadow_prices = FALSE
+QPorLP <- "QP" # LP and PhPP no longer supported
+if(QPorLP == "QP"){
   #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so
   library(gurobi) # QP solver interface
-  } #don't calculate shadow prices when QP problem is being solved 
-if(shadow_prices){
-  library(rgl)
-  library(lpSolveAPI) # LP solver interface
-  treatmentPartials <- list()
-  generatePhPP <- TRUE; PhPPgenerated <- FALSE
-}else{generatePhPP = FALSE}
+  }else{print("try the QP, all the cool kids are doing it")}
 
-# When optimization function changes, PhPP analysis becomes more complicated as composition becomes a function of nutrient conditions.  If experimental composition measurements over nutrient conditions were dense enough a
-# surface could be fitted and an interesting PhPP analysis could be performed.  Analysis of shadow prices is still useful when partials are evaluated only at observed experimental conditions.
- 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 ##### Load files describing valid reactions, species (their composition) both from the core SBML model and supplemented manual annotations #####
@@ -54,10 +42,10 @@ customRx <- "customRxns.txt"
 customList <- parse_custom("customRxns.txt")
 
 rxnFile <- rbind(rxnFile, customList$rxnFile)
-rxnparFile
-corrFile
-specparFile
-fluxDirFile
+rxnparFile <- rbind(rxnparFile, customList$rxnparFile)
+corrFile <- rbind(corrFile, customList$corrFile)
+specparFile <- rbind(specparFile, customList$specparFile)
+fluxDirFile <- rbind(fluxDirFile, customList$fluxDirFile)
 
 ### Determine unique metabolites and reactions ###
 
@@ -70,11 +58,15 @@ metabolites <- unique(rxnStoi$Metabolite)
 if(!file.exists("flux_cache/yeast_stoi.Rdata")){write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
 load("flux_cache/yeast_stoi.Rdata")
 
+named_stoi <- stoiMat # create a version of the stoichiometric matrix with common names for rxns and mets to allow for easier searching
+met_dict <- metIDtoSpec(rownames(named_stoi)); met_dict <- sapply(c(1:length(named_stoi[,1])), function(x){met_dict[x][[1]]})
+rxn_dict <- rxnIDtoEnz(colnames(named_stoi)); rxn_dict <- sapply(c(1:length(named_stoi[1,])), function(x){rxn_dict[x][[1]]})
+rownames(named_stoi) <- met_dict; colnames(named_stoi) <- rxn_dict
 
 ### Elemental composition of metabolites ###
 
 if(!file.exists("flux_cache/stoiMetsComp.tsv")){elemental_composition(metabolites)}
-modelMetComp <- read.table("flux_cache/stoiMetsComp.tsv", header = TRUE)
+modelMetComp <- read.delim("flux_cache/stoiMetsComp.tsv", header = TRUE)
 
 
 
@@ -105,6 +97,9 @@ modelMetComp <- read.table("flux_cache/stoiMetsComp.tsv", header = TRUE)
 #compositionFile <- read.delim("../Yeast_comp_energy.txt") #energy required to assimilate biomass components
 nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
+nutModelNames <- data.frame(commonName = rownames(nutrientFile), modelName = sapply(rownames(nutrientFile), function(x){paste(x, '[extracellular]')}))
+rownames(nutrientFile) <- nutModelNames$modelName
+
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
 
 
@@ -177,7 +172,7 @@ for(rxN in 1:nrow(rxnparFile)){
 enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
 rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
 
-prot_matches <- sapply(unique(rxn_enzyme_groups$reaction), function(x){
+prot_matches <- sapply(reactions, function(x){
   rxMatches <- rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction == x]
   length(rownames(enzyme_abund)[rownames(enzyme_abund) %in% rxMatches]) != 0
   })
@@ -185,7 +180,7 @@ prot_matches <- sapply(unique(rxn_enzyme_groups$reaction), function(x){
 ### cache files and pass to reaction equation formulation script ###
 
 write.table(rxn_enzyme_groups, file = "flux_cache/rxn_enzyme_groups.tsv", sep = "\t", col.names = T, row.names = F, quote = F) # a data.frame indicating how proteins form catalytic units (monimers, dimers...)
-write.table(prot_matches, file = "flux_cache/prot_matches.tsv", sep = "\t", col.names = T, row.names = F, quote = F) # boolean vector indicating whether a reactio's proteins were ascertained via proteomics
+write.table(prot_matches, file = "flux_cache/prot_matches.tsv", sep = "\t", col.names = T, row.names = F, quote = F) # boolean vector indicating whether a reaction's proteins were ascertained via proteomics
 
 
 
@@ -217,7 +212,7 @@ if(is.null(kegg_enzyme_dict$PATHWAY)){
 
 
 
-# favor flux through chosen central carbon metabolism pathways
+# favor flux through chosen central carbon metabolism pathways by reducing the L1 penalization of |v|
 
 pathways <- sapply(reactionMatches$pathway, function(x){strsplit(x, '__')[[1]]})
 unq_pathways <- unique(unlist(pathways))
@@ -230,12 +225,13 @@ centralCmatch <- unlist(lapply(pathways, function(x){
 centralCrxnMatch <- rep(FALSE, times = length(reactions))
 centralCrxnMatch[reactions %in% reactionMatches$reactionID[centralCmatch]] <- TRUE
 
-### add an exception for FBPase
-centralCrxnMatch[names(centralCrxnMatch) %in% 'r_0449'] <- FALSE
+rxn_search('exchange', is_rxn = F)
+
+centralCrxnMatch[names(centralCrxnMatch) %in% 'r_0449'] <- FALSE ### remove FBPase's annotation as Glyc/Gluconeogenic in order to direct excess ATP hydrolysis through a designated reaction (r_4042) 
 
 # favor flux through cytosolic ATPase, + transport of ATP, ADP + Pi to restrict the wasting of excess energy to a single reaction
 
-ATPbreakdownRxns <- c("r_0249", "r_1149", "r_1150", "r_1167", "r_1168", "r_1459", "r_1460", "r_1461", "r_1462", "r_1463", "r_1868")
+ATPbreakdownRxns <- c("r_4042")#, "r_0249", "r_1149", "r_1150", "r_1167", "r_1168", "r_1459", "r_1460", "r_1461", "r_1462", "r_1463", "r_1868")
 
 
 prot_penalty <- (1 - prot_matches)/2 + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
@@ -243,6 +239,9 @@ prot_penalty[(reactions %in% ATPbreakdownRxns)] <- 0.1
 
 ####
 #save(list = ls(), file = "FBAinputFiles.Rdata")
+
+
+
 
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
 
@@ -306,45 +305,6 @@ for(i in 1:n_c){
 possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID)), as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID)))
 
 
-#### During LP should the similarity of shadow prices across the nutrient landscape be investigated ####
-
-if(generatePhPP){
-  ## If Phenotypic phase plane analysis (PhPP) is being performed, establish which condititions will be compared ##
-  # which nutrients will be compared in a pairwise manner
-  nutrientComp <- c("ammonium", "phosphate", "D-glucose")
-  maxNutrientConc <- sapply(c(1:length(nutrientFile[,1])), function(x){nutrientFile[x, apply(nutrientFile, 1, which.max)[x]]})
-  names(maxNutrientConc) <- rownames(nutrientFile); maxNutrientConc <- maxNutrientConc[rowSums(nutrientFile == 0) == 0]
-  
-  PhPPcond <- list()
-  
-  #generate all pairs of conditions
-  nutrientPairs <- NULL
-  for(i in 1:length(nutrientComp)){
-    if(i == length(nutrientComp)){next} 
-    for(j in (i+1):length(nutrientComp)){
-      nutrientPairs <- rbind(nutrientPairs, c(nutrientComp[i], nutrientComp[j]))
-    }}
-  
-  # generate concentration of each varying nutrient on an exponentially sampled grid
-  conc_samples <- 100
-  orderedNutrient <- sapply(nutrientComp, function(x){maxNutrientConc[names(maxNutrientConc) == x]}); names(orderedNutrient) <- sapply(names(orderedNutrient), function(y){strsplit(y, split = '\\.')[[1]][1]})
-  nutrientGrad <- sapply(orderedNutrient, function(nconc){
-    nconc * 1/exp((c(0:conc_samples)*(log(1000)/conc_samples)))
-  })
-  
-  for(a_pairN in 1:length(nutrientPairs[,1])){
-    nutLattice <- expand.grid(nutrientGrad[,colnames(nutrientGrad) == nutrientPairs[a_pairN,1]], nutrientGrad[,colnames(nutrientGrad) == nutrientPairs[a_pairN,2]])
-    colnames(nutLattice) <- nutrientPairs[a_pairN,]
-    
-    invariantNut <- t(t(rep(1, length(nutLattice[,1])))) %*% maxNutrientConc[!(names(maxNutrientConc) %in% nutrientPairs[a_pairN,])]
-    colnames(invariantNut) <- names( maxNutrientConc[!(names(maxNutrientConc) %in% nutrientPairs[a_pairN,])])
-    
-    PhPPcond$nutrients[[a_pairN]] <- nutrientPairs[a_pairN,]
-    PhPPcond$gradient[[a_pairN]] <- cbind(nutLattice, invariantNut)
-  }
-}
-
-
 
 #### Determine the compartmentation of each reaction ####
 
@@ -382,10 +342,10 @@ excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$
 
 ## extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass ##
 
-sinks <- unique(c(comp_by_cond$compositionFile$AltName, colnames(comp_by_cond$biomassExtensionE)))
+sinks <- unique(c(comp_by_cond$compositionFile$AltName, colnames(comp_by_cond$biomassExtensionE)[-1]))
 
 
-resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
+resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile, reduceByLength = T)
 
 comp_met <- NULL
 for(x in 1:length(sinks)){
@@ -406,152 +366,32 @@ for(x in 1:length(free_flux)){
 }
 
 
-skip_me = TRUE
-#### Confirm mass balance of reactions ############
-if(skip_me == FALSE){
-  
-#
-missed_compounds <- met_chebi[!is.na(met_chebi)][names(met_chebi[!is.na(met_chebi)]) %in% rownames(ele_comp_mat)[apply(is.na(ele_comp_mat), 1, sum) != 0]]
-
-#create a data.frame of species with a chebi ID, but without a chemical formula match in my composition file
-#missed_df <- data.frame(metIDtoSpec(names(missed_compounds)), names(missed_compounds), missed_compounds)
-#unique_missed_df <- as.data.frame(matrix(NA, nrow = length(unique(missed_compounds)), ncol = 3))
-#for(i in 1:length(unique(missed_compounds))){
-#	unique_missed_df[i,] <- missed_df[missed_df[,3] == sort(unique(missed_compounds))[i],][1,]
-#	}
-
-#unique_missed_df[,3] %in% chem_form$COMPOUND_ID
-
-
-#out <- as.data.frame(matrix(0, ncol = length(colnames(ele_comp_mat)), nrow = length(unique_missed_df[,1])))
-#colnames(out) <- c(colnames(ele_comp_mat))
-
-#write.table(cbind(unique_missed_df, out), row.names = FALSE, col.names = TRUE, file = "woot", sep = "\t")
-add.chebi.comp <- read.delim("chebi_srh_curated.tsv", stringsAsFactors = FALSE)
-add.chebi.comp <- add.chebi.comp[is.na(add.chebi.comp$generic),]
-add.chebi.comp$internal_ID <- sapply(add.chebi.comp$internal_ID, function(x){corrFile$SpeciesType[corrFile$SpeciesID == x]})
-
-for(i in 1:length(ele_comp_mat[,1])){
-	
-	if(corrFile$SpeciesType[corrFile$SpeciesID == rownames(ele_comp_mat)[i]] %in% add.chebi.comp$internal_ID){
-		ele_comp_mat[i,] <- unlist(add.chebi.comp[add.chebi.comp$internal_ID %in% corrFile$SpeciesType[corrFile$SpeciesID == rownames(ele_comp_mat)[i]], -c(1:3, length(add.chebi.comp[1,]))])
-		}}
-		
-		
-
-mass_balanced <- matrix(NA, nrow = length(stoiMat[1,]), ncol = length(ele_comp_mat[1,]) + 1); rownames(mass_balanced) <- colnames(stoiMat); colnames(mass_balanced) <- c("missingIDs", colnames(ele_comp_mat))
-mass_balanced <- as.data.frame(mass_balanced, stringsAsFactors = FALSE)
-
-for(colnum in c(1:length(stoiMat[1,]))){
-	
-	if(length(stoiMat[,colnum][stoiMat[,colnum] != 0]) > 1){
-	if(sum(is.na(ele_comp_mat[stoiMat[,colnum] != 0,][,1])) != 0){
-		#some species are missing IDs
-		#ignore those species and determine for which species the reaction is balanced
-		mass_balanced$missingIDs[colnum] <- TRUE
-	
-		defined_spec <- !is.na(ele_comp_mat[stoiMat[,colnum] != 0,][,1])
-		if(sum(defined_spec) > 1){
-		mass_balanced[colnum, -1] <- t(ele_comp_mat[stoiMat[,colnum] != 0,][defined_spec,])%*% (stoiMat[,colnum][stoiMat[,colnum] != 0][defined_spec]) == 0
-		}
-		}else{
-			
-			mass_balanced$missingIDs[colnum] <- FALSE
-			
-			if(is.vector(ele_comp_mat[stoiMat[,colnum] != 0,]) == FALSE){
-			mass_balanced[colnum, -1] <- t(ele_comp_mat[stoiMat[,colnum] != 0,]) %*% (stoiMat[,colnum][stoiMat[,colnum] != 0]) == 0
-			}
-			}}}
-	
-#reactions to use: those that have transformed metabolites
-good_rxns <- colnames(stoiMat)[!is.na(mass_balanced[,2])]	
-	
-add_rxns <- mass_balanced[colnames(stoiMat) %in% good_rxns,][mass_balanced[colnames(stoiMat) %in% good_rxns,]$missingIDs == TRUE,]	
-	
-#reactions carrying flux with elemental composition information	
-non_na_MB <- mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),][!is.na(mass_balanced[rownames(mass_balanced) %in% rownames(reduced_flux_mat),]$P),]
-
-#reactions carrying flux that are not mass balanced for an element
-non_na_MB_stoi <- stoiMat[apply(stoiMat[,colnames(stoiMat) %in% rownames(non_na_MB[non_na_MB$P == FALSE,])] != 0, 1, sum) != 0,colnames(stoiMat) %in% rownames(non_na_MB[non_na_MB$P == FALSE,])]
-
-#for met
-rxnparFile[rxnparFile[,1] == corrFile$SpeciesType[corrFile$SpeciesID == "s_0504"],]
-
-mb.ids <- sapply(rownames(non_na_MB_stoi)[is.na(ele_comp_mat[rownames(ele_comp_mat) %in% rownames(non_na_MB_stoi),][,1])], function(x){corrFile$SpeciesType[corrFile$SpeciesID == x]})
-#for rxn 
-rxnFile[rxnFile$ReactionID %in% "r_1279",]
-#destroy glycine-cleavage complex (lipoylprotein)
-
-stoiMat <- stoiMat[,!is.na(mass_balanced[,2])]
-
-rxnIDtoEnz(colnames(stoiMat)[is.na(mass_balanced[,2])])
-
-
-
-
-rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
-
-metIDtoSpec(rownames(non_na_MB_stoi)[is.na(ele_comp_mat[rownames(ele_comp_mat) %in% rownames(non_na_MB_stoi),][,1])])
-metIDtoSpec("s_0504")
-
-	
-met_dict <- metIDtoSpec(rownames(non_na_MB_stoi))
-rxn_dict <- rxnIDtoEnz(colnames(non_na_MB_stoi))
-
-rownames(non_na_MB_stoi) <- sapply(c(1:length(non_na_MB_stoi[,1])), function(x){met_dict[x][[1]]})
-colnames(non_na_MB_stoi) <- sapply(c(1:length(non_na_MB_stoi[1,])), function(x){rxn_dict[x][[1]]})
-
-rxnparFile[rxnparFile[,1] %in% unique(mb.ids),]
-
-
-}
-
-#metIDtoSpec("s_0334")
-
-#rxnparFile[,3][rxnparFile[,1] %in% corrFile$SpeciesType[corrFile$SpeciesID %in% "r_0267"]]
-
-#taken from chebi
-#chem_form <- read.delim("../Yeast_reconstruction/Sequences/chemical_data.tsv", stringsAsFactors = FALSE)
-#chem_form <- chem_form[chem_form$SOURCE == "ChEBI",]
-
-
-#chem_form[chem_form$ID %in% met_chebi,]
-#rxnparFile[grep("7814", rxnparFile[,3]),]
-
 
 
 #### Search for rxns with only products or reactants ####
 
-is.unbalanced <- rep(NA, times = length(stoiMat[1,]))
+#is.unbalanced <- rep(NA, times = length(stoiMat[1,]))
 
-for(i in 1:length(stoiMat[1,])){
-	is.unbalanced[i] <- ifelse((length(stoiMat[,i][stoiMat[,i] > 0]) != 0) & (length(stoiMat[,i][stoiMat[,i] < 0]) != 0), FALSE, TRUE)
-	}
+#for(i in 1:length(stoiMat[1,])){
+#	is.unbalanced[i] <- ifelse((length(stoiMat[,i][stoiMat[,i] > 0]) != 0) & (length(stoiMat[,i][stoiMat[,i] < 0]) != 0), FALSE, TRUE)
+#	}
 
-rem.unbalanced <- colnames(stoiMat)[is.unbalanced]
+#rem.unbalanced <- colnames(stoiMat)[is.unbalanced]
 
 
 
 #### Remove generic reactions - those which are not mass balanced or are generalizations of a class of species ####
 
-named_stoi <- stoiMat
-met_dict <- metIDtoSpec(rownames(named_stoi))
-met_dict <- sapply(c(1:length(named_stoi[,1])), function(x){met_dict[x][[1]]})
-rxn_dict <- rxnIDtoEnz(colnames(named_stoi))
-rxn_dict <- sapply(c(1:length(named_stoi[1,])), function(x){rxn_dict[x][[1]]})
 
-rownames(named_stoi) <- met_dict
-colnames(named_stoi) <- rxn_dict
 
-labelz <- c("isa", "protein production", "biomass production", "growth", "lipid production", "IPC synthase")
-aggregate_rxns <- NULL
+#labelz <- c("isa", "protein production", "biomass production", "growth", "lipid production", "IPC synthase")
+#aggregate_rxns <- NULL
 
-for(l in 1:length(labelz)){
-	aggregate_rxns <- union(aggregate_rxns, rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE))
-	}
+#	aggregate_rxns <- union(aggregate_rxns, rxn_search(labelz[l], named_stoi, is_rxn = TRUE, index = TRUE))
+#	}
 
-rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
-rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE)
+#rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
+#rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE)
 
 #look for rxns that produce CO2 and make them irreversible
 
@@ -568,9 +408,7 @@ rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE)
 #### output files ####
 
 
-if(QPorLP == "LP"){
-  growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], growth = NA)
-  }
+
 if(QPorLP == "QP"){
   growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], L1 = NA, L2 = NA)
   }
@@ -581,7 +419,7 @@ flux_vectors <- list()
 ######################## Set up the equality and inequality constriants for FBA ################
 
 #remove reactions which are defective 
-S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(rem.unbalanced, rem.aggregate))]
+S_rxns = stoiMat#[,!(colnames(stoiMat) %in% c(rem.unbalanced, rem.aggregate))]
 
 
 #split reactions which can carry forward and reverse flux into two identical reactions
@@ -671,13 +509,6 @@ for(a_rxn in biomassRxSplit$rxDesignation){
   met_row <- sapply(unname(category_species), function(x){c(1:length(metabolites))[metabolites == x] })
   biomassConv[[a_rxn]]$conversion <- data.frame(name = names(category_species), ID = unname(category_species), index = unname(met_row))
   
-  #conversionMat <- matrix(0, ncol = length(met_row), nrow = length(metabolites))
-  #for(j in 1:length(met_row)){
-  #  conversionMat[met_row[j],j] <- 1
-  #  }
-  
-  #biomassConv[[a_rxn]]$conversionMatrix <- conversionMat
-
   }
 
 biomassS_split <- cbind(biomassS, biomassS, biomassS)
@@ -691,7 +522,7 @@ S <- cbind(S_rxns_split, freeS_split, nutrientS_split, effluxS_split, biomassS_s
 
 Sinfo <- rbind(stoiRxSplit, freeRxSplit, nutrientRxSplit, effluxRxSplit, biomassRxSplit)
 
-S <- S * t(t(rep(1, times = length(S[,1])))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #invert stoichiometry for backwards flux
+S <- S * t(t(rep(1, times = nrow(S)))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #invert stoichiometry for backwards flux
 
 ############ Gv >= h - bounds ########
 
@@ -742,118 +573,6 @@ S <- cbind(S, bookkeepingS)
 Fzero <- rep(0, times = length(S[,1]))
 
 
-  
-########### Linear programming to maximize growth given nutrient availability and calculate dual solution / shadow prices #######################
-
-if(QPorLP == "LP"){
-  
-  library(lpSolveAPI) # interface to lpSolve
-  
-  lpObj <- make.lp(nrow = 0, ncol = length(S[1,]))
-  for(i in 1:length(S[,1])){
-    add.constraint(lpObj, S[i,], "=", 0)
-  }
-  
-  for(treatment in 1:n_c){
-  
-    delete.column(lpObj, length(S[1,])) #delete the current composition function so that it can be overwritten
-    
-    compVec <- rep(0, times = length(metabolites))
-    for(i in 1:length(comp_met$SpeciesID)){
-      compVec[rownames(stoiMat) == comp_met$SpeciesID[i]] <- treatment_par[[treatment]]$"boundaryFlux"[i] 
-    }  
-    
-    add.column(lpObj, compVec) #add back the condition-specific molar anabolic rates
-  
-    cond_nut_bound <- data.frame(index = sapply(paste(paste(boundary_met$SpeciesName, "boundary"), "F", sep = '_'), function(x){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == x]}), treatment_par[[treatment]]$nutrients)
-    
-    set.bounds(lpObj, upper = cond_nut_bound$conc_per_t, columns = cond_nut_bound$index) #set maximize flux into nutrient import as the DR*concentration
-      
-    
-    # set condition-specific auxotrophies - overwrite possible auxotrophies with Inf max flux
-    auxoIndecies <- c(1:length(Sinfo[,1]))[Sinfo$reaction %in% possibleAuxotrophies]
-    set.bounds(lpObj, upper = ifelse(Sinfo[auxoIndecies,]$reaction %in% treatment_par[[treatment]]$auxotrophies, 0, Inf), columns = auxoIndecies)
-    
-    ## Determine flux distributions and growth rate - jointly maximizing growth and minimizing ##
-    
-    flux_penalty = 0.001 # resistance on fluxes to minimize feutality
-    
-    costFxn = c(rep(0, times = length(S[1,]) -1), -1) + c(rep(1, times = length(S[1,])-1), 0)*flux_penalty
-      
-    set.objfn(lpObj, costFxn)
-    solve(lpObj)
-    growth_rate$growth[treatment] <- get.objective(lpObj)*-1
-    
-    objective_flux <- get.variables(lpObj)
-    
-    collapsedFlux <- sapply(unique(Sinfo$reaction), function(frcombo){
-      frindices <- c(1:length(Sinfo[,1]))[Sinfo$reaction == frcombo]
-      sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * objective_flux[frindices])
-    })
-    
-    flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
-    
-    ## Determine shadow prices ##
-    
-    costFxn = c(rep(0, times = length(S[1,]) -1), -1)
-    set.objfn(lpObj, costFxn)
-    solve(lpObj)
-    
-    flux_vectors[[names(treatment_par)[treatment]]]$"shadowPrices" <- get.dual.solution(lpObj)[2:(length(S[,1])+1)] 
-    }  
-  
-  if(generatePhPP & (PhPPgenerated == FALSE) & is.na(treatment_par[[treatment]]$auxotrophies)){ #this code needs to be fixed - should be straightforward to modify lpObj
-    
-    for(nutComp in 1:length(PhPPcond$nutrients)){
-      nutrientConditions <- PhPPcond$gradient[[nutComp]]
-      
-      nutIndices <- sapply(colnames(nutrientConditions), function(rxmatch){c(1:length(Sinfo[,1]))[Sinfo$rxDesignation == paste(paste(rxmatch, "boundary"), "F", sep = "_")]})
-      
-      nutShadow <- matrix(NA, nrow = length(nutrientConditions[,1]), ncol = length(S[,1]))
-      nutGR <- rep(NA, times = length(nutrientConditions[,1]))
-            
-      for(nutCompConc in 1:length(nutrientConditions[,1])){
-        set.bounds(lpObj, upper = nutrientConditions[nutCompConc,], columns = nutIndices)
-        solve(lpObj)  
-        nutShadow[nutCompConc,] <- get.dual.solution(lpObj)[1:length(S[,1])]
-        nutGR[nutCompConc] <- get.objective(lpObj)
-        }
-      
-      xlattice <- sort(unique(nutrientConditions[,1]))
-      ylattice <- sort(unique(nutrientConditions[,2]))
-      zlattice <- matrix(nutGR, conc_samples + 1, conc_samples + 1, byrow = TRUE)[(conc_samples + 1):1,(conc_samples + 1):1]
-        
-        
-      PhPPcond$nutShadow[[nutComp]] <- nutShadow
-      PhPPcond$nutGR[[nutComp]] <- nutGR
-      
-      #determine how to color different regions by shadow price clustering
-      #heatmap.2(t(nutShadow), trace = "none")
-      
-      gradColor <- colorRampPalette(c("aliceblue", "firebrick1"))(1000)
-      nutDF <- cbind(nutrientConditions, GR = abs(nutGR), color = gradColor[ceiling(nutDF$GR/max(nutDF$GR)*1000)])
-      
-      PhPPcond$plotDF[[nutComp]] <- nutDF
-      
-      #plot3d(x = nutDF[,colnames(nutDF) == PhPPcond$nutrient[[nutComp]][1]], y = nutDF[,colnames(nutDF) == PhPPcond$nutrient[[nutComp]][2]], z = nutDF$GR, col = nutDF$color, xlab = paste(PhPPcond$nutrient[[nutComp]][1], "M/hr"), ylab = paste(PhPPcond$nutrient[[nutComp]][2], "M/hr"), zlab = "Biomass")
-      #nutDFtmp <- nutDF; colnames(nutDFtmp)[1:2] <- c("x", "y")
-      #wireframe(GR ~ x*y, data = nutDFtmp, xlab = paste(PhPPcond$nutrient[[nutComp]][1], "M/hr"), ylab = paste(PhPPcond$nutrient[[nutComp]][2], "M/hr"), zlab = "Biomass", drape = TRUE)
-      }
-    PhPPgenerated <- TRUE #only do this part once
-    }  
-     
-
-rxNames <- unique(Sinfo$reaction); rxNames[grep('r_[0-9]+', rxNames)] <- unname(rxnIDtoEnz(rxNames[grep('r_[0-9]+', rxNames)]))
-fluxMat <- matrix(NA, ncol = n_c, nrow = length(flux_vectors[[1]]$flux)); colnames(fluxMat) <- names(flux_vectors); rownames(fluxMat) <- rxNames
-
-shadowMat <- matrix(NA, ncol = n_c, nrow = length(flux_vectors[[1]]$shadowPrices)); colnames(shadowMat) <- names(flux_vectors); rownames(shadowMat) <- unname(metIDtoSpec(rownames(S)))
-
-for(i in 1:n_c){
-  shadowMat[,i] <- flux_vectors[[i]]$shadowPrices
-  fluxMat[,i] <- flux_vectors[[i]]$flux
-  }
-}
-
 ########### Quadratic programming to match nutrient uptake/excretion rates and produce biomass ####
 
 if(QPorLP == "QP"){
@@ -888,7 +607,6 @@ if(QPorLP == "QP"){
   residual_flux_stack <- NULL
   composition_balance <- NULL
   
-          
   ### iterate through conditions and optimize the fit of fluxes to boundary and biomass conditions ###
   
   for(treatment in 1:n_c){
@@ -1253,43 +971,6 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
   write.table(comp_outputDF, file = paste(c("SGDprojectionFiles/", comp_name, "fluxes.tsv"), collapse = ""), sep = "\t", row.names = F, col.names = T,  quote = F)
   write.table(ternary_outputDF, file = paste(c("SGDprojectionFiles/", comp_name, "TernaryFlux.tsv"), collapse = ""), sep = "\t", row.names = F, col.names = T,  quote = F)  
 }
-
-suspects <- comp_outputDF[,1][abs(comp_outputDF[,3]) > 0.005]
-suspectID <- rxnEnzymes[sapply(rxnEnzymes$genes, function(matcher){
-  sum(strsplit(matcher, split = ':')[[1]] %in% suspects) != 0
-  }),]
-                          
-
-acondFlux <- flux_vectors[[c(1:length(flux_vectors))[names(flux_vectors) == "Glucose 0.05"]]]
-
-
-reaction_info("r_0708")
-rxn_search(named_stoi, "glutamate deh", T)
-qplot(comp_outputDF[,4])
-heatmap.2(as.matrix(comp_outputDF[,-1]), symbreaks = TRUE)
-comp_outputDF[,1][comp_outputDF[,4] < -60]
-
-
-#### Analysing shadow prices ###
-
-shadowCond <- sort(names(treatmentPartials))
-shadowMets <- NULL; for(met in 1:length(shadowCond)){shadowMets <- union(shadowMets, names(treatmentPartials[[met]]))}; shadowMets <- sort(shadowMets)
-
-shadowMetAbund <- matrix(NA, nrow = length(shadowMets), ncol = length(shadowCond)); colnames(shadowMetAbund) <- shadowCond; rownames(shadowMetAbund) <- shadowMets
-for(j in shadowCond){
-  condPrice <- treatmentPartials[[j]]
-  shadowMetAbund[,colnames(shadowMetAbund) == j] <- condPrice[sapply(shadowMets, function(x){c(1:length(condPrice))[names(condPrice) == x]})]
-  }
-
-
-nonNULLshadow <- shadowMetAbund[rowSums(shadowMetAbund != 0) != 0,]
-nonNULLshadow[nonNULLshadow < -3] <- -3; nonNULLshadow[nonNULLshadow > 3] <- 3
-heatmap.2(nonNULLshadow, Colv = FALSE, trace = "n", dendrogram = "row", cexRow = 0.5, col = green2red(100))
-
-
-
-
-
 
 
 
