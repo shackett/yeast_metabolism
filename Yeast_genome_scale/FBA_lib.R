@@ -216,16 +216,17 @@ convert_to_elemental <- function(redStoi, modelMetComp){
   redStoi <- boundary_stoichiometry
   specieEle <- modelMetComp[chmatch(rownames(redStoi), modelMetComp$ID),]
   
-  specieEle[specieEle$name == "(1->3)-beta-D-glucan", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5) #one oxygen shared bc of condensation
-  specieEle[specieEle$name == "glycogen", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5)
-  specieEle[specieEle$name == "mannan", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5)
-  specieEle[specieEle$name == "D-glucose", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 12, 6)
-  specieEle[specieEle$name == "polyphosphate", colnames(specieEle) %in% c("O", "P")] <- c(4, 1)
+  specieEle[specieEle$name == "(1->3)-beta-D-glucan [cytoplasm]", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5) #one oxygen shared bc of condensation
+  specieEle[specieEle$name == "glycogen [cytoplasm]", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5)
+  specieEle[specieEle$name == "mannan [cytoplasm]", colnames(specieEle) %in% c("C", "H", "O")] <- c(6, 10, 5)
+  specieEle[specieEle$name == "polyphosphate [cytoplasm]", colnames(specieEle) %in% c("O", "P")] <- c(4, 1)
+  specieEle[specieEle$name == "complex sphingolipid [cytoplasm]", colnames(specieEle) %in% c("C", "H", "N", "O")] <- c(16, 35, 1, 2)  # this is primarily a begnign standin so the MW is not zero resulting in conversion problems
+
   specieEle[is.na(specieEle)] <- 0
   specieEle[,-c(1:2)] <- apply(specieEle[,-c(1:2)], c(1,2), as.numeric)
   specieEle <- specieEle[,c(TRUE, TRUE, colSums(specieEle[,-c(1:2)]) != 0)]
   
-  atomicMasses <- data.frame(element = c("C", "H", "N", "O", "P", "S"), mass = c(12.0107, 1.00794, 14.00674, 15.9994, 30.973761, 32.066))
+  atomicMasses <- data.frame(element = c("C", "H", "N", "O", "P", "R", "S"), mass = c(12.0107, 1.00794, 14.00674, 15.9994, 30.973761, 0, 32.066))
   
   if(all(atomicMasses$element == colnames(specieEle[,-c(1,2)]))){
     specieEle$MW <- t(t(specieEle[,-c(1,2)])) %*% t(t(c(atomicMasses[,2])))
@@ -258,7 +259,7 @@ gene_pathways <- function(kegg_enzyme_dict){
 trackMetConversion <- function(trackedMet, allRxns = FALSE){
   
   ## for a metabolite of interest, seperate reactions which carry flux consuming or producing it into each compartment and display a summary ##
-  if(allRxns){
+   if(allRxns){
     flux <- collapsedFlux
     }else{
     flux <- collapsedFlux[collapsedFlux != 0]
@@ -274,7 +275,7 @@ trackMetConversion <- function(trackedMet, allRxns = FALSE){
   
   boundaryStoi <- qpModel$A[,sapply(names(flux)[is.na(index_match)], function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
   boundaryStoi <- boundaryStoi[(rownames(boundaryStoi) %in% rownames(stoiMat)),] #remove bookkeeping flux
-  reducedStoi[,is.na(index_match)] <- boundaryStoi
+  reducedStoi[,is.na(index_match)] <- as.matrix(boundaryStoi)
   
   metNames <- metIDtoSpec(rownames(reducedStoi))
   

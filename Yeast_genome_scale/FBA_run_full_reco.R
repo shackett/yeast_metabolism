@@ -72,24 +72,6 @@ modelMetComp <- read.delim("flux_cache/stoiMetsComp.tsv", header = TRUE)
 
 
 
-#rxnFileAppend <- read.delim("customRxns.txt", sep = "\t")
-#rxnFile <- rbind(rxnFile, rxnFileAppend)
-
-#customMets <- read.delim("customMets.txt", sep = "\t")
-#corrFileAppend <- customMets[,colnames(customMets) %in% c("SpeciesID", "SpeciesName", "SpeciesType", "Compartment")]
-#corrFile <- rbind(corrFile, corrFileAppend)
-
-#rxnparFileAppend <- customMets[,colnames(customMets) %in% c("SpeciesID", "SpeciesType", "Evidence")]
-#colnames(rxnparFile) <- colnames(rxnparFileAppend)
-#rxnparFile <- rbind(rxnparFile, rxnparFileAppend)
-
-#MetCompAppend <- modelMetComp[1:nrow(customMets),]
-#MetCompAppend$ID <- customMets$SpeciesID
-#MetCompAppend$name <- customMets$SpeciesName
-#MetCompAppend[,!(colnames(MetCompAppend) %in% c("ID", "name"))] <- NA
-
-#modelMetComp <- rbind(modelMetComp, MetCompAppend)
-
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 ##### Load files describing boundary conditions and reaction reversibility #####
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -225,17 +207,21 @@ centralCmatch <- unlist(lapply(pathways, function(x){
 centralCrxnMatch <- rep(FALSE, times = length(reactions))
 centralCrxnMatch[reactions %in% reactionMatches$reactionID[centralCmatch]] <- TRUE
 
-rxn_search('exchange', is_rxn = F)
+ETCrxns <- c("r_0226", "r_0438", "r_0439", "r_0773", "r_1021", "r_0831", "r_0832") # electron transport reactions
 
-centralCrxnMatch[names(centralCrxnMatch) %in% 'r_0449'] <- FALSE ### remove FBPase's annotation as Glyc/Gluconeogenic in order to direct excess ATP hydrolysis through a designated reaction (r_4042) 
+centralCrxnMatch[reactions %in% ETCrxns] <- TRUE
 
 # favor flux through cytosolic ATPase, + transport of ATP, ADP + Pi to restrict the wasting of excess energy to a single reaction
 
-ATPbreakdownRxns <- c("r_4042")#, "r_0249", "r_1149", "r_1150", "r_1167", "r_1168", "r_1459", "r_1460", "r_1461", "r_1462", "r_1463", "r_1868")
-
+ATPbreakdownRxns <- c("r_4042", "r_1110", "r_1111", "r_1661", "r_3543", "r_3585", "r_3601", "r_3651", "r_3666",
+  "r_1244", "r_1245", "r_2005", "r_2008", "r_3537", "r_3605", "r_3649", "r_3663", "r_3940", "r_3961")
 
 prot_penalty <- (1 - prot_matches)/2 + (1 - centralCrxnMatch)/2 # penalization by fraction of non-measured enzymes and favor central C metabolism
-prot_penalty[(reactions %in% ATPbreakdownRxns)] <- 0.1
+prot_penalty[reactions %in% ATPbreakdownRxns] <- 0.1
+
+freeTransportRxns = c("r_1277", "r_2096", "r_1978", "r_1979", "r_1696", "r_1697") # transport of water, carbon dioxide and oxygen
+prot_penalty[reactions %in% freeTransportRxns] <- 0
+
 
 ####
 #save(list = ls(), file = "FBAinputFiles.Rdata")
@@ -263,7 +249,7 @@ for(i in 1:n_c){
   
   #remove phosphate because empirical uptake rates far exceed capacity of biomass assimilation
   measured_bounds <- data.frame(measured_bounds)
-  measured_bounds[measured_bounds$specie == "phosphate", colnames(measured_bounds) %in% c("change", "sd")] <- NA
+  measured_bounds[measured_bounds$specie == "phosphate [extracellular]", colnames(measured_bounds) %in% c("change", "sd")] <- NA
   measured_bounds <- data.table(measured_bounds)
   
   
@@ -380,32 +366,20 @@ for(x in 1:length(free_flux)){
 
 
 
-#### Remove generic reactions - those which are not mass balanced or are generalizations of a class of species ####
-
-
+#### Remove reactions which are incompatable with our method - e.g. an invariant biomass function ####
 
 #labelz <- c("isa", "protein production", "biomass production", "growth", "lipid production", "IPC synthase")
-#aggregate_rxns <- NULL
-
-#	aggregate_rxns <- union(aggregate_rxns, rxn_search(labelz[l], named_stoi, is_rxn = TRUE, index = TRUE))
-#	}
-
-#rem.aggregate <- colnames(stoiMat)[aggregate_rxns]
-#rxn_search(named_stoi, labelz[l], is_rxn = TRUE, index = TRUE)
-
-#look for rxns that produce CO2 and make them irreversible
-
-#carb_match <- rxn_search(named_stoi, "carbon dioxide", is_rxn = FALSE, index = TRUE)
-
-#co_two_producing_rx <- apply(stoiMat[met_dict == "carbon dioxide",carb_match] < 0, 2, sum) == 0
-#co_two_producing_rx <- names(co_two_producing_rx)[co_two_producing_rx]
-
-#reversibleRx$reversible[reversibleRx$rx %in% co_two_producing_rx] <- 1
+labelz <- c("biomass")
+aggregate_rxns <- NULL
+for(l in length(labelz)){
+  aggregate_rxns <- union(aggregate_rxns, rxn_search(labelz[l], named_stoi, is_rxn = TRUE, index = TRUE))
+	}
 
 
+###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
+####### Setup matrices defining the stoichiometry of each reaction and how reactions will be constrained #######
+###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 
-
-#### output files ####
 
 
 
@@ -419,7 +393,7 @@ flux_vectors <- list()
 ######################## Set up the equality and inequality constriants for FBA ################
 
 #remove reactions which are defective 
-S_rxns = stoiMat#[,!(colnames(stoiMat) %in% c(rem.unbalanced, rem.aggregate))]
+S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(aggregate_rxns))]
 
 
 #split reactions which can carry forward and reverse flux into two identical reactions
@@ -524,7 +498,7 @@ Sinfo <- rbind(stoiRxSplit, freeRxSplit, nutrientRxSplit, effluxRxSplit, biomass
 
 S <- S * t(t(rep(1, times = nrow(S)))) %*% t(ifelse(Sinfo$direction == "R", -1, 1)) #invert stoichiometry for backwards flux
 
-############ Gv >= h - bounds ########
+############ Gv >= h : bounds ########
 
 ## previous splitting of reversible reactions, allows restriction of each reaction's flux to be either non-negative or non-positive (depending on constrained direction) ##
 
@@ -568,12 +542,14 @@ for(arxn in unique(nutrientRxSplit$reaction)){
 Sinfo <- rbind(Sinfo, bookkeepingRx)
 S <- cbind(S, bookkeepingS)
 
-################ F - flux balance ############
+################ F : flux balance ############
 
 Fzero <- rep(0, times = length(S[,1]))
 
+###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
+####### Quadratic programming to match nutrient uptake/excretion rates and produce biomass #####
+###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 
-########### Quadratic programming to match nutrient uptake/excretion rates and produce biomass ####
 
 if(QPorLP == "QP"){
 
@@ -587,7 +563,7 @@ if(QPorLP == "QP"){
 
   
   flux_elevation_factor <- 1000
-  flux_penalty <- 1000/(flux_elevation_factor)
+  flux_penalty <- 100/(flux_elevation_factor)
   
   qpModel$A <- Matrix(S)
   qpModel$rhs <- Fzero #flux balance
@@ -792,8 +768,8 @@ if(QPorLP == "QP"){
 #reaction_info('r_0249')
 #rxnFile[rxnFile$ReactionID == "r_0005",]
 #trackedMet = '^NAD\\(\\+\\)'
-#trackMetConversion('^2-oxoglutarate', T)
-
+#trackMetConversion('^phosphate', T)
+#trackMetConversion('Gly\\-tRNA\\(Gly\\)', T)
 
 ########### Mass balance of individual conditions ####### 
 
@@ -863,9 +839,11 @@ std_flux_rxnName <- std_flux
 rownames(std_flux_rxnName) <- apply(rxNames, 1, function(x){ifelse(x[1] == x[2], x[1], paste(x, collapse = '_'))})
 std_flux_rxnName <- std_flux_rxnName[grep('boundary|composition', rownames(std_flux_rxnName), invert = T),]
 
-
-
-write.output(std_flux_rxnName, "Flux_analysis/fluxCarriedHM.tsv")
+####
+# add a column for the L1 penalty and write to a data.frame
+std_flux_rxnName_withL1 = data.frame(L1penalty = -3*prot_penalty[chmatch(substr(rownames(std_flux_rxnName), 1, 6), names(prot_penalty))], std_flux_rxnName)
+rownames(std_flux_rxnName_withL1) = rownames(std_flux_rxnName)
+write.output(std_flux_rxnName_withL1, "Flux_analysis/fluxCarriedHM.tsv")
 
 rawFlux <- fluxMat
 rownames(rawFlux) <- rxNames$reactionID
