@@ -4,6 +4,7 @@ library(ggplot2)
 library(data.table)
 library(reshape2)
 library(RColorBrewer)
+library(stringr)
 
 #### Options ####
 
@@ -19,7 +20,17 @@ QPorLP <- "QP" # LP and PhPP no longer supported
 if(QPorLP == "QP"){
   #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so
   library(gurobi) # QP solver interface
-  }else{print("try the QP, all the cool kids are doing it")}
+  
+}else if (QPorLP == 'checkfeas'){
+  print("This run identifies reactions and metabolites that are infeasible in the final S matrix")
+}else{print("try the QP, all the cool kids are doing it")}
+
+# if the gurobi solver is used via python, what kind of model should be solved
+# which modus should be used for the problem
+modeGurobi = 'python'
+pythonMode = 'll' # simple,thdyn, dir or ll (loopless)
+FVA = 'T' # Should flux variblility analysis be performed
+useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -28,18 +39,16 @@ if(QPorLP == "QP"){
 
 ### Load SBML files describing metabolites, rxn stoichiometry ###
 
-inputFilebase = "yeast"
-rxnFile = read.delim(paste("rxn_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
-rxnparFile = read.delim(paste("rxn_par_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
-corrFile = read.delim(paste("spec_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
-specparFile = read.delim(paste("species_par_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
-compFile <- read.delim(paste("comp_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
-fluxDirFile <- read.delim(paste("flux_dir_", inputFilebase, ".tsv", sep = ""), stringsAsFactors = FALSE)
+rxnFile = read.delim("companionFiles/rxn_yeast.tsv")
+rxnparFile = read.delim("companionFiles/rxn_par_yeast.tsv")
+corrFile = read.delim("companionFiles/spec_yeast.tsv")
+specparFile = read.delim("companionFiles/species_par_yeast.tsv")
+compFile = read.delim("companionFiles/comp_yeast.tsv")
+fluxDirFile = read.delim("companionFiles/flux_dir_yeast.tsv")
 
 ### Add additional reactions ###
 
-customRx <- "customRxns.txt"
-customList <- parse_custom("customRxns.txt")
+customList <- parse_custom("companionFiles/customRxns.txt")
 
 rxnFile <- rbind(rxnFile, customList$rxnFile)
 rxnparFile <- rbind(rxnparFile, customList$rxnparFile)
@@ -77,7 +86,7 @@ modelMetComp <- read.delim("flux_cache/stoiMetsComp.tsv", header = TRUE)
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 
 #compositionFile <- read.delim("../Yeast_comp_energy.txt") #energy required to assimilate biomass components
-nutrientFile <- read.delim("Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
+nutrientFile <- read.delim("companionFiles/Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 nutModelNames <- data.frame(commonName = rownames(nutrientFile), modelName = sapply(rownames(nutrientFile), function(x){paste(x, '[extracellular]')}))
 rownames(nutrientFile) <- nutModelNames$modelName
@@ -96,14 +105,19 @@ reversibleRx$modelBound = fluxDirFile$FluxBound[chmatch(reversibleRx$rx, fluxDir
 
 reversibleRx$reversible = ifelse(reversibleRx$modelBound == "greaterEqual", 1, 0) # directionality is coded as -1: irreversibly backward, 0: reversible, 1: irreversibly forward
 
+### append directionality with manual annotation in several cases ###
+manualDirectionality <- read.delim("companionFiles/thermoAnnotate.txt")
+reversibleRx$manual[chmatch(manualDirectionality$Reaction, reversibleRx$rx)] <- manualDirectionality$Direction
+reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.na(reversibleRx$manual)]
 
 
-#ccPred <- read.delim("cc_dG_matlab.tsv")
+# add the component contribution dG predictions 
+ccPred <- read.delim("cc_dG_matlab.tsv")
 #ccPred$dir <- 0
 #ccPred$dir[ccPred$dGr - 1.96*ccPred$dGrSD > 30] <- -1
 #ccPred$dir[ccPred$dGr + 1.96*ccPred$dGrSD < -30] <- 1
 
-#reversibleRx[chmatch(ccPred$reaction, reversibleRx$rx), colnames(reversibleRx) %in% c("CCdG", "CCdGsd", "CCdGdir")] <- ccPred[,-1]
+#reversibleRx[chmatch(ccPred$reaction, reversibleRx$rx), colnames(reversibleRx) %in% c("CCdG", "CCdGsd")] = ccPred[,-1]
 
 #reversibleRx$reversible[!is.na(reversibleRx$CCdGdir)] <- reversibleRx$CCdGdir[!is.na(reversibleRx$CCdGdir)]
 
@@ -563,7 +577,7 @@ if(QPorLP == "QP"){
 
   
   flux_elevation_factor <- 1000
-  flux_penalty <- 100/(flux_elevation_factor)
+  flux_penalty <- 500/(flux_elevation_factor)
   
   qpModel$A <- Matrix(S)
   qpModel$rhs <- Fzero #flux balance
