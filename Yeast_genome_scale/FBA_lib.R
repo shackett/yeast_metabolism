@@ -129,7 +129,98 @@ flip.rxn <- function(reactions, joint.stoi){
 is.not.zero = function(vec){
 	length(vec[vec!=0]) != 0
 	}	
-	
+
+refine_stoi <- function(stoiMat, reversibleRx, modelMetComp, measured_bounds){
+  
+  require(data.table)
+  
+  #### Two tasks using stoichiometry as a graph: 1) Look at stoichiometric connections and identify loops that only differ in cofactor usage. 2) Find and remove orphaned nodes ####
+  
+  validSinks = c(comp_by_cond$compositionFile$AltName[comp_by_cond$compositionFile$varCategory != "Maintenance ATP hydrolysis"], unique(measured_bounds$specie[measured_bounds$type == "excretion"]))
+  validSinks = modelMetComp$ID[chmatch(validSinks, modelMetComp$name)]
+  
+  ### remove reaction which cannot carry flux because of stoichiometry structure ###
+  
+  #extraneous_mets <- modelMetComp$ID[sort(union(c(1:nrow(modelMetComp))[!is.na(modelMetComp$C) & modelMetComp$C ==0], grep('^NAD|^ATP|dioxide',  modelMetComp$name)))]
+  #core_rxnFile <- rxnFile[!is.na(rxnFile$StoiCoef) & !(rxnFile$Metabolite %in% extraneous_mets),]
+  core_rxnFile <- rxnFile[!is.na(rxnFile$StoiCoef),]
+  core_rxnFile$reversible = reversibleRx$reversible[chmatch(core_rxnFile$ReactionID, reversibleRx$rx)]
+
+  edgeDF <- rbind(
+    data.frame(source = core_rxnFile$Metabolite[core_rxnFile$StoiCoef < 0 & core_rxnFile$reversible == 1], dest = core_rxnFile$ReactionID[core_rxnFile$StoiCoef < 0 & core_rxnFile$reversible == 1]),
+    data.frame(source = core_rxnFile$ReactionID[core_rxnFile$StoiCoef > 0 & core_rxnFile$reversible == 1], dest = core_rxnFile$Metabolite[core_rxnFile$StoiCoef > 0 & core_rxnFile$reversible == 1]),
+    data.frame(source = core_rxnFile$ReactionID[core_rxnFile$reversible == 0], dest = core_rxnFile$Metabolite[core_rxnFile$reversible == 0]),
+    data.frame(source = core_rxnFile$Metabolite[core_rxnFile$reversible == 0], dest = core_rxnFile$ReactionID[core_rxnFile$reversible == 0])
+    )
+  
+  g <- graph.empty() + vertices(union(edgeDF$source, edgeDF$dest))
+  g[from=edgeDF$source, to=edgeDF$dest] <- TRUE
+  
+  #### find all enzymes which can reach a valid biomass sink ###
+  
+  validSinks <- validSinks[validSinks %in% V(g)$name] #some inorganic or cofactor species removed
+  validSinks = data.frame(sID = validSinks, vertex = c(1:vcount(g))[chmatch(validSinks, V(g)$name)])
+  
+  
+  feedable_vertices <- NULL
+  for(a_sink in 1:nrow(validSinks)){
+    feedable_vertices[[a_sink]] <- subcomponent(g, validSinks$vertex[a_sink], "in")
+    }
+  
+  all_feedable_vertices <- sort(unique(unlist(feedable_vertices)))
+  
+  orphaned_rxns <- rxnIDtoEnz(grep('^r_', V(g)$name[-all_feedable_vertices], value = T)) #reactions which cannot carry flux into a biomass component
+  orphaned_mets <- metIDtoSpec(grep('^s_', V(g)$name[-all_feedable_vertices], value = T)) #metabolites which have no valid paths to biomass
+  
+  ### Identify loops - strongly connected clusters 
+  
+  extraneous_mets <- modelMetComp$ID[sort(union(c(1:nrow(modelMetComp))[!is.na(modelMetComp$C) & modelMetComp$C == 0], grep('^NAD|^[CGA]TP \\[|^[CGA]DP \\[|^[CGA]MP \\[|dioxide|biomass|^lipid|^coenzyme A',  modelMetComp$name)))]
+  core_rxnFile <- rxnFile[!is.na(rxnFile$StoiCoef) & !(rxnFile$Metabolite %in% extraneous_mets),]
+  core_rxnFile$reversible = reversibleRx$reversible[chmatch(core_rxnFile$ReactionID, reversibleRx$rx)]
+  core_rxnFile <- core_rxnFile[grep('biomass', core_rxnFile$Reaction, invert = T),] # remove boundary reactions
+  
+  edgeDF <- rbind(
+    data.frame(source = core_rxnFile$Metabolite[core_rxnFile$StoiCoef < 0 & core_rxnFile$reversible == 1], dest = core_rxnFile$ReactionID[core_rxnFile$StoiCoef < 0 & core_rxnFile$reversible == 1]),
+    data.frame(source = core_rxnFile$ReactionID[core_rxnFile$StoiCoef > 0 & core_rxnFile$reversible == 1], dest = core_rxnFile$Metabolite[core_rxnFile$StoiCoef > 0 & core_rxnFile$reversible == 1]),
+    data.frame(source = core_rxnFile$ReactionID[core_rxnFile$reversible == 0], dest = core_rxnFile$Metabolite[core_rxnFile$reversible == 0]),
+    data.frame(source = core_rxnFile$Metabolite[core_rxnFile$reversible == 0], dest = core_rxnFile$ReactionID[core_rxnFile$reversible == 0])
+    )
+  
+  g <- graph.empty() + vertices(union(edgeDF$source, edgeDF$dest))
+  g[from=edgeDF$source, to=edgeDF$dest] <- TRUE
+  
+  ### remove high betweenness pathological reactions ###
+  g_between <- betweenness(g)
+  high_btwness <- sort(g_between, decreasing = T)[1:100]
+  plot(high_btwness)
+  
+  g_degree <- degree(g)
+  high_degree <- sort(g_degree, decreasing = T)[1:100]
+  metIDtoSpec(names(high_degree))
+  
+  ### remove nodes that are isolated through weak connectivity - not even connected ... ###
+  
+  graph_clusters_weak <- clusters(g, mode = "weak")
+  isolated_rxn_ex <- c(1:vcount(g))[graph_clusters_weak$membership == which(graph_clusters_weak$csize == 5)[1]]
+  isolated_rxn_edges <- edgeDF[unique(unlist(sapply(isolated_rxn_ex, function(x){incident(g, x, mode = "all")}))),] # get all adjacent edges
+  edgeDF[edgeDF$source %in% unlist(isolated_rxn_edges) | edgeDF$dest %in% unlist(isolated_rxn_edges),] # confirm weak connectivity
+  
+  g <- delete.vertices(g, c(1:vcount(g))[graph_clusters_weak$membership != which.max(graph_clusters_weak$csize)])
+  
+  ### isolate strongly connected modules - identifying loops ###
+  
+  
+  graph_clusters_strong <- clusters(g, mode = "strong")
+  
+  strong_clusters <- data.frame(set = 0, vertex = V(g)$name[graph_clusters_strong$membership %in% c(1:graph_clusters_strong$no)[graph_clusters_strong$csize != 1]], cluster = graph_clusters_strong$membership[graph_clusters_strong$membership %in% c(1:graph_clusters_strong$no)[graph_clusters_strong$csize != 1]])
+  gred <- delete.vertices(g, c(1:vcount(g))[V(g)$name %in% names(high_btwness)])
+  
+  clusters(gred, mode = "strong")
+  
+}
+
+
+
 ######### Functions to convert between IDs and species ######
 
 metIDtoSpec <- function(meta, includeComp = F){
@@ -375,7 +466,235 @@ trackMetConversion <- function(trackedMet, allRxns = FALSE){
   print(compartment_balance)
 }
 
+##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
 ######## Diagnostic flux prediction methods ##########
+##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
+
+
+FVA_setup <- function(useCluster){
+
+  ### Setup a model that can be used to run Gurobi through python - specifically implementing flux variability analysis ###
+  
+  # This is a character vector with length:
+  # tables are sent row by row + 1 row for colnames, 1 for rownames
+  # vectors as 1 row
+  # each row has the variable name as first entry
+  # variables: A(tab), rhs(vec), sense(vec), lb(vec), ub(vec), Q(tab), obj(vec), parameters(vec)
+  # namesrxndG(vec),CI95rxndG(vec),namesthdynMet(vec),lbthdynMet(vec),ubthdynMet(vec),pythonMode(vec)  
+  
+  if (useCluster != 'load'){
+    
+    # 10 vec + 4 row/col names = 14 single rows
+    lenPyt <- 15 + nrow(qpModel$A) + nrow(qpModel$Q)
+    
+    pythonDat <- vector(mode="character",length=lenPyt)
+    pos =1
+    
+    pythonDat[pos] = paste(c('mode',pythonMode),collapse='\t')
+    pos <- pos+1
+    pythonDat[pos] = paste(c('FVA',FVA),collapse='\t')
+    pos <- pos+1
+    
+    for(i in 1:nrow(qpModel$A)){
+      pythonDat[pos] = paste(c('A',qpModel$A[i,]),collapse='\t')
+      pos <- pos+1
+    }
+    pythonDat[pos] = paste(c('rownamesA',rownames(qpModel$A)),collapse='\t')
+    pos <- pos+1
+    pythonDat[pos] = paste(c('colnamesA',colnames(qpModel$A)),collapse='\t')
+    pos <- pos+1
+    
+    for(i in 1:nrow(qpModel$Q)){
+      pythonDat[pos] = paste(c('Q',qpModel$Q[i,]),collapse='\t')
+      pos <- pos+1
+    }
+    pythonDat[pos] = paste(c('rownamesQ',rownames(qpModel$Q)),collapse='\t')
+    pos <- pos+1
+    pythonDat[pos] = paste(c('colnamesQ',colnames(qpModel$Q)),collapse='\t')
+    pos <- pos+1
+    
+    pythonDat[pos] = paste(c('rhs',qpModel$rhs),collapse='\t')
+    pos <- pos+1
+    pythonDat[pos] = paste(c('sense',qpModel$sense),collapse='\t')
+    pos <- pos+1
+    pythonDat[pos] = paste(c('lb',qpModel$lb),collapse='\t')
+    pos <- pos+1
+    pythonDat[pos] = paste(c('ub',qpModel$ub),collapse='\t')
+    pos <- pos+1
+    pythonDat[pos] = paste(c('obj',qpModel$obj),collapse='\t')
+  }  
+  
+  if (useCluster == 'write'){
+    write(pythonDat,file=paste('./Gurobi_python/test_files/pythonDat_',treatment,'.txt',sep=''),sep='\t')
+    pythout = NULL
+  } else if(useCluster == 'load'){
+    pythout = (read.table(paste('./Gurobi_python/test_files/pythout_',treatment,'.txt',sep=''),sep='$'))[,1]
+  } else {
+    pythout <- system('python ./Gurobi_python/qp_fba_clust.py',intern=T,input=pythonDat)
+  }
+  return(pythout)
+}
+
+
+FVA_read <- function(pythout){
+  
+  ### Parse flux variability model which was run in python ###
+  
+  idxS = which(pythout == 'output_start')+1
+  idxE = which(pythout == 'output_end')-1
+  if (length(idxE)==0){
+    idxE = length(pythout)
+  }
+  gurobiOutL[[treatment]] <- pythout[1:(idxS-1)]
+  #print(gurobiOutL[[treatment]])
+  
+  solvedModel = list()
+  modelOut <- data.frame(param = sapply(pythout[idxS:idxE],function(x){strsplit(x,'\t')[[1]][1]}))
+  modelOut$value <- as.numeric(sapply(pythout[idxS:idxE],function(x){strsplit(x,'\t')[[1]][2]}))
+  solvedModel$x <- modelOut$value[ modelOut$param %in% colnames(qpModel$A)]
+  print(1)
+  modelOut$Type <- sapply(modelOut$param,function(x){
+    if (substr(x,1,5) =='RTlnc'){
+      return('conc')
+    } else if (substr(x,1,3) =='dGr'){
+      if(substr(x,nchar(x),nchar(x))=='R'){
+        return('dGrR')
+      } else {
+        return('dGrF')
+      }
+    } else if (substr(x,nchar(x)-1,nchar(x)) == 'sw'){
+      return('sw')
+    } else if (substr(x,nchar(x)-5,nchar(x)) == 'offset'){
+      return('offset')
+    } else if(substr(x,nchar(x),nchar(x))=='F'){
+      return('rxnF')
+    } else if(substr(x,nchar(x),nchar(x))=='R'){
+      return('rxnR')
+    } else if (substr(x,nchar(x)-2,nchar(x)) == 'min'){
+      return(paste('FVAmin',gsub('(.*_FVA_)||(_min)','',x),sep='_'))
+    } else if (substr(x,nchar(x)-2,nchar(x)) == 'max'){
+      return(paste('FVAmax',gsub('(.*_FVA_)||(_max)','',x),sep='_'))
+    } else return ('rxnF')
+  })
+  print(1.5)
+  # what is the type described by the parameter (is it associated with a reaction or metabolites (eg RTln))
+  modelOut$asType <- sapply(modelOut$param,function(x){
+    if(substr(x,1,5) =='RTlnc'){
+      return('met')
+    } else {
+      return('rxn')
+    }
+  })
+  
+  modelOut$asID <- sapply(1:length(modelOut$param),function(x){
+    name =modelOut$param[x]
+    name = gsub('_match','',name)
+    if (modelOut$asType[x] == 'rxn'){
+      idx = regexec('r_...._',name)[[1]][1]
+      if (idx >0){
+        return(substr(name,idx,idx+5))
+      } else {
+        if (modelOut$Type[x] == 'sw'){
+          return(substr(name,1,nchar(name)-3))
+        } else if (modelOut$Type[x] == 'offset'){
+          return(substr(name,1,nchar(name)-7))
+        } else if (modelOut$Type[x] %in% c('dGrR','dGrF')){
+          return(substr(name,5,nchar(name)-2))
+        } else if (grepl('FVA',modelOut$Type[x])){
+          return(strsplit(name,'_FVA')[[1]][1])
+        } else {
+          return(substr(name,1,nchar(name)-2))
+        }
+      }
+    }else { # metabolites
+      idx = regexec('_s_',name)[[1]][1]
+      return(substr(name,idx+1,nchar(name)))
+    }
+  })
+  
+  modelOut = reshape(modelOut,idvar = c('asID','asType'),timevar='Type',drop =c('param'),direction ='wide')
+  colnames(modelOut) <- gsub('value\\.','',colnames(modelOut))
+  
+  modelOut$rxnNet <- (sapply(modelOut$rxnF,function(x){max(c(x,0),na.rm=T)})
+                      -sapply(modelOut$rxnR,function(x){max(c(x,0),na.rm=T)}) +
+                        sapply(modelOut$offset,function(x){max(c(x,0),na.rm=T)}))/flux_elevation_factor
+  modelOut$rxnNet[abs(modelOut$rxnNet) < 1e-19] = 0
+  modelOut$name <- sapply(modelOut$asID,function(x){
+    if (substr(x,1,2) == 'r_'){
+      return(rxnIDtoEnz(x))
+    } else if (substr(x,1,2) == 's_'){
+      return(metIDtoSpec(x))
+    } else return(x)
+  })
+  modelOut$comparID <- sapply(modelOut$asID,function(x){
+    if (substr(x,1,2) == 'r_'){
+      return(rxnFile$Compartment[ rxnFile$ReactionID == x][1])
+    } else (return(NA))
+  })
+  
+  modelOut
+  }
+
+
+FVA_summary <- function(modelOut){
+  
+  ### Using python-gurobi output create a clean output showing flux bounds relative to objective value ###
+  
+  idx <- grepl('FVA',colnames(modelOut))
+  modelOut[,idx] <- modelOut[,idx]/flux_elevation_factor
+  modelOut[,idx][abs(modelOut[,idx])< 1e-19 & !is.na(modelOut[,idx])] = 0
+  #modelOut$FVAvar <- (modelOut$FVAmax-modelOut$FVAmin)/abs(modelOut$rxnNet)
+  
+  # look at backwards reactions
+  fil = modelOut$rxnNet < 0
+  
+  
+  # write reactions out for fluxviz
+  fil <- modelOut$asType =='rxn' & abs(modelOut$rxnNet) != 0
+  fil <- modelOut$asType =='rxn' & abs(modelOut$rxnNet) >0.01
+  #hist(modelOut$rxnNet[fil],xlim=c(-0.02,0.02),ylim=c(0,10),breaks=2000,freq=F)
+  #write.table(modelOut[fil,c('asID','rxnNet')],file='fluxviz.val',sep='\t',
+  # row.names=F,col.names=F,quote=F)
+  modelOutL[[treatment]] <- modelOut
+  # finite fva: a = modelOut[ !is.finite(modelOut$FVAmax) | !is.finite(modelOut$FVAmin) ,]
+  # reactions by name:a = modelOut[ grep('glucose',modelOut$name) ,]
+  #well constraint rxn:
+  print(2)
+  
+  ## make the 3D FVA matrix
+  FVAcuts <- sapply(colnames(modelOut)[grepl('FVA.*min',colnames(modelOut))],function(x){
+    strsplit(x,'_')[[1]][2]
+  })
+  FVAcuts <- as.numeric(FVAcuts)
+  names(FVAcuts) <- colnames(modelOut)[grepl('FVA.*min',colnames(modelOut))]
+  FVAcuts <- FVAcuts-min(FVAcuts)
+  FVAcuts <- sort(FVAcuts)
+  FVAval <- array(0, dim=c(3,nrow(modelOut),length(FVAcuts)))
+  dimnames(FVAval)[[1]] <- c('FVAmin','FVAmax','FVAvar')
+  dimnames(FVAval)[[2]] <- rownames(modelOut)
+  dimnames(FVAval)[[3]] <- as.character(FVAcuts)
+  
+  FVAval['FVAmin',,as.character(FVAcuts)] <- as.matrix(modelOut[,names(FVAcuts)])
+  FVAval['FVAmax', ,as.character(FVAcuts)] <- as.matrix(modelOut[,gsub('min','max',names(FVAcuts))])
+  FVAval['FVAvar', , ] <- sapply(as.character(FVAcuts),function(i){
+    (FVAval['FVAmax', ,i ]-FVAval['FVAmin', , i])/apply(FVAval[c('FVAmax','FVAmin'), ,i ],2,mean)})
+  FVAL[[treatment]] <- FVAval
+  rm(FVAval) 
+  
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 maxFlux <- function(){
   ## Using the current QP model, for each standard reaction (those in the initial model) determine the maximum flux that can be carried through each reaction.
