@@ -18,8 +18,22 @@ chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.0
 
 ##### Import list of metabolite abundances and rxn forms
 
-load("rxnf_formulametab.rdata") #### run Vito script which using the stoichiometric matrix and FBA_run files to construct a list of reaction information, including a mechanism.
+##### to construct a list of reaction information, including a mechanism.
+# Match Boer metabolites to tIDs using chemical similarity (ChEBI + ChemmineR)
+# Using BRENDA data, determine all species which could activate or inhibit our rxns and were ascertained via metabolomics
+### KEGG RIDs -> EC -> modifiers, activators and ligands
+### Determine the Ki and Km of inhibitors
+# Use chemical similarity to match substrates and products for each reaction to determine where competitive inhibition of the product will act
+# Generate a list of reaction form parameterizations
+### Using reversible MM kinetics as the base form
+### Additional reactions with BRENDA activators and inhibitors
+### To search for novel allosteric modifiers in an unsupervised manner - allow for reaction for extensions which 
 
+if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
+  source("reactionStructures.r")
+}else{
+  load("rxnf_formulametab.rdata")
+}
 
 ##### Import fluxes
 load("fluxSummaryQP.Rdata") #load flux through each reaction
@@ -34,18 +48,6 @@ enzyme_abund <- enzyme_abund[,c(16:20, 1:5, 11:15, 6:10, 21:25)] #reorder protei
 ##### Associate enzymes with pathways ######
 
 kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
-if(is.null(kegg_enzyme_dict$PATHWAY)){
-  genes_to_pathways = read.delim("http://rest.kegg.jp/link/pathway/sce", header = FALSE); colnames(genes_to_pathways) <- c("gene", "pathwayCode")
-  pathway_names = read.delim("http://rest.kegg.jp/list/pathway/sce", header = FALSE); colnames(pathway_names) <- c("pathwayCode", "pathway")
-  genes_to_pathways$gene <- gsub('sce:', '', genes_to_pathways$gene)
-  pathway_names$pathway <- sapply(pathway_names$pathway, function(x){strsplit(x, split = " - Sacc")[[1]][1]})
-  pathway_names$pathway <- sapply(pathway_names$pathway, function(x){strsplit(x, split = " - yeast")[[1]][1]})
-  pathway_match <- merge(genes_to_pathways, pathway_names)
-  kegg_enzyme_dict$PATHWAY <- sapply(kegg_enzyme_dict$SYST, function(x){
-    paste(pathway_match$pathway[pathway_match$gene == x], collapse = "__")
-  })
-  write.table(kegg_enzyme_dict, "../KEGGrxns/yeastNameDict.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
-}#generate a per-gene pathway annotation if one is not already generated
 
 
 ##### For each reaction in the consensus reconstruction, determine which pathways and genes are associated ######
@@ -341,9 +343,10 @@ load("paramOptim.Rdata")
 
 param_sets <- list.files('FBGA_files/paramSets/')
 
-param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), chunkNum =sapply(param_sets, function(x){as.numeric(sub('C', '', regmatches(x, regexec('C[0-9]+', x))[[1]]))}),
-                             runNum = sapply(param_sets, function(x){as.numeric(sub('R', '', regmatches(x, regexec('R[0-9]+', x))[[1]]))}), n_samples = NA, sample_freq = NA, burn_in = NA)
+#param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), chunkNum =sapply(param_sets, function(x){as.numeric(sub('C', '', regmatches(x, regexec('C[0-9]+', x))[[1]]))}),
+#                             runNum = sapply(param_sets, function(x){as.numeric(sub('R', '', regmatches(x, regexec('R[0-9]+', x))[[1]]))}), n_samples = NA, sample_freq = NA, burn_in = NA)
 
+param_run_info <- data.frame(file = param_sets, index = 1, chunkNum = 1, runNum = 1, n_samples = NA, sample_freq = NA, burn_in = NA)
 
 
 
@@ -413,11 +416,18 @@ save(list = ls(), file = "validParameterSets.Rdata")
 
 ### reduce reactions of interest to primary forms and reparameterizations ###
 
-reactionInfo <- reactionInfo[is.na(reactionInfo$Qvalue) | (!is.na(reactionInfo$Qvalue) & reactionInfo$Qvalue < Qthresh),]
+#cherryPicked <- c("r_0232-rm-t_0717-inh-noncomp", "r_0232-rm-t_0287-inh-noncomp", "r_0232-rm-t_0582-act-allo",  
+# "r_0789-rm-t_0248-act-allo", "r_0859-rm-t_0296-act-allo", "r_0859-rm-t_0248-act-allo",  
+# "r_0859-rm-t_0604-act-allo", "r_0859-rm-t_0231-act-allo", "r_0859-rm-t_0254-inh-noncomp",
+# "r_0859-rm-t_0283-inh-noncomp", "r_0941-rm-t_0296-act-allo", "r_0941-rm-t_0283-inh-noncomp")
+
+#reactionInfo <- reactionInfo[reactionInfo$rMech %in% cherryPicked,]
+#  reactionInfo <- reactionInfo[reactionInfo$rMech %in% cherryPicked | is.na(reactionInfo$Qvalue) | (!is.na(reactionInfo$Qvalue) & reactionInfo$Qvalue < Qthresh),]
 
 rxn_fits <- NULL
 rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
+
 
 for(arxn in reactionInfo$rMech){
   

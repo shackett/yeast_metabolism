@@ -1,6 +1,5 @@
 
 
-setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 options(stringsAsFactors=FALSE)
 
 source('./find_chebi/find_chebi.R', chdir = T)
@@ -40,7 +39,7 @@ tab_boer_corr <- read.table('companionFiles/boerCorr.tsv', sep="\t",header=TRUE)
 # delete the condtition PO4.0.061
 tab_boer_mean <- tab_boer_mean[,-chmatch('PO4.0.061',colnames(tab_boer_mean))]
 tab_boer_sd <- tab_boer_sd[,-chmatch('PO4.0.061',colnames(tab_boer_sd))]
-# in the mean/sd files the metabolites are called slighlty different, add these names to tab_boer
+# in the mean/sd files the metabolites are called slightly different, add these names to tab_boer
 namenew <- sort(tab_boer$Metabolite)
 nameold <- row.names(tab_boer_mean)
 nameold[ chmatch('OMP',nameold)] <- "orotidine-phosphate"
@@ -644,7 +643,7 @@ TransportRxn <- colnames(stoiMat[,isTransport])
 ## create the table filtered for transport reactions
 # + filtered for custom reactions
 
-cfilt <-!rxn_table$rx %in% c('r_0255','r_0256','r_0568','r_0569') # first 2 are catalase, second 2 are diphosphatase
+cfilt <-!rxn_table$rx %in% c('r_0255','r_0256','r_0568','r_0569') # Version 7: first 2 are catalase, second 2 are diphosphatase
 
 tfilt <- !rxn_table$rx %in% TransportRxn
 rxn_table <- rxn_table[cfilt & tfilt,]
@@ -664,7 +663,7 @@ rxn_table <- rxn_table[cfilt & tfilt,]
 
 #sum(!(uni_rxn %in% TransportRxn))
 
-rm(stoiMat_bin,stoiMat_corRev,stoiMat_prod,stoiMat_sub,est_filt,est_names,isTransport)
+rm(stoiMat_bin,,stoiMat_sub,est_filt,est_names,isTransport)
 
 ########## Map between reactions, Kegg RxnIDs and EC numbers ####
 
@@ -677,46 +676,31 @@ if (file.exists('./flux_cache/rxnParYeast.tsv')){
   rxnParYeast <- rxnparFile
   
   # get the kegg gene to reaction mappings
-  if (file.exists('./flux_cache/gene2keggID.tsv')){
-    gene2keggID <- read.table('./flux_cache/gene2keggID.tsv',header=T,sep='\t')
-  } else {
-    gene2keggID = read.delim("http://rest.kegg.jp/link/reaction/sce", header = FALSE)
-    colnames(gene2keggID) = c('gene','keggID')
-    gene2keggID$keggID <- str_extract(gene2keggID$keggID,'R[0-9][0-9][0-9][0-9][0-9]')
-    gene2keggID$gene <- gsub('sce:','',gene2keggID$gene)
-    write.table(gene2keggID,'./flux_cache/gene2keggID.tsv',col.names=T,row.names=F,sep='\t')
-  }
   
-  if (file.exists('./flux_cache/keggID2pathways.tsv')){
-    keggID2pathways<-read.table('./flux_cache/keggID2pathways.tsv',header=T,sep='\t')
-  } else {
-    keggID2pathways = read.delim("http://rest.kegg.jp/link/pathway/reaction", header = FALSE)
-    colnames(keggID2pathways) <- c('keggID','pathway')
-    keggID2pathways$pathway <- str_extract(keggID2pathways$pathway,'[0-9][0-9][0-9][0-9][0-9]')
-    keggID2pathways$keggID <- str_extract(keggID2pathways$keggID,'R[0-9][0-9][0-9][0-9][0-9]')
-    write.table(keggID2pathways,'./flux_cache/keggID2pathways.tsv',col.names=T,row.names=F,sep='\t')
-  }
+  gene2keggID = read.delim("http://rest.kegg.jp/link/reaction/sce", header = FALSE)
+  colnames(gene2keggID) = c('gene','keggID')
+  gene2keggID$keggID <- str_extract(gene2keggID$keggID,'R[0-9][0-9][0-9][0-9][0-9]')
+  gene2keggID$gene <- gsub('sce:','',gene2keggID$gene)
   
-  if (file.exists('./flux_cache/pathway2names.tsv')){
-    pathway2names <- read.table('./flux_cache/pathway2names.tsv',header=T,sep='\t')
-  } else {
-    pathway2names = read.delim("http://rest.kegg.jp/list/pathway/sce", header = FALSE)
-    colnames(pathway2names) <- c('pathway','pathname')
-    pathway2names$pathname <- sapply(pathway2names$pathname, function(x){strsplit(x, split = " - Sacc")[[1]][1]})
-    pathway2names$pathname <- sapply(pathway2names$pathname, function(x){strsplit(x, split = " - yeast")[[1]][1]})
-    pathway2names$pathway <- str_extract(pathway2names$pathway,'[0-9][0-9][0-9][0-9][0-9]')
-    write.table(pathway2names,'./flux_cache/pathway2names.tsv',col.names=T,row.names=F,sep='\t')
-  }
   
-  if (file.exists('./flux_cache/keggID2reaction.tsv')){
-    keggID2reaction <- read.table('./flux_cache/keggID2reaction.tsv',header=T,sep='\t')
-  } else {
-    keggID2reaction = read.delim("http://rest.kegg.jp/link/reaction/ec", header = FALSE)
-    colnames(keggID2reaction) <- c('EC','reaction')
-    keggID2reaction$reaction <- str_extract(keggID2reaction$reaction,'R[0-9][0-9][0-9][0-9][0-9]')
-    keggID2reaction$EC <- gsub('ec:','',keggID2reaction$EC)
-    write.table(keggID2reaction,'./flux_cache/keggID2reaction.tsv',col.names=T,row.names=F,sep='\t')
-  }
+  keggID2pathways = read.delim("http://rest.kegg.jp/link/pathway/reaction", header = FALSE)
+  colnames(keggID2pathways) <- c('keggID','pathway')
+  keggID2pathways$pathway <- str_extract(keggID2pathways$pathway,'[0-9][0-9][0-9][0-9][0-9]')
+  keggID2pathways$keggID <- str_extract(keggID2pathways$keggID,'R[0-9][0-9][0-9][0-9][0-9]')
+  
+  
+  pathway2names = read.delim("http://rest.kegg.jp/list/pathway/sce", header = FALSE)
+  colnames(pathway2names) <- c('pathway','pathname')
+  pathway2names$pathname <- sapply(pathway2names$pathname, function(x){strsplit(x, split = " - Sacc")[[1]][1]})
+  pathway2names$pathname <- sapply(pathway2names$pathname, function(x){strsplit(x, split = " - yeast")[[1]][1]})
+  pathway2names$pathway <- str_extract(pathway2names$pathway,'[0-9][0-9][0-9][0-9][0-9]')
+  
+  
+  keggID2reaction = read.delim("http://rest.kegg.jp/link/reaction/ec", header = FALSE)
+  colnames(keggID2reaction) <- c('EC','reaction')
+  keggID2reaction$reaction <- str_extract(keggID2reaction$reaction,'R[0-9][0-9][0-9][0-9][0-9]')
+  keggID2reaction$EC <- gsub('ec:','',keggID2reaction$EC)
+  
   
   # get the gene2Ec map from bioconductor
   #source("http://bioconductor.org/biocLite.R")
@@ -798,13 +782,14 @@ if (file.exists('./flux_cache/rxnParYeast.tsv')){
 }
 
 
-
 # parse all EC numbers in one file -> such that they can be looked up in brenda
 tmpEC <- unique(unlist(strsplit(rxnParYeast$EC,",")))
+tmpEC <- tmpEC[!is.na(tmpEC)]
+tmpEC <- tmpEC[grep('-', tmpEC, invert = T)] # remove generic EC designations
 
-write.table(tmpEC,file= "./cache/ECnr.txt", col.names=F,row.names=F)
+write.table(tmpEC,file= "./flux_cache/ECnr.txt", col.names=F,row.names=F, quote = F)
 
-rm(tmpEC,filt)
+rm(tmpEC)
 
 
 ### Structural similarity #####
@@ -916,10 +901,10 @@ cmpCpds <- function(input,inp='names',err = 0){ #input must be a vector of two n
 
 # Read Chebi compound library
 
-if(file.exists("./cache/sdf_set_Mod.RData")){
-  load("./cache/sdf_set_Mod.RData")
+if(file.exists("./flux_cache/sdf_set_Mod.RData")){
+  load("./flux_cache/sdf_set_Mod.RData")
 } else {
-  sdfset <- read.SDFset("./Data/matchCompounds/ChEBI_lite_3star.sdf")
+  sdfset <- read.SDFset("../Yeast_reconstruction/Sequences/ChEBI_lite_3star.sdf")
   valid <- validSDF(sdfset)
   sdfset <- sdfset[valid]
   
@@ -998,7 +983,7 @@ if(file.exists("./cache/sdf_set_Mod.RData")){
   apset[tmpCHEBI] <-tmpapset
   sdfset <- c(sdfset,tmpsdfset)
   
-  save(sdfset,apset,file="./cache/sdf_set_Mod.RData")
+  save(sdfset,apset,file="./flux_cache/sdf_set_Mod.RData")
 }
 
 
@@ -1159,7 +1144,6 @@ s2ptable <- function(rct_s2p,rctlst){
   
 }
 
-
 addsm2rct <-function(rctlstinp,rct_inp_s2p){
   for(i in 1:length(rctlstinp$reaction)){
     x <- unname(as.character(rctlstinp$reaction[i]))
@@ -1248,7 +1232,6 @@ discrCondRxn <- function(rct_inp,cutoff = 0){
   
 }
 
-
 rct2Unisites <- function(rctInput){
   #makes the substrate and product sites unique (1 unique site per substrate and 1 per product)
   rctInput$BindingSite <- as.numeric(rctInput$BindingSite)
@@ -1278,7 +1261,7 @@ tab2ReactionForms <- function(rctInput,mode){
   
   mode = as.character(mode)
   pythinput = append(pythinput,mode,after=0)
-  pythout <- system('python /home/vitoz/Dropbox/Rabino/git/vzcode/Python/genReactionForms.py',intern=T,input=pythinput)
+  pythout <- system('python genReactionForms.py',intern=T,input=pythinput)
   
   rxnf <- list()
   for (i in 1:length(pythout)){
@@ -1299,7 +1282,7 @@ tab2ReactionForms <- function(rctInput,mode){
 
 # temporary create reversibleRx self, instead of loading it
 
-reversibleRx <- fluxDir
+reversibleRx <- fluxDirFile
 
 colnames(reversibleRx) <- c('rx','reversible','FBAbounds')
 
@@ -1318,11 +1301,11 @@ rct_s2p <- data.frame(s2ptable(rct_s2p,rctlst),stringsAsFactors = FALSE)
 rct_s2p$Validated <- "not validated"
 
 
-write.csv(rct_s2p,"./cache/rxn_bindingsites.csv")
+write.csv(rct_s2p,"./flux_cache/rxn_bindingsites.csv")
 
 ## load the document with the manual validations
 
-rct_val_s2p <- read.table("./Data/matchCompounds/rxn_bindingsites_validated.csv",sep="\t",header=TRUE,stringsAsFactors = FALSE)
+rct_val_s2p <- read.table("./flux_cache/rxn_bindingsites_validated.csv",sep="\t",header=TRUE,stringsAsFactors = FALSE)
 rct_val_s2p <- rct_val_s2p[,colnames(rct_val_s2p) != 'X']
 # make a list with all reactions that have been validated and all reactions that have been corrected
 
@@ -1398,8 +1381,8 @@ rct_s2p$Subtype[ rct_s2p$Stoi >0] <- 'product'
 
 #### Add modifiers ####
 
-if (file.exists('./cache/modTable.tsv')){
-  modTable <- read.table('./cache/modTable.tsv',header=T,sep='\t')
+if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metaboliteAffinities.tsv')){
+  modTable <- read.table('./flux_cache/modTable.tsv',header=T,sep='\t')
 } else {
   
   source('./match_brenda.R')
@@ -1504,7 +1487,16 @@ if (file.exists('./cache/modTable.tsv')){
   ## 1) make a distmatAPt of all compounds: ##
   # use atom pair tanimoto similarity (APt)
   #dummy <- cmp.cluster(db=apset, cutoff=0, save.distances="distmatAPt.rda")
-  load("./distmatAPt.rda")
+  
+  if(file.exists("flux_cache/distmatAPt.rda")){
+    load("flux_cache/distmatAPt.rda")
+    }else{
+      dummy <- cmp.cluster(db=apset, cutoff=0, save.distances="flux_cache/distmatAPt.rda")
+      load("flux_cache/distmatAPt.rda")
+      rm(dummy)
+      }
+  
+  
   distmatAPt <- 1-distmat
   rm(distmat)
   
@@ -1516,119 +1508,7 @@ if (file.exists('./cache/modTable.tsv')){
   
   distmatAPt <- distmatAPt[gsmF,gsmF]
   
-  ## 2) calculate the maximum common subgrapsh (MCS) ##
-  loadMCS = 1
-  library(fmcsR)
-  if (loadMCS == 0) {
-    # Attention this might take very long (12h), so try to do it on a spare computer
-    
-    
-    #a<- ls()
-    #a<-a[!a %in% c('gsmF','measF','sdfset')]
-    #eval(parse(text=paste('rm(',paste(a,collapse=','),')',sep='')))
-    
-    #source("http://bioconductor.org/biocLite.R") # Sources the biocLite.R installation script.
-    #biocLite("fmcsR")
-    #library("fmcsR")
-    
-    
-    path <- './Data/'
-    #load(paste(path,'distmatMCsData.RData',sep=''))
-    
-    sdfset_gsm <- sdfset[gsmF]
-    sdfset_meas <- sdfset[measF]
-    distmatMCS <- matrix(0,sum(gsmF),sum(measF))
-    
-    for (i in 1:sum(gsmF)){
-      distmatMCS[i,] <- fmcsBatch(sdfset_gsm[i], sdfset_meas, au=0, bu=0,
-                                  matching.mode="aromatic")[,"MCS_Size"]
-      
-      if ( i %% 10 == 0){
-        # can be done just as backup
-        #save(distmatMCS,file=paste(path,'Output_distmatMCS',i,'.rData',sep=''))
-      }
-      print(i)
-    }
-    save(distmatMCS,file=paste(path,'Output_distmatMCS',i,'.rData',sep=''))
-    
-  } else load('./Data/distmatMCS_model_meas.rData')
-  rm(sdfset_gsm,sdfset_meas,tmp)
-  
-  # Get the sizes of the compounds:
-  
-  dismatMCS_gsmMS <- fmcsBatch(sdfset[1], sdfset[gsmF], au=0, bu=0,
-                                matching.mode="aromatic")[,"Target_Size"]
-  
-  dismatMCS_measMS <- fmcsBatch(sdfset[1], sdfset[measF], au=0, bu=0,
-                                 matching.mode="aromatic")[,"Target_Size"]
-  row.names(distmatMCS) <- cid(sdfset[gsmF])
-  colnames(distmatMCS) <- cid(sdfset[measF])
-  
-  # calculate the tanimoto overlap and queryOverlap and the targetOverlap
-  distmatMCSt <- distmatMCS / (apply(distmatMCS,2,function(x){dismatMCS_gsmMS})+
-                                 t(apply(distmatMCS,1,function(x){dismatMCS_measMS}))-distmatMCS)
-  distmatMCS_gsmOL <- apply(distmatMCS,2,function(x){x/dismatMCS_gsmMS})
-  distmatMCS_measOL <- t(apply(distmatMCS,1,function(x){x/dismatMCS_measMS}))
-  
-  
-  
-  rm(dismatMCS_gsmMS,dismatMCS_measMS)
-  
-  ### get the MCS similarities of the brenda compounds ###
-  
-  
-  #MCS tanimoto
-  mcsgsmfil <- listTID$CHEBI %in% row.names(distmatMCS)
-  mcsmeasfil <- listTID$CHEBI %in% colnames(distmatMCS)
-  infil <- modTable$rxn %in% rct_s2p$ReactionID & !is.na(modTable$tID)
-  
-  for (rxn in unique(modTable$rxn[infil])){
-    rfil <- infil & modTable$rxn == rxn
-    for (tIDs in unique(modTable$tID[rfil])){
-      tfil <- rfil & modTable$tID == tIDs
-      tIDs <- splilistTID(tIDs,'/')[[1]]
-      rxnChebis <- as.character(listTID$CHEBI[ listTID$SpeciesType %in% rct_s2p$SubstrateID[rct_s2p$ReactionID %in% rxn] & mcsgsmfil])
-      chebis <- as.character(listTID$CHEBI[ listTID$SpeciesType %in% tIDs & mcsmeasfil ])
-      
-      if (length(chebis) != 0 & length(rxnChebis) != 0){
-        tmp <- abs(apply(expand.grid(rxnChebis,chebis), 1, function(x){distmatMCSt[x[1],x[2]]}))
-        sim <- max(tmp,na.rm=T)
-        #matchChebi <- rxnChebis[floor((which.max(tmp)-1) / length(chebis))+1]
-      } else sim <- NA
-      
-      modTable$maxSimMCSt[tfil] <- sim
-      if (sim > 0 & !is.na(sim)){
-        #modTable$SimMatch[tfil] <- Chebi2ModelName(matchChebi)
-      }
-      print(sim)
-    }
-  }
-  
-  #MCS substructure
-  for (rxn in unique(modTable$rxn[infil])){
-    rfil <- infil & modTable$rxn == rxn
-    for (tIDs in unique(modTable$tID[rfil])){
-      tfil <- rfil & modTable$tID == tIDs
-      tIDs <- splilistTID(tIDs,'/')[[1]]
-      rxnChebis <- as.character(listTID$CHEBI[ listTID$SpeciesType %in% rct_s2p$SubstrateID[rct_s2p$ReactionID %in% rxn] & mcsgsmfil])
-      chebis <- as.character(listTID$CHEBI[ listTID$SpeciesType %in% tIDs & mcsmeasfil ])
-      
-      if (length(chebis) != 0 & length(rxnChebis) != 0){
-        tmp <- abs(apply(expand.grid(rxnChebis,chebis), 1, function(x){distmatMCS_measOL[x[1],x[2]]}))
-        sim <- max(tmp,na.rm=T)
-        #matchChebi <- rxnChebis[floor((which.max(tmp)-1) / length(chebis))+1]
-      } else sim <- NA
-      
-      modTable$maxSimMCSsubstr[tfil] <- sim
-      if (sim > 0 & !is.na(sim)){
-        #modTable$SimMatch[tfil] <- Chebi2ModelName(matchChebi)
-      }
-      print(sim)
-    }
-  }
-  
-  
-  
+
   
   ### get the APt similarities of the brenda compounds ###
   # (APt = atom pair tanimoto similarity)
@@ -1638,6 +1518,7 @@ if (file.exists('./cache/modTable.tsv')){
   for (rxn in unique(modTable$rxn[infil])){
     rfil <- infil & modTable$rxn == rxn
     for (tIDs in unique(modTable$tID[rfil])){
+      
       tfil <- rfil & modTable$tID == tIDs
       tIDs <- splilistTID(tIDs,'/')[[1]]
       #rxntIDs <- NametotID(rct_s2p$Substrate[rct_s2p$ReactionID == rxn],0)
@@ -1768,7 +1649,7 @@ if (file.exists('./cache/modTable.tsv')){
   modTable <- modTable[!duplicated(modTable),]
   rm(simList,tmpTable)
   
-  write.table(modTable,file='./cache/modTable.tsv',col.names=T,row.names=F,sep='\t')
+  write.table(modTable,file='./flux_cache/modTable.tsv',col.names=T,row.names=F,sep='\t')
 }
 
 #### Write the reaction laws and the rxnf structure with metabolite and protein measurements ####
@@ -1868,13 +1749,96 @@ rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
+
+
+## Write out allosteric activator and inhibitor reaction equations for a generic regulator
+
+deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_X", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1)
+deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)    
+deNovoRegulators$modtype <- rep(c("act", "inh"), each = length(unique(rct_s2p$ReactionID)))
+
+rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F)
+
+    
+Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
+    # formMode:
+    # cc for convinience kinetics (only supports uncompetitive inhibition)
+    # rm for reversible menten with substrate inhibition
+    
+    # if allInhMods = T:
+    # write equations for comp, uncom and noncomp inhibition for all inhibitors that have a maxSim target
+    
+    if (!allInhMods){
+      modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','subtype')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
+    } else {
+      modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
+      modTab[modTab$modtype == 'inh','subtype'] <- 'uncompetitive'
+      tmodTab <-modTab[modTab$modtype == 'inh' & !is.na(modTab$SimMatch),]
+      tmodTab$subtype <- 'noncompetitive'
+      modTab <- rbind(modTab,tmodTab)
+      tmodTab$subtype <- 'competitive'
+      modTab <- rbind(modTab,tmodTab)
+    }
+    
+    
+    rxnForms <- list()
+    for (i in 1:nrow(modTab)){
+      rctLine <- rct_s2p[1,]
+      rctLine[] <-NA
+      rctTab <- rct_s2p[rct_s2p$ReactionID == modTab$rxn[i],]
+      if (nrow(rctTab) > 0){
+        rctLine$ReactionID <- modTab$rxn[i]
+        rctLine$SubstrateID <- modTab$tID[i]
+        rctLine$Substrate <- tIDtoName(strsplit(modTab$tID[i],'/')[[1]][1])
+        rctLine$Stoi <- 0
+        rctLine$Hill <- modTab$hill[i]
+        rctLine$Type <- modTab$modtype[i]
+        rctLine$Reversible <- rct_s2p$Reversible[ rct_s2p$ReactionID == modTab$rxn[i]][1]
+        rctLine$Subtype <- modTab$subtype[i]
+        
+        subMod <- 'allo'
+        if (modTab$modtype[i] == 'inh' & !is.na(modTab$subtype[i]) & modTab$subtype[i] == 'competitive'){
+          rctLine$BindingSite <- rct_s2p$BindingSite[ rct_s2p$ReactionID == modTab$rxn[i] & rct_s2p$SubstrateType == modTab$SimMatch[i]]
+          subMod <- 'comp'
+        } else if (modTab$modtype[i] == 'inh' & !is.na(modTab$subtype[i]) & modTab$subtype[i] == 'noncompetitive'){
+          rctLine$BindingSite <- rct_s2p$BindingSite[ rct_s2p$ReactionID == modTab$rxn[i] & rct_s2p$SubstrateType == modTab$SimMatch[i]]
+          subMod <- 'noncomp'
+        } else if (modTab$modtype[i] == 'inh'){
+          rctLine$BindingSite <- 0
+          subMod <- 'uncomp'
+          rctLine$Subtype <- 'uncompetitive'
+        } else {
+          rctLine$BindingSite <- 0
+          rctLine$Subtype <- 'allosteric'
+        }
+        rctTab <- rbind(rctTab,rctLine)
+        print(i)
+        entry <- paste(modTab$rxn[i],'-',as.character(formMode),'-',strsplit(modTab$tID[i],'/')[[1]][1],'-',modTab$modtype[i],'-',subMod,sep='')
+        rxnForms[[entry]]<- tab2ReactionForms(rctTab,formMode)[[1]]
+        #rxnForms[[entry]]$modTable <- modTable[modTable$rxn == modTab$rxn[i] & modTable$tID == modTab$tID[i] & modTable$modtype == modTab$modtype[i] &
+        # !is.na(modTable$rxn) & !is.na(modTable$tID),]
+      }
+    }
+    return(rxnForms)
+  }
+      
+    
+    
+      
+    
+rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+    
 rm(rxnForms)
-
-
+    
+    
 # add the infos to the rxn structure
 rxnf <- addInfo2rxnf(rxnf)
 
-save(rxnf,file='/home/vitoz/Dropbox/Rabino/RabinowitzData/Data_files/rxnf_formulametab.rdata')
+save(rxnf,file='./flux_cache/rxnf_formulametab.rdata')
 
 
 

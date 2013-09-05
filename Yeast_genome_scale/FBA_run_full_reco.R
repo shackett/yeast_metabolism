@@ -9,7 +9,6 @@ library(stringr)
 #### Options ####
 
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
-source("FBA_lib.R")
 
 options(stringsAsFactors = FALSE)
 
@@ -28,9 +27,9 @@ if(QPorLP == "QP"){
 # if the gurobi solver is used via python, what kind of model should be solved
 # which modus should be used for the problem
 modeGurobi = 'python'
-pythonMode = 'll' # simple,thdyn, dir or ll (loopless)
+pythonMode = 'simple' # simple,thdyn, dir or ll (loopless)
 FVA = 'T' # Should flux variblility analysis be performed
-useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -562,7 +561,7 @@ if(QPorLP == "QP"){
 
   
   flux_elevation_factor <- 10^6
-  flux_penalty <- 500/(flux_elevation_factor)
+  flux_penalty <- 1000/(flux_elevation_factor)
   
   qpModel$A <- Matrix(S)
   qpModel$rhs <- Fzero #flux balance
@@ -648,7 +647,8 @@ if(QPorLP == "QP"){
     
     ## for some species, no precision estimate is provided because they weren't directly measured.
     ## By enforcing some arbitrary penalty on these reactions the unbounded stoichiometrically equivalent 'offset fluxes' should carry flux
-    matchedSpecies$Precision[is.na(matchedSpecies$Precision)] <- median(matchedSpecies$Precision,na.rm=T)
+    matchedSpecies$Precision[is.na(matchedSpecies$Precision)] <- 1
+    #matchedSpecies$Precision[is.na(matchedSpecies$Precision)] <- median(matchedSpecies$Precision,na.rm=T)
     
     diag(qpModel$Q)[matchedSpecies$index] <- matchedSpecies$Precision
     
@@ -667,7 +667,7 @@ if(QPorLP == "QP"){
       ### load: read pythout.txt files containing solved FVA models
       ### otherwise... run locally: prohibitively slow for FVA
       
-      # to submit all treatments to the que use "sh cetus_script.sh XXfolderXX"
+      # to submit all treatments to the que use "cetus_script.sh XXfolderXX" - where XXfolderXX is relative to the base directory
       
       pythout = FVA_setup(useCluster)
       
