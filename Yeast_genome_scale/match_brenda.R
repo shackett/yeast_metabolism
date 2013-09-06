@@ -1,9 +1,6 @@
 # Match brenda to chebiIDs by using the synonymes from the CHEBI_complete_sdf file
 options(stringsAsFactors=FALSE)
 
-#setwd('/home/vitoz/Dropbox/Rabino/git/vitoz/')
-
-
 
 if (file.exists('./flux_cache/brendamat.tsv')){
   brendamat <- read.table('./flux_cache/brendamat.tsv',sep='\t')
@@ -118,51 +115,52 @@ all_brenda$modtype <- c(rep("act",nrow(all_activators)),rep("inh",nrow(all_ki)))
 
 rm(all_activators,all_ki)
 
-commonOrganisms <- names(sort(table(all_brenda$organism), decreasing = T)[1:10])
+#commonOrganisms <- names(sort(table(all_brenda$organism), decreasing = T)[1:10])
 #all_brenda <- all_brenda[all_brenda$organism %in% commonOrganisms,]
 
-####### Summarize Ki and Km values for use in future comparisions ######
+####### Summarize Ki and Km values for use in future comparisions #####
 
 if(!file.exists("flux_cache/metaboliteAffinities.tsv")){
   
   all_brenda$ChEBI <- brendamat$chebi[chmatch(as.character(all_brenda$ligandID), as.character(brendamat$ligandID))]
   all_brenda <- all_brenda[!is.na(all_brenda$ChEBI),]
-  all_brenda <- unique(all_brenda)
+  all_brenda <- data.table(unique(all_brenda))
+  all_brenda[,isYeast := ifelse(organism == "Saccharomyces cerevisiae", T, F),]
+  all_brenda <- all_brenda[is.na(k) | k > 0,,]
   
-  modifiers_summary <- acast(all_brenda, formula = EC ~ ChEBI ~ ifelse(organism == "Saccharomyces cerevisiae", T, F), value.var = "k", 
-                             fun.aggregate = function(x){paste(mean(log2(x), na.rm = T), sd(log2(x), na.rm = T), length(x[!is.na(x)]), sep = "_")})
-  modifiers_melt <- melt(modifiers_summary)
-  colnames(modifiers_melt) <- c("EC", "ChEBI", "isYeast", "tmp")
-  modifiers_melt$log2mean <- sapply(modifiers_melt$tmp, function(x){strsplit(x, split = "_")[[1]][1]})
-  modifiers_melt$sdOflog2 <- sapply(modifiers_melt$tmp, function(x){strsplit(x, split = "_")[[1]][2]})
-  modifiers_melt$n <- sapply(modifiers_melt$tmp, function(x){strsplit(x, split = "_")[[1]][3]})
-  modifiers_melt <- modifiers_melt[modifiers_melt$log2mean != "NaN",colnames(modifiers_melt) != "tmp"]
   
+  modifiers_summary <- all_brenda[,list(log10mean = mean(log10(k), na.rm = T), sdOflog10 = sd(log10(k), na.rm = T), nQuant = length(k[!is.na(k)]), nQual = length(k)), by = c("EC", "ChEBI", "modtype", "isYeast")]
+  modifiers_summary <- modifiers_summary[!(modifiers_summary$nQual == 1 & modifiers_summary$nQuant == 0),]
+  
+  #ggplot(melt(table(modifiers_summary$nQuant)), aes(x = Var1, y = log2(value))) + geom_point()
   
   all_km <- read.delim('companionFiles/all_km.tsv',sep="\t",header = TRUE)
   all_km <- all_km[!is.na(all_km$ligandStructureId),]
-  #all_km <- all_km[all_km$organism %in% commonOrganisms,]
   all_km$ChEBI <- brendamat$chebi[chmatch(as.character(all_km$ligandStructureId), as.character(brendamat$ligandID))]
   all_km <- all_km[!is.na(all_km$ChEBI),]
-  all_km <- unique(all_km)
+  all_km <- data.table(unique(all_km))
+  all_km[,isYeast := ifelse(organism == "Saccharomyces cerevisiae", T, F),]
+  setnames(all_km, old = "ecNumber", new = "EC")
+  all_km <- all_km[all_km$kmValue > 0,,] #some Km values set at -999
   
-  substrates_summary <- acast(all_km, formula = ecNumber ~ ChEBI ~ ifelse(organism == "Saccharomyces cerevisiae", T, F), value.var = "kmValue", 
-                              fun.aggregate = function(x){paste(mean(log2(x), na.rm = T), sd(log2(x), na.rm = T), length(x[!is.na(x)]), sep = "_")})
-  substrates_melt <- melt(substrates_summary)
-  colnames(substrates_melt) <- c("EC", "ChEBI", "isYeast", "tmp")
-  substrates_melt$log2mean <- sapply(substrates_melt$tmp, function(x){strsplit(x, split = "_")[[1]][1]})
-  substrates_melt$sdOflog2 <- sapply(substrates_melt$tmp, function(x){strsplit(x, split = "_")[[1]][2]})
-  substrates_melt$n <- sapply(substrates_melt$tmp, function(x){strsplit(x, split = "_")[[1]][3]})
-  substrates_melt <- substrates_melt[substrates_melt$log2mean != "NaN",colnames(substrates_melt) != "tmp"]
+  substrates_summary <- all_km[,list(log10mean = mean(log10(kmValue)), sdOflog10 = sd(log10(kmValue)), nQuant = length(kmValue), nQual = length(kmValue), modtype = NA), by = c("EC", "ChEBI", "isYeast")]
+  setcolorder(substrates_summary, names(modifiers_summary))
   
-  all_affinities <- rbind(data.frame(modifiers_melt, speciesType = "regulator"), data.frame(substrates_melt, speciesType = "substrate"))
+  all_affinities <- list(modifiers_summary, substrates_summary)
+  all_affinities <- rbindlist(all_affinities)
+  
+  all_affinities[,speciesType := ifelse(is.na(modtype), "substrate", "regulator"), by = "modtype"]
+  
+  
   all_affinities$reactions <- sapply(all_affinities$EC, function(x){
-    paste(rxnParYeast$ReactionID[grep(paste(x, '[$,]', sep = ""), rxnParYeast$EC)], collapse = "/")
+    paste(rxnParYeast$ReactionID[grep(paste(x, '($|,)', sep = ""), rxnParYeast$EC)], collapse = "/")
   })
   all_affinities$tIDs <- as.character(sapply(all_affinities$ChEBI, function(x){
     z = paste(listTID$SpeciesType[!is.na(listTID$CHEBI)][listTID$CHEBI[!is.na(listTID$CHEBI)] == x], collapse = "/")
     if(length(z) == 0){NA}else{z}
   }))
+  
+  all_affinities <- all_affinities[tIDs != "",,]
   
   write.table(all_affinities, "flux_cache/metaboliteAffinities.tsv", sep = "\t")
 }
