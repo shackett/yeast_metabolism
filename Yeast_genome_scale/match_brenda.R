@@ -5,13 +5,10 @@ options(stringsAsFactors=FALSE)
 if (file.exists('./flux_cache/brendamat.tsv')){
   brendamat <- read.table('./flux_cache/brendamat.tsv',sep='\t')
 } else {
-  #source('./RabinowitzData/Data_files/FBA_lib.R')
-  #source('./git/vzcode/find_chebi/find_chebi.R', chdir = T)
-  
   
   # Import all lists from Brenda, put it together to a large matrix with ligandID - name
   brendamat <- matrix(nrow = 0,ncol=2)
-  
+
   all_activators <- read.delim('companionFiles/all_activators.tsv',sep="\t",header = TRUE)
   brendamat <- rbind(brendamat,cbind(all_activators$ligandStructureId,all_activators$activatingCompound))
   rm(all_activators)
@@ -25,12 +22,10 @@ if (file.exists('./flux_cache/brendamat.tsv')){
   rm(all_km)
   
   # clean the matrix up
-  
   brendamat <- brendamat[!is.na(brendamat[ ,1]), ]
   brendamat <- unique(brendamat)
   
   # sort the matrix
-  
   brendamat <- data.frame(brendamat[order(as.integer(brendamat[ ,1]),brendamat[ ,2], decreasing = FALSE), ])
   colnames(brendamat) <- c('ligandID','name')
   
@@ -38,7 +33,6 @@ if (file.exists('./flux_cache/brendamat.tsv')){
   # match chebis
   
   brendamat$chebi <- sapply(brendamat$name,MatchName2Chebi)
-  
   
   write.table(brendamat,'./flux_cache/brendamat.tsv',sep='\t')
 }
@@ -169,31 +163,15 @@ if(!file.exists("flux_cache/metaboliteAffinities.tsv")){
 # load Map between reactions to EC numbers
 # (from match_compounds)
 
-row.names(rxnParYeast) <- rxnParYeast$ReactionID
-rxnMatch <- list()
+all_brenda_red <- all_brenda[,c('EC', 'ligandID', 'modtype')]
+all_brenda_red <- unique(all_brenda_red[!is.na(all_brenda_red$ligandID),]) # reduce BRENDA data to unique EC-ligandID-modtype
 
-for (rxn in rxnParYeast$ReactionID[!is.na(rxnParYeast$EC)]){
-    idx <- which(all_brenda$EC %in% strsplit(rxnParYeast[rxn,'EC'],',')[[1]])
-    if (length(idx) > 0){
-      rxnMatch[[rxn]] <- idx
-    }
-}
+rID_EC <- NULL
+for(x in c(1:nrow(rxnParYeast))[!is.na(rxnParYeast$EC)]){
+  rID_EC <- rbind(rID_EC, data.frame(rxn = rxnParYeast$ReactionID[x], EC = unlist(strsplit(rxnParYeast[x,'EC'],',')[[1]])))
+  }
 
-# initialize the matrix
-rxnVec <- unlist(unlist(sapply(names(rxnMatch),function(x){
-  rep(x,length(rxnMatch[[x]]))
-})))
-
-rxnVec <-data.frame(rxnVec)
-colnames(rxnVec) <- 'rxn'
-modTable <- merge(rxnVec,modTable,all.x =T,sort=F)
-rm(rxnVec)
-
-rxnMatchIdx <- unlist(rxnMatch)
-
-modTable[,c('EC','name','ligandID','modtype','organism','literature','commentary','k','kmax')] <-
-  all_brenda[rxnMatchIdx,c('EC','name','ligandID','modtype','organism','literature','commentary','k','kmax')]
-
+modTable <- merge(all_brenda_red, rID_EC)
 
 for (ligID in unique(modTable$ligandID[!is.na(modTable$ligandID)])){
   tIDs <- paste(matchTIDbrenda$TID[ matchTIDbrenda$ligandID == ligID],collapse='/')

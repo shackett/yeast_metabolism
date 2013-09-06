@@ -390,6 +390,8 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   remapped_metabolites <- metMatrixProj %*% DR_change_mat
   colnames(remapped_metabolites) <- unname(colnames(metabolomicsMatrix))
   
+  metSVD <- svd(remapped_metabolites, nu = npc, nv = npc) # save this for later
+  
   metabolomicsData_remapped <- data.frame(metabolomicsData[,1:3], remapped_metabolites)
   
   tab_boer <- metabolomicsData_remapped
@@ -453,9 +455,9 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   abs_tab_boer$tID <- sapply(abs_tab_boer$Metabolite,function(x){
     paste(listTID$SpeciesType[matchBoerTID[matchBoerTID[,1] == which(tab_boer$Metabolite== x ),2]],collapse=";")
   })
-  write.table(abs_tab_boer,'flux_cache/tab_boer_abs.txt',sep='\t')
   
-  save(tab_boer,metOrigin,file='flux_cache/metaboliteTables.RData')
+  write.table(abs_tab_boer,'flux_cache/tab_boer_abs.txt',sep='\t')
+  save(tab_boer,metOrigin,metSVD,file='flux_cache/metaboliteTables.RData')
 } else load('flux_cache/metaboliteTables.RData')
 
 ### Check the stoichiometric model ########################
@@ -1336,7 +1338,7 @@ rct_s2p <-addsm2rct(rctlst_sm,rct_s2p)
 
 # sort the reactions
 
-rct_s2p <- rct_s2p[order(rct_s2p$ReactionID,rct_s2p$BindingSite,rct_s2p$Stoi,rct_s2p$Substrate,decreasing= FALSE),]
+#rct_s2p <- rct_s2p[order(rct_s2p$ReactionID,rct_s2p$BindingSite,rct_s2p$Stoi,rct_s2p$Substrate,decreasing= FALSE),]
 
 ## after some discussions with Jun, we realized that reactions
 # A+B -> C have to be further discriminated:
@@ -1541,53 +1543,7 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
     }
   }
   
-  
-  
-# ## make some interesting checks if inhibitors or activators are rather similar to the reactands
-#
-# #fil <- !is.na(modTable$maxSimAPt) & !duplicated(modTable[, c('rxn','ligandID')])
-# #sum(modTable$maxSimAPt > 0.1 & modTable$maxSimAPt < 1 & modTable$modtype == 'inh' & fil)
-# #sum(modTable$maxSimAPt > 0.1 & modTable$maxSimAPt < 1 & modTable$modtype == 'act' & fil)
-# #hist(modTable$maxSimAPt[modTable$modtype == 'inh' & fil],1000,freq=F,ylim=c(0,20))
-# #hist(modTable$maxSimAPt[modTable$modtype == 'act' & fil],1000,freq=F,ylim=c(0,20))
-#
-# # make a nice ggplot
-# data = 'maxSimAPt'
-# tplotMat <- modTable[!duplicated(modTable[,c('rxn','tID')]) & !is.na(modTable[,data]) & modTable$origin =='Brenda',]
-#
-# fil = tplotMat$modtype =='act'
-# tHist <- hist(tplotMat[fil,data],seq(0,1,0.05),plot=F)
-#
-# plotMat <- data.frame(tHist$counts/sum(fil),rep('activator',length(tHist$counts)),tHist$mids)
-# colnames(plotMat) <- c('Density','Type','Similarity')
-# tHist <- hist(tplotMat[!fil,data],seq(0,1,0.05),plot=F)
-# tmp <- data.frame(tHist$counts/sum(!fil),rep('inhibitor',length(tHist$counts)),tHist$mids)
-# colnames(tmp) <- c('Density','Type','Similarity')
-# plotMat <- rbind(plotMat,tmp)
-#
-# histPlot <- ggplot(plotMat,aes(x = Similarity,y=Density,fill = Type))
-# histPlot <- histPlot + geom_bar(position = 'dodge',stat="identity",) +
-# #histPlot <- histPlot + stat_bin(binwidth = 0.05,aes(y=..density..,), position = 'dodge') +
-# #scale_fill_manual(name = 'Type', values = c('activator' = 'orangered2','inhibitor'='royalblue2'))+
-# xlab('maximal atom pair tanimoto similarity with reactands')
-#
-# plot(histPlot)
-# rm(tmp,tplotMat)
-  #median(modTable$maxSimAPt[fil & modTable$modtype == 'inh'& modTable$maxSimAPt < 1])
-  #median(modTable$maxSimAPt[fil & modTable$modtype == 'act'& modTable$maxSimAPt < 1])
-  
-  
-  ## Textmine the Brenda commentaries:
-  # Look which inhibitory commentaries contain the keywords: allo,compe
-  
-  fil <- modTable$modtype == 'inh' & modTable$origin == 'Brenda' & !is.na(modTable$commentary)
-  idx <- which(fil)
-  idx[grepl('(un-comp)|(uncomp)',modTable$commentary[fil])]
-  sum(grepl('(uncomp)',modTable$commentary[fil]))
-  ### Get some putative competitive inhibitors
-  #get through all the reactions in the reactionfile and check if there are compounds with a similarity of > x
-  # that do not belong to the the reactands and also are not the same compound as one of the reactands
-  
+    
   
   ## 1) Use APt as a similarity measurementd
   # use Apt > 0.5 for compounds to get included in the list
