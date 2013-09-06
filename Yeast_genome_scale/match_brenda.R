@@ -8,7 +8,7 @@ if (file.exists('./flux_cache/brendamat.tsv')){
   
   # Import all lists from Brenda, put it together to a large matrix with ligandID - name
   brendamat <- matrix(nrow = 0,ncol=2)
-
+  
   all_activators <- read.delim('companionFiles/all_activators.tsv',sep="\t",header = TRUE)
   brendamat <- rbind(brendamat,cbind(all_activators$ligandStructureId,all_activators$activatingCompound))
   rm(all_activators)
@@ -107,6 +107,14 @@ all_brenda$k <- c(rep(NA,nrow(all_activators)), all_ki$kiValue)
 all_brenda$kmax <- c(rep(NA,nrow(all_activators)), all_ki$kiValueMaximum)
 all_brenda$modtype <- c(rep("act",nrow(all_activators)),rep("inh",nrow(all_ki)))
 
+all_brenda <- all_brenda[!is.na(all_brenda$ligandID),]
+all_brenda$tID <- sapply(all_brenda$ligandID, function(x){paste(matchTIDbrenda$TID[matchTIDbrenda$ligandID == x], collapse = "/")})
+all_brenda <- all_brenda[all_brenda$tID != "",]
+all_brenda <- data.table(unique(all_brenda))
+all_brenda[,isYeast := ifelse(organism == "Saccharomyces cerevisiae", T, F),]
+all_brenda <- all_brenda[is.na(k) | k > 0,,]
+
+
 rm(all_activators,all_ki)
 
 #commonOrganisms <- names(sort(table(all_brenda$organism), decreasing = T)[1:10])
@@ -116,28 +124,21 @@ rm(all_activators,all_ki)
 
 if(!file.exists("flux_cache/metaboliteAffinities.tsv")){
   
-  all_brenda$ChEBI <- brendamat$chebi[chmatch(as.character(all_brenda$ligandID), as.character(brendamat$ligandID))]
-  all_brenda <- all_brenda[!is.na(all_brenda$ChEBI),]
-  all_brenda <- data.table(unique(all_brenda))
-  all_brenda[,isYeast := ifelse(organism == "Saccharomyces cerevisiae", T, F),]
-  all_brenda <- all_brenda[is.na(k) | k > 0,,]
-  
-  
-  modifiers_summary <- all_brenda[,list(log10mean = mean(log10(k), na.rm = T), sdOflog10 = sd(log10(k), na.rm = T), nQuant = length(k[!is.na(k)]), nQual = length(k)), by = c("EC", "ChEBI", "modtype", "isYeast")]
+  modifiers_summary <- all_brenda[,list(log10mean = mean(log10(k), na.rm = T), sdOflog10 = sd(log10(k), na.rm = T), nQuant = length(k[!is.na(k)]), nQual = length(k)), by = c("EC", "tID", "modtype", "isYeast")]
   modifiers_summary <- modifiers_summary[!(modifiers_summary$nQual == 1 & modifiers_summary$nQuant == 0),]
   
   #ggplot(melt(table(modifiers_summary$nQuant)), aes(x = Var1, y = log2(value))) + geom_point()
   
   all_km <- read.delim('companionFiles/all_km.tsv',sep="\t",header = TRUE)
   all_km <- all_km[!is.na(all_km$ligandStructureId),]
-  all_km$ChEBI <- brendamat$chebi[chmatch(as.character(all_km$ligandStructureId), as.character(brendamat$ligandID))]
-  all_km <- all_km[!is.na(all_km$ChEBI),]
+  all_km$tID <- sapply(all_km$ligandStructureId, function(x){paste(matchTIDbrenda$TID[matchTIDbrenda$ligandID == x], collapse = "/")})
+  all_km <- all_km[all_km$tID != "",]
   all_km <- data.table(unique(all_km))
   all_km[,isYeast := ifelse(organism == "Saccharomyces cerevisiae", T, F),]
   setnames(all_km, old = "ecNumber", new = "EC")
   all_km <- all_km[all_km$kmValue > 0,,] #some Km values set at -999
   
-  substrates_summary <- all_km[,list(log10mean = mean(log10(kmValue)), sdOflog10 = sd(log10(kmValue)), nQuant = length(kmValue), nQual = length(kmValue), modtype = NA), by = c("EC", "ChEBI", "isYeast")]
+  substrates_summary <- all_km[,list(log10mean = mean(log10(kmValue)), sdOflog10 = sd(log10(kmValue)), nQuant = length(kmValue), nQual = length(kmValue), modtype = NA), by = c("EC", "tID", "isYeast")]
   setcolorder(substrates_summary, names(modifiers_summary))
   
   all_affinities <- list(modifiers_summary, substrates_summary)
@@ -149,29 +150,27 @@ if(!file.exists("flux_cache/metaboliteAffinities.tsv")){
   all_affinities$reactions <- sapply(all_affinities$EC, function(x){
     paste(rxnParYeast$ReactionID[grep(paste(x, '($|,)', sep = ""), rxnParYeast$EC)], collapse = "/")
   })
-  all_affinities$tIDs <- as.character(sapply(all_affinities$ChEBI, function(x){
-    z = paste(listTID$SpeciesType[!is.na(listTID$CHEBI)][listTID$CHEBI[!is.na(listTID$CHEBI)] == x], collapse = "/")
-    if(length(z) == 0){NA}else{z}
-  }))
   
-  all_affinities <- all_affinities[tIDs != "",,]
+  all_affinities <- all_affinities[all_affinities$reactions != "",]
   
   write.table(all_affinities, "flux_cache/metaboliteAffinities.tsv", sep = "\t")
+}else{
+  all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
 }
 
 ###########translate get all genes for all reactions to EC numbers
 # load Map between reactions to EC numbers
 # (from match_compounds)
 
-all_brenda_red <- all_brenda[,c('EC', 'ligandID', 'modtype')]
+all_brenda_red <- all_brenda[,names(all_brenda) %in% c('EC', 'ligandID', 'modtype'),with = F]
 all_brenda_red <- unique(all_brenda_red[!is.na(all_brenda_red$ligandID),]) # reduce BRENDA data to unique EC-ligandID-modtype
 
 rID_EC <- NULL
 for(x in c(1:nrow(rxnParYeast))[!is.na(rxnParYeast$EC)]){
   rID_EC <- rbind(rID_EC, data.frame(rxn = rxnParYeast$ReactionID[x], EC = unlist(strsplit(rxnParYeast[x,'EC'],',')[[1]])))
-  }
+}
 
-modTable <- merge(all_brenda_red, rID_EC)
+modTable <- merge.data.frame(all_brenda_red, rID_EC)
 
 for (ligID in unique(modTable$ligandID[!is.na(modTable$ligandID)])){
   tIDs <- paste(matchTIDbrenda$TID[ matchTIDbrenda$ligandID == ligID],collapse='/')
@@ -192,5 +191,34 @@ for(idx in grep('/',modTable$tID)){
 
 modTable$origin <- 'Brenda'
 modTable$hill <- 1
+modTable$subtype = NA
+modTable$chebi = NA; modTable$chebi[!is.na(modTable$tID)] <- listTID$CHEBI[chmatch(modTable$tID[!is.na(modTable$tID)], listTID$SpeciesType)]
+modTable$name = Chebi2ModelName(modTable$chebi)
+modTable <- modTable[!is.na(modTable$tID),]
+
+### remove inhibitors whose effects are due to a single qualitative description ###
+reg_affinity <- all_affinities[all_affinities$speciesType == "regulator",]
+reg_pairs <- NULL
+for(i in 1:nrow(reg_affinity)){
+  reg_pairs <- rbind(reg_pairs, expand.grid(unlist(strsplit(reg_affinity$reactions[i], '/')[[1]]), unlist(strsplit(reg_affinity$tID[i], '/')[[1]])))
+}
+reg_pairs$combo <- apply(reg_pairs, 1, function(x){paste(x[1], x[2], sep = "-")})
+modTable_idVec <- sapply(1:nrow(modTable), function(x){
+  paste(modTable$rxn[x], modTable$tID[x], sep = "-")
+})
+
+
+reg_pairs[!(reg_pairs$combo %in% modTable_idVec),]
+
+examplePairs <- modTable_idVec[!(modTable_idVec %in% reg_pairs$combo)]
+
+index = 3000
+rx = strsplit(examplePairs[index], split = '-')[[1]][1]
+tID = strsplit(examplePairs[index], split = '-')[[1]][2]
+
+all_brenda[all_brenda$EC %in% strsplit(rxnParYeast$EC[rxnParYeast$ReactionID == rx], split = ',')[[1]],]
+all_brenda[all_brenda$EC %in% strsplit(rxnParYeast$EC[rxnParYeast$ReactionID == rx], split = ',')[[1]] & all_brenda$ligandID %in% matchTIDbrenda$ligandID[matchTIDbrenda$TID == tID],]
+
+all_brenda[
 
 
