@@ -162,7 +162,9 @@ if(!file.exists("flux_cache/metaboliteAffinities.tsv")){
 # load Map between reactions to EC numbers
 # (from match_compounds)
 
-all_brenda_red <- all_brenda[,names(all_brenda) %in% c('EC', 'ligandID', 'modtype'),with = F]
+#modTable <- all_affinities[all_affinities$speciesType == "regulator",]
+
+all_brenda_red <- all_brenda[,names(all_brenda) %in% c('EC', 'ligandID', 'modtype', 'k'),with = F]
 all_brenda_red <- unique(all_brenda_red[!is.na(all_brenda_red$ligandID),]) # reduce BRENDA data to unique EC-ligandID-modtype
 
 rID_EC <- NULL
@@ -179,6 +181,10 @@ for (ligID in unique(modTable$ligandID[!is.na(modTable$ligandID)])){
   }
 }
 
+modTable <- data.table(modTable)
+modTable[,validNum := ifelse(length(k) >= 2 | length(k[!is.na(k)]) >= 1, TRUE, FALSE), by = c("modtype", "rxn", "tID")]
+modTable <- modTable[validNum == TRUE,,] # only look at modifiers with 2+ qualitative measurements or 1+ quantitative ones
+
 # Split the entries with more then 1 tID, such that each entry only has 1 tID
 
 for(idx in grep('/',modTable$tID)){
@@ -194,31 +200,6 @@ modTable$hill <- 1
 modTable$subtype = NA
 modTable$chebi = NA; modTable$chebi[!is.na(modTable$tID)] <- listTID$CHEBI[chmatch(modTable$tID[!is.na(modTable$tID)], listTID$SpeciesType)]
 modTable$name = Chebi2ModelName(modTable$chebi)
-modTable <- modTable[!is.na(modTable$tID),]
+modTable <- modTable[!is.na(modTable$tID), list(EC, rxn, tID, chebi, name, hill, modtype, subtype, origin),]
 
-### remove inhibitors whose effects are due to a single qualitative description ###
-reg_affinity <- all_affinities[all_affinities$speciesType == "regulator",]
-reg_pairs <- NULL
-for(i in 1:nrow(reg_affinity)){
-  reg_pairs <- rbind(reg_pairs, expand.grid(unlist(strsplit(reg_affinity$reactions[i], '/')[[1]]), unlist(strsplit(reg_affinity$tID[i], '/')[[1]])))
-}
-reg_pairs$combo <- apply(reg_pairs, 1, function(x){paste(x[1], x[2], sep = "-")})
-modTable_idVec <- sapply(1:nrow(modTable), function(x){
-  paste(modTable$rxn[x], modTable$tID[x], sep = "-")
-})
-
-
-reg_pairs[!(reg_pairs$combo %in% modTable_idVec),]
-
-examplePairs <- modTable_idVec[!(modTable_idVec %in% reg_pairs$combo)]
-
-index = 3000
-rx = strsplit(examplePairs[index], split = '-')[[1]][1]
-tID = strsplit(examplePairs[index], split = '-')[[1]][2]
-
-all_brenda[all_brenda$EC %in% strsplit(rxnParYeast$EC[rxnParYeast$ReactionID == rx], split = ',')[[1]],]
-all_brenda[all_brenda$EC %in% strsplit(rxnParYeast$EC[rxnParYeast$ReactionID == rx], split = ',')[[1]] & all_brenda$ligandID %in% matchTIDbrenda$ligandID[matchTIDbrenda$TID == tID],]
-
-all_brenda[
-
-
+modTable <- as.data.frame(modTable) #coerce back to a data.frame for compatability issues

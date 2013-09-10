@@ -313,18 +313,17 @@ names(dicttIDBoer) <- listTID$SpeciesType[tmatchBoerTID[,2]]
 
 
 if (!file.exists('flux_cache/metaboliteTables.RData')){
-    
-  # This takes a while, so make it cacheable
   
   # the 25 chemostat conditions of interest and their actual growth rates:
-  chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.05H2")),]
+  #chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.05H2")),]
   
   # temporarly save and remove the info of the additional metabolites
   tMet <- tab_boer[-(1:nrow(tab_boer_mean)),]
   metabolomicsSD <- metabolomicsData <- tab_boer[(1:nrow(tab_boer_mean)),]
   rownames(metabolomicsData) <- metabolomicsData$Metabolite
   metabolomicsData <- cbind(metabolomicsData,tab_boer_mean[match(metabolomicsData$altnames,rownames(tab_boer_mean)),])
-
+  metabolomicsSD <- tab_boer_sd[match(metabolomicsData$altnames,rownames(tab_boer_mean)),]
+  
   metabolomicsMatrix <-as.matrix(metabolomicsData[,-c(1:3)])
   class(metabolomicsMatrix) <- "numeric"
   rownames(metabolomicsMatrix) <- metabolomicsData$Metabolite
@@ -345,16 +344,17 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   metabolomics_conds$actualDRprot <- chemostatInfo$actualDR
   
   metabolomicsMatrix <- metabolomicsMatrix[,reorder_vec]
+  metabolomicsSD <- metabolomicsSD[,reorder_vec]
   colnames(metabolomicsMatrix) <- mapply(function(x,y){paste(c(x,y), collapse = "")}, x = as.character(metabolomics_conds$cond_rename), y = metabolomics_conds$DRgoal)
-  colnames(metabolomicsMatrix) <- sapply(colnames(metabolomicsMatrix),function(x){
+  colnames(metabolomicsSD) <- colnames(metabolomicsMatrix) <- sapply(colnames(metabolomicsMatrix),function(x){
     while (nchar(x) <5){
       x <- paste(x,'0',sep='')
     }
     return(x)
   })
   
-  n_c <- length(metabolomicsMatrix[1,])
-  n_m <- length(metabolomicsMatrix[,1])
+  n_c <- ncol(metabolomicsMatrix)
+  n_m <- nrow(metabolomicsMatrix)
   
   ### Determine how many significant principal components exist in the metabolomics matrix ###
   
@@ -370,14 +370,12 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs")
   abline(v = npc, col = "RED", lwd = 2)
   
+  #save(list = ls(), file = "tmp.Rdata")
+  
   metSVD <- svd(metabolomicsMatrix)
   metMatrixProj <- metSVD$u[,1:npc] %*% diag(metSVD$d[1:npc]) %*% t(metSVD$v[,1:npc])
   
   DR_change_mat <- matrix(0, nrow = n_c, ncol = n_c)
-  #colnames(DR_change_mat) <- rownames(prot_cond);
-  #rownames(DR_change_mat) <- colnames(transcript.condition)
-  #colnames(DR_change_mat) <- metabolomics_conds$actualDRprot
-  #rownames(DR_change_mat)<- metabolomics_conds$DR
   for(cond in 1:n_c){
     #find the 2 closest DR within the same limitation
     c_match <- c(1:n_c)[metabolomics_conds$cond_rename == metabolomics_conds$cond_rename[cond]]
@@ -388,17 +386,21 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   }
   
   remapped_metabolites <- metMatrixProj %*% DR_change_mat
-  colnames(remapped_metabolites) <- unname(colnames(metabolomicsMatrix))
+  remapped_SD <- as.matrix(metabolomicsSD) %*% DR_change_mat
+  colnames(remapped_metabolites) <- colnames(remapped_SD) <- unname(colnames(metabolomicsMatrix))
   
-  metSVD <- svd(remapped_metabolites, nu = npc, nv = npc) # save this for later
+  metSVD <- svd(remapped_metabolites, nu = npc, nv = npc) # SVD of remapped metabolite -> save so that the principal components of met relative abundance can be used
   
   metabolomicsData_remapped <- data.frame(metabolomicsData[,1:3], remapped_metabolites)
-  
   tab_boer <- metabolomicsData_remapped
   
-  tMet[,colnames(tab_boer)[!colnames(tab_boer) %in% colnames(tMet)]] <- NA
+  tMet[,colnames(tab_boer)[!colnames(tab_boer) %in% colnames(tMet)]] <- NA # metabolites whose abundances are reconstructed as a function of other measurements
   tab_boer <- rbind(tab_boer,tMet)
-  ### convert the relative to quantitative compounds (where available)
+  
+  tMet_SD <- tMet; rownames(tMet_SD) <- tMet_SD$Metabolite
+  remapped_SD <- rbind(remapped_SD, tMet_SD[,!(colnames(tMet_SD) %in% c("Metabolite", "KEGG", "altnames"))])
+  
+  ### convert the relative to absolute abundances (where available)
   # use the matchboeryifan dictionary created above
   
   nMet <- nrow(tab_boer)
@@ -413,12 +415,19 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
     tab_boer[matchBoerYifan[i,1],4:28] <- tab_boer[matchBoerYifan[i,1],4:28] + log2(tab_yifan$c_lim_conc[matchBoerYifan[i,2]]) - tab_boer[matchBoerYifan[i,1],refCol]
   }
   
+  ### Update sample correlation and standard deviations ###
+  
+  expanded_met_correlations <- matrix(NA, ncol =  nrow(remapped_SD), nrow = nrow(remapped_SD))
+  rownames(expanded_met_correlations) <- colnames(expanded_met_correlations) <- tab_boer$Metabolite
+  
+  expanded_met_correlations[chmatch(rownames(tab_boer_corr), tab_boer$altnames), chmatch(rownames(tab_boer_corr), tab_boer$altnames)] <- as.matrix(tab_boer_corr)
+  
+  
   # Recalculate the phosphate concentration with the absolute ATP/ADP values
   
   atp <- 2^ as.numeric(tab_boer[ tab_boer$Metabolite == 'ATP' & !is.na(tab_boer$Metabolite),4:28]) #M
   adp <- 2^ as.numeric(tab_boer[ tab_boer$Metabolite == 'ADP'& !is.na(tab_boer$Metabolite),4:28]) #M
   h2o <- 1 # (assumption pure water)
-  
   
   dG0 = 37.9 # kJ / mol,eQuilibrator
   dG = 57 # kJ/mol Bionumbers http://bionumbers.hms.harvard.edu//bionumber.aspx?id=100775&ver=0
@@ -427,24 +436,46 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   Tm= 310.15 # K
   
   p = (atp*h2o)/adp * exp((dG0-dG)/(R*Tm))
-  
   names(p) <- colnames(tab_boer[ tab_boer$Metabolite == 'ATP',4:28])
+  
+  # calculate the standard deviation of the phosphate concentration
+  
+  peqtn <- "log(((2^ATP)*h2o)/(2^ADP) * 2.71828^((dG0-dG)/(R*Tm)))/log(2)"
+  eq <- eval(parse(text = paste('expression(',peqtn,')')))
+  
+  derivList <- list()
+  for(spec in c('ATP', 'ADP')){
+    derivList[[spec]] <- D(eq, spec)
+    }
+  
+  for(cond in 1:n_c){
+    standard_devs <- remapped_SD[chmatch(c('ATP', 'ADP'), rownames(remapped_SD)), cond]
+    species_corr <- expanded_met_correlations[chmatch(c('ATP', 'ADP'), rownames(expanded_met_correlations)), chmatch(c('ATP', 'ADP'), rownames(expanded_met_correlations))]
+    species_cov <- species_corr*(standard_devs %*% t(rep(1, 2)))*(rep(1, 2) %*% t(standard_devs))
+    cond_values <- tab_boer[chmatch(c('ATP', 'ADP'), rownames(tab_boer)),cond + 3]; names(cond_values) <- c('ATP', 'ADP')
+    cond_values <- data.frame(ATP = cond_values[1], ADP = cond_values[2], h2o, dG0, dG, R, Tm)
+    
+    partial_deriv <- rep(NA, 2)
+    for(n_der in 1:length(derivList)){
+      partial_deriv[n_der] <- with(cond_values , eval(derivList[[n_der]]))
+      }
+    
+    remapped_SD[rownames(remapped_SD) == "phosphate",cond] <- sqrt(t(partial_deriv) %*% species_cov %*% partial_deriv) # save the compute log-space standard deviation
+    }
   
   tab_boer[tab_boer[,1] == 'phosphate',4:28] <- log2(p)
   metOrigin[tab_boer[,1] == 'phosphate'] <- 'abs'
   
+  
   # add 3pg as phosphoenolpyruvate
   tab_boer[tab_boer[,1] == 'phosphoenolpyruvate',4:28]<- tab_boer[tab_boer[,1] == '3-phospho-D-glycerate',4:28]
   names(metOrigin) <- tab_boer[,1]
+  remapped_SD[rownames(remapped_SD) == "phosphoenolpyruvate",] <- remapped_SD[rownames(remapped_SD) == "3-phosphoglycerate",]
   
- # add phosphate and phosphoenolpyruvate to the sd table
-  
-  rm(atp,adp,h2o,dG,dG0,R,Tm)
-  
-  
-  ## get the confidence interval for the boer data
-  
-  #boerComplete = read.table('./Data/matchCompounds/boer_data_2.txt', sep="\t",header=TRUE)
+  # determine the correlation of added components
+  expanded_met_correlations[,rownames(expanded_met_correlations) == "phosphoenolpyruvate"] <- expanded_met_correlations[rownames(expanded_met_correlations) == "phosphoenolpyruvate",] <- expanded_met_correlations[rownames(expanded_met_correlations) == "3-phospho-D-glycerate",]
+  expanded_met_correlations[,rownames(expanded_met_correlations) == "phosphate"] <- expanded_met_correlations[rownames(expanded_met_correlations) == "phosphate",] <- 0 # Im not sure how to propagate the correlations of ATP and ADP through here
+  expanded_met_correlations[rownames(expanded_met_correlations) %in% c("phosphoenolpyruvate", "phosphate"),colnames(expanded_met_correlations) %in% c("phosphoenolpyruvate", "phosphate")] <- diag(2)
   
   
   # save the absolute boer table
@@ -457,7 +488,7 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   })
   
   write.table(abs_tab_boer,'flux_cache/tab_boer_abs.txt',sep='\t')
-  save(tab_boer,metOrigin,metSVD,file='flux_cache/metaboliteTables.RData')
+  save(tab_boer,metOrigin,metSVD,remapped_SD,expanded_met_correlations,file='flux_cache/metaboliteTables.RData')
 } else load('flux_cache/metaboliteTables.RData')
 
 ### Check the stoichiometric model ########################
@@ -604,28 +635,6 @@ rxn_table$type <- c(rep(0,length(rxn_none)),rep(1,length(rxn_one)),rep("sub0",le
 rxn_table$type <- as.factor(rxn_table$type)
 rxn_table <- rxn_table[ !duplicated(rxn_table$rx),]
 
-# # In the cases where only one reactand is missing, which metabolites are mostly missing?
-# onefilt <- colSums(stoiMat_bin[!fin_filt,]) == 1
-#
-# #histogram per sID
-# summary(as.factor(rowSums(stoiMat_bin[!fin_filt,onefilt])))
-# nraffrxn_s <-rowSums(stoiMat_bin[!fin_filt,onefilt])
-# fil <-nraffrxn_s >2
-# row_tID_nm<- sIDtotID(row.names(stoiMat_bin[!fin_filt,]))
-#
-# uni_tID_nm <- unique(row_tID_nm)
-#
-# nraffrxn_t<- vector(mode = "integer", length = length(uni_tID_nm))
-#
-# for(i in 1:length(uni_tID_nm)){
-# tID <- uni_tID_nm[i]
-# filt <- row_tID_nm == tID
-# nraffrxn_t[i] <- sum(nraffrxn_s[filt])
-# }
-# summary(as.factor(nraffrxn_t))
-# # which things are missing in more than 4 reactions
-# tIDtoName(uni_tID_nm[nraffrxn_t >4])
-
 # now make a filter to exclude transport reactions
 
 row_tID<- sIDtotID(row.names(stoiMat_bin))
@@ -649,21 +658,6 @@ cfilt <-!rxn_table$rx %in% c('r_0255','r_0256','r_0568','r_0569') # Version 7: f
 
 tfilt <- !rxn_table$rx %in% TransportRxn
 rxn_table <- rxn_table[cfilt & tfilt,]
-
-# SUMMARY
-# How many reactions have at least one mesured enyzme when Including transport & redundant reactions:
-#table(rxn_table$type, rxn_table$min1gene)
-# How many have all measured:
-#table(rxn_table$type, rxn_table$allmeas)
-
-# How many reactions have at least one mesured enyzme when excluding transport & redundant reactions:
-#table(rxn_table_filt$type, rxn_table_filt$min1gene)
-# How many have all measured:
-#table(rxn_table_filt$type, rxn_table_filt$allmeas)
-
-# how many reactions are there in total?
-
-#sum(!(uni_rxn %in% TransportRxn))
 
 rm(stoiMat_bin,,stoiMat_sub,est_filt,est_names,isTransport)
 
@@ -1336,19 +1330,6 @@ rctlst_sm <- rctlst_sm[rowSums(rctlst_sm[,c(2,3)] =='') != 2,]
 # add each small molecule as in a separate active sites
 rct_s2p <-addsm2rct(rctlst_sm,rct_s2p)
 
-# sort the reactions
-
-#rct_s2p <- rct_s2p[order(rct_s2p$ReactionID,rct_s2p$BindingSite,rct_s2p$Stoi,rct_s2p$Substrate,decreasing= FALSE),]
-
-## after some discussions with Jun, we realized that reactions
-# A+B -> C have to be further discriminated:
-# a) A+B -> C+ C (C also inhibits A & B)
-# b) 'A'+B -> 'C' (C inhibits only the active site of A)
-# c) 'A' + 'B' -> 'C' (C inhibits both active site of A and B)
-# -> discriminate the condensation reactions
-#rct_s2p <- discrCondRxn(rct_s2p)
-# Does not work
-
 # sort the reactions -> in order to get easy understandable tables
 rct_s2p <- rct_s2p[order(rct_s2p$ReactionID,rct_s2p$BindingSite,rct_s2p$Stoi,rct_s2p$Substrate,decreasing= FALSE),]
 
@@ -1387,10 +1368,6 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
   modTable <- read.table('./flux_cache/modTable.tsv',header=T,sep='\t')
 } else {
   
-  source('./match_brenda.R')
-  
-  library(ggplot2)
-  
   splilistTID <- function(input,split){
     unname(sapply(input,function(x){strsplit(as.character(x),split,fixed = TRUE)}))
   }
@@ -1402,7 +1379,14 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
     }))
   }
   
-  ### check if the modulators are in are in boer or yifan ###
+  # 1) match rID-EC-BRENDA annotated modifiers - inhibitors and activators
+  # 2) generate a table with summary of kinetic parameters - Km and Ki
+  # 3) return tID modifiers -> reaction matches
+  
+  source('./match_brenda.R')
+  
+
+  ### check if the modulators were measured in either the relative (boer) or absolute (yifan) abundance datasets ###
   isModMeas <- function(modTable){
     boerTID <- listTID$SpeciesType[matchBoerTID[!matchBoerTID[,1] %in% matchBoerYifan[,1],2]]
     yifanTID <- listTID$SpeciesType[matchBoerTID[matchBoerTID[,1] %in% matchBoerYifan[,1],2]]
@@ -1419,77 +1403,13 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
     return(modTable)
   }
   
-  Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
-    # formMode:
-    # cc for convinience kinetics (only supports uncompetitive inhibition)
-    # rm for reversible menten with substrate inhibition
-    
-    # if allInhMods = T:
-    # write equations for comp, uncom and noncomp inhibition for all inhibitors that have a maxSim target
-    
-    if (!allInhMods){
-      modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','subtype')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
-    } else {
-      modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
-      modTab[modTab$modtype == 'inh','subtype'] <- 'uncompetitive'
-      tmodTab <-modTab[modTab$modtype == 'inh' & !is.na(modTab$SimMatch),]
-      tmodTab$subtype <- 'noncompetitive'
-      modTab <- rbind(modTab,tmodTab)
-      tmodTab$subtype <- 'competitive'
-      modTab <- rbind(modTab,tmodTab)
-    }
-    
-    
-    rxnForms <- list()
-    for (i in 1:nrow(modTab)){
-      rctLine <- rct_s2p[1,]
-      rctLine[] <-NA
-      rctTab <- rct_s2p[rct_s2p$ReactionID == modTab$rxn[i],]
-      if (nrow(rctTab) > 0){
-        rctLine$ReactionID <- modTab$rxn[i]
-        rctLine$SubstrateID <- modTab$tID[i]
-        rctLine$Substrate <- tIDtoName(strsplit(modTab$tID[i],'/')[[1]][1])
-        rctLine$Stoi <- 0
-        rctLine$Hill <- modTab$hill[i]
-        rctLine$Type <- modTab$modtype[i]
-        rctLine$Reversible <- rct_s2p$Reversible[ rct_s2p$ReactionID == modTab$rxn[i]][1]
-        rctLine$Subtype <- modTab$subtype[i]
-        
-        subMod <- 'allo'
-        if (modTab$modtype[i] == 'inh' & !is.na(modTab$subtype[i]) & modTab$subtype[i] == 'competitive'){
-          rctLine$BindingSite <- rct_s2p$BindingSite[ rct_s2p$ReactionID == modTab$rxn[i] & rct_s2p$SubstrateType == modTab$SimMatch[i]]
-          subMod <- 'comp'
-        } else if (modTab$modtype[i] == 'inh' & !is.na(modTab$subtype[i]) & modTab$subtype[i] == 'noncompetitive'){
-          rctLine$BindingSite <- rct_s2p$BindingSite[ rct_s2p$ReactionID == modTab$rxn[i] & rct_s2p$SubstrateType == modTab$SimMatch[i]]
-          subMod <- 'noncomp'
-        } else if (modTab$modtype[i] == 'inh'){
-          rctLine$BindingSite <- 0
-          subMod <- 'uncomp'
-          rctLine$Subtype <- 'uncompetitive'
-        } else {
-          rctLine$BindingSite <- 0
-          rctLine$Subtype <- 'allosteric'
-        }
-        rctTab <- rbind(rctTab,rctLine)
-        print(i)
-        entry <- paste(modTab$rxn[i],'-',as.character(formMode),'-',strsplit(modTab$tID[i],'/')[[1]][1],'-',modTab$modtype[i],'-',subMod,sep='')
-        rxnForms[[entry]]<- tab2ReactionForms(rctTab,formMode)[[1]]
-        #rxnForms[[entry]]$modTable <- modTable[modTable$rxn == modTab$rxn[i] & modTable$tID == modTab$tID[i] & modTable$modtype == modTab$modtype[i] &
-        # !is.na(modTable$rxn) & !is.na(modTable$tID),]
-      }
-    }
-    return(rxnForms)
-  }
   
-  
-  ### calculate the chemical similarity of the inhibitors & activators ###
-  
+  ### Determine  the chemical similarity of BRENDA compunds as well others compunds to identify possible competitive inhibitors ###
   # make a cosimilarity matrix between all compounds in the model
   
-  ## 1) make a distmatAPt of all compounds: ##
+  ## make a distmatAPt of all compounds: ##
   # use atom pair tanimoto similarity (APt)
-  #dummy <- cmp.cluster(db=apset, cutoff=0, save.distances="distmatAPt.rda")
-  
+
   if(file.exists("flux_cache/distmatAPt.rda")){
     load("flux_cache/distmatAPt.rda")
     }else{
@@ -1543,11 +1463,8 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
     }
   }
   
-    
-  
-  ## 1) Use APt as a similarity measurementd
+  ### Generate a list of metabolites which could be potential competitive inhibitors of a substrate based upon chemical similarity
   # use Apt > 0.5 for compounds to get included in the list
-  
   
   simList <- list()
   for (rxn in unique(rct_s2p$ReactionID)){
@@ -1594,6 +1511,7 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
     return(name)
   })
   
+  #save(list = ls(), file = "tmp.Rdata")
   
   modTable <- rbind(modTable,tmpTable)
   
@@ -1605,7 +1523,7 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
   modTable <- modTable[!duplicated(modTable),]
   rm(simList,tmpTable)
   
-  write.table(modTable,file='./flux_cache/modTable.tsv',col.names=T,row.names=F,sep='\t')
+  write.table(modTable,file='./flux_cache/modTable.tsv',col.names=T,row.names=F,sep='\t', quote = F)
 }
 
 #### Write the reaction laws and the rxnf structure with metabolite and protein measurements ####
@@ -1688,34 +1606,6 @@ addInfo2rxnf <- function(rxnf){
   return(rxnf)
 }
 
-# get the reaction forms
-
-rxnForms <- tab2ReactionForms(rct_s2p,'rm') # with product inhibition
-rxnf <- list()
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-rxnForms <- tab2ReactionForms(rct_s2p,'cc') # convinience kinetics
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-## Write all the rate laws with all Brenda modifications and all possible inhibitor modes
-
-rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T)
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-
-
-## Write out allosteric activator and inhibitor reaction equations for a generic regulator
-
-deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_X", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1)
-deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)    
-deNovoRegulators$modtype <- rep(c("act", "inh"), each = length(unique(rct_s2p$ReactionID)))
-
-rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F)
-
-    
 Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
     # formMode:
     # cc for convinience kinetics (only supports uncompetitive inhibition)
@@ -1777,17 +1667,43 @@ Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
     }
     return(rxnForms)
   }
-      
-    
-    
-      
-    
+
+
+# get the reaction forms
+
+rxnf <- list() # a list 
+
+rxnForms <- tab2ReactionForms(rct_s2p,'rm') # with product inhibition
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+rxnForms <- tab2ReactionForms(rct_s2p,'cc') # convinience kinetics
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+
+
+ 
+## Write all the rate laws with all Brenda modifications and all possible inhibitor modes      
+
 rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 
-    
+## Write out allosteric activator and inhibitor reaction equations for a generic regulator
+
+deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_metX", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1234)
+deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)    
+deNovoRegulators$modtype <- rep(c("act", "inh"), each = length(unique(rct_s2p$ReactionID)))
+
+rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
 rm(rxnForms)
     
     
@@ -1867,8 +1783,6 @@ SimByName <- function(name1,name2){
   } else print('cpd not found!')
 }
 
-
-# <- sapply(a,Chebi2name)
 
 row.names(distmatAPt_names) <- a
 colnames(distmatAPt_names) <- row.names(distmatAPt_names)
