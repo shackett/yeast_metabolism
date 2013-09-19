@@ -29,7 +29,7 @@ if(QPorLP == "QP"){
 modeGurobi = 'python'
 pythonMode = 'simple' # simple,thdyn, dir or ll (loopless)
 FVA = 'T' # Should flux variblility analysis be performed
-useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -148,7 +148,7 @@ prot_matches <- sapply(reactions, function(x){
 ### cache files so that they are available when reaction equations are created ###
 
 write.table(rxn_enzyme_groups, file = "flux_cache/rxn_enzyme_groups.tsv", sep = "\t", col.names = T, row.names = F, quote = F) # a data.frame indicating how proteins form catalytic units (monimers, dimers...)
-write.table(prot_matches, file = "flux_cache/prot_matches.tsv", sep = "\t", col.names = T, row.names = F, quote = F) # boolean vector indicating whether a reaction's proteins were ascertained via proteomics
+write.table(data.frame(reaction = names(prot_matches), measured = unname(prot_matches)), file = "flux_cache/prot_matches.tsv", sep = "\t", col.names = T, row.names = F, quote = F) # boolean vector indicating whether a reaction's proteins were ascertained via proteomics
 
 
 
@@ -575,11 +575,13 @@ if(QPorLP == "QP"){
   qpModel$obj[grep('^r_', Sinfo$rxDesignation, invert = TRUE)] <- 0
   # lessen penalization for rxns with measured proteins and central C rxns
   qpModel$obj[qpModel$obj != 0] <- qpModel$obj[qpModel$obj != 0] * prot_penalty[chmatch(Sinfo$reaction[qpModel$obj != 0], names(prot_penalty))]
+  qpModel$obj[qpModel$obj == 0] <- 10^-8 # reduce zero L1 penalties to a minute value, to aid in finding feasible solutions
   
   ### QP-specific output_files ###
   
   residual_flux_stack <- NULL
   composition_balance <- NULL
+  fva_summary <- NULL
   
   ### iterate through conditions and optimize the fit of fluxes to boundary and biomass conditions ###
   
@@ -673,8 +675,22 @@ if(QPorLP == "QP"){
       
       if(is.null(pythout)){print(paste(treatment, "Gurobi files prepared for cluster use", collapse = " "))}else{
         
-        modelOut = FVA_read(useCluster)
-        FVAsum = FVA_summary(modelOut)
+        modelOut = FVA_read(pythout)
+        
+        fva_sum <- modelOut[,grep('FVA[min|max]|asID|offset', colnames(modelOut))]
+        
+        ## add offset back in
+        fva_sum[,grep('FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('FVA[min|max]', colnames(fva_sum))] + t(t(ifelse(!is.na(fva_sum$offset), fva_sum$offset, 0))) %*% rep(1, length(grep('FVA[min|max]', colnames(fva_sum))))
+        fva_sum <- fva_sum[,colnames(fva_sum) != "offset"]
+        fva_sum <- data.table(melt.data.frame(fva_sum, id.vars = "asID"))
+        
+        fva_sum[, boundType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
+        fva_sum[, logLikelihood:= strsplit(as.character(variable), split = "_")[[1]][2], by = variable]
+        fva_sum[, relLikelihood:= round(as.numeric(logLikelihood) - max(as.numeric(logLikelihood)), 5), by = logLikelihood]
+        fva_sum$treatment = treatment
+        fva_sum = fva_sum[,list(treatment, asID, boundType, relLikelihood, value),]
+        
+        fva_summary <- rbind(fva_summary, fva_sum)
         
       }
     }
@@ -896,8 +912,39 @@ flux_summary <- list()
 flux_summary$IDs = rxNames
 flux_summary$cellularFluxes = fluxMat_per_cellVol
 
+#### summarize flux variability analysis fluxes
+fva_summary_df <- acast(fva_summary, formula = "asID ~ treatment ~ boundType", value.var = "value")
 
-save(flux_summary, file = "fluxSummaryQP.Rdata")
+#### Determine which reactions' fluxes are sufficiently constrained to merit further analysis
+
+median_fva_gap <- data.frame(reaction = names(fva_summary_df[,1,1]), med_fva_gap = apply(fva_summary_df, 1, function(x){
+  x <- as.data.frame(x)
+  median((x$FVAmax - x$FVAmin)/mapply(function(i,j){max(abs(i), abs(j))}, i = x$FVAmax, j = x$FVAmin), na.rm = T) #median{(max - min)/sup|max,min|}, also 10% quantile of same set
+  }), weighted_med_fva_gap = apply(fva_summary_df, 1, function(x){
+  # also take the weighted mean to identify cases where most reactions have low flux (but weakly constrained) and a subset of conditions have high relatively invariant flux
+  x <- as.data.frame(x)
+  x <- x[is.finite(x$FVAmax) & is.finite(x$FVAmin),]
+  
+  if(nrow(x) < 20){
+    return(NA) # 
+    }else{
+      flux_mag <- mapply(function(i,j){max(abs(i), abs(j))}, i = x$FVAmax, j = x$FVAmin)
+      sum((x$FVAmax - x$FVAmin)/sum(flux_mag))
+      }
+  }))
+
+median_fva_gap[is.na(median_fva_gap$weighted_med_fva_gap),]
+table(!is.na(abs(median_fva_gap$med_fva_gap)) & abs(median_fva_gap$med_fva_gap) < 0.3, !is.na(abs(median_fva_gap$weighted_med_fva_gap)) & abs(median_fva_gap$weighted_med_fva_gap) < 0.2)
+
+flux_constrained <- ifelse((!is.na(abs(median_fva_gap$med_fva_gap)) & abs(median_fva_gap$med_fva_gap) < 0.3) | (!is.na(abs(median_fva_gap$weighted_med_fva_gap)) & abs(median_fva_gap$weighted_med_fva_gap) < 0.2), T, F)
+
+ggplot(median_fva_gap, aes(x = abs(med_fva_gap), fill = ifelse(flux_constrained, "red", "blue"))) + geom_bar(width = 0.05) + scale_fill_identity() + scale_x_continuous("median[maximum flux - minimum flux / sup|max, min|]") + ggtitle("Flux variability at solution, scaled by magnitude")
+
+flux_summary$fva_summary_df = fva_summary_df[flux_constrained,,]
+
+# save flux summaries and pipe into FBGA.R #
+
+save(flux_summary, file = "flux_cache/fluxSummaryQP.Rdata")
 
 
 

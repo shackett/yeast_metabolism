@@ -4,6 +4,7 @@
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 library(reshape2) #for visualization at the end
+library(data.table)
 library(nnls) #for non-negative regression used to fit kinetic parameters
 library(ggplot2)
 library(gplots)
@@ -32,17 +33,17 @@ chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.0
 if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
   source("reactionStructures.r")
 }else{
-  load("rxnf_formulametab.rdata")
+  load("flux_cache/rxnf_formulametab.rdata")
 }
 
-##### Import fluxes
+##### Import list of flux fluxes from FBA_run_full_reco.R 
 load("fluxSummaryQP.Rdata") #load flux through each reaction
 
 
 ##### Import enzyme abundances
-enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
-rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
-enzyme_abund <- enzyme_abund[,c(16:20, 1:5, 11:15, 6:10, 21:25)] #reorder proteins so that they are the same order as fluxes and metabolites (otherwise a warning will be issued later)
+#enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
+#rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
+#enzyme_abund <- enzyme_abund[,c(16:20, 1:5, 11:15, 6:10, 21:25)] #reorder proteins so that they are the same order as fluxes and metabolites (otherwise a warning will be issued later)
 
 
 ##### Associate enzymes with pathways ######

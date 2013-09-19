@@ -1,9 +1,8 @@
-
+#### Intended to be sourced from FBGA.R ####
 
 options(stringsAsFactors=FALSE)
 
 source('./find_chebi/find_chebi.R', chdir = T)
-#load('../../RabinowitzData/Data_files/condition_model_setup.Rdata')
 
 library(stringr)
 
@@ -102,7 +101,7 @@ tIDToKEGGs <- function(tIDs){
 
 ## start code
 
-# Phosphate condicitions can later be estimated, so reserve a line
+# Phosphate concentration can later be estimated, so reserve a line
 
 p <- tab_boer[1,]; p[] <- NA; p$Metabolite <- 'phosphate'; p$KEGG='C00009';
 tab_boer <- rbind(tab_boer,p)
@@ -491,7 +490,8 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   save(tab_boer,metOrigin,metSVD,remapped_SD,expanded_met_correlations,file='flux_cache/metaboliteTables.RData')
 } else load('flux_cache/metaboliteTables.RData')
 
-### Check the stoichiometric model ########################
+
+#### Check the stoichiometric model ########################
 
 # create the stoiMat
 getStoiMat<- function(metabolites, reactions, corrFile, rxnFile){
@@ -661,11 +661,13 @@ rxn_table <- rxn_table[cfilt & tfilt,]
 
 rm(stoiMat_bin,,stoiMat_sub,est_filt,est_names,isTransport)
 
-########## Map between reactions, Kegg RxnIDs and EC numbers ####
+
+#### Map between reactions, Kegg RxnIDs and EC numbers ####
 
 rxnEnzGroup <-read.table('./flux_cache/rxn_enzyme_groups.tsv',header=T,sep='\t')
 
-## For each reaction in the consensus reconstruction, determine which pathways and ECs are associated ######
+
+#### For each reaction in the consensus reconstruction, determine which pathways and ECs are associated ######
 if (file.exists('./flux_cache/rxnParYeast.tsv')){
   rxnParYeast <- read.table('./flux_cache/rxnParYeast.tsv',header=T,sep='\t')
 } else {
@@ -788,7 +790,7 @@ write.table(tmpEC,file= "./flux_cache/ECnr.txt", col.names=F,row.names=F, quote 
 rm(tmpEC)
 
 
-### Structural similarity #####
+#### Structural similarity #####
 
 # Match substrates and products that have a structural similarity and thus
 # could occupy the same active sites
@@ -981,8 +983,6 @@ if(file.exists("./flux_cache/sdf_set_Mod.RData")){
   
   save(sdfset,apset,file="./flux_cache/sdf_set_Mod.RData")
 }
-
-
 
 
 #### Reaction substrates and products are matched based on their chemical similarity ####
@@ -1356,8 +1356,8 @@ rct_s2p$Reversible = sapply(rct_s2p$ReactionID,function(x){
 rct_s2p$BindingSite <- as.numeric(rct_s2p$BindingSite)
 rct_s2p$Stoi <- as.numeric(rct_s2p$Stoi)
 rct_s2p$Subtype <- NA
-rct_s2p$Subtype[ rct_s2p$Stoi <0] <- 'substrate'
-rct_s2p$Subtype[ rct_s2p$Stoi >0] <- 'product'
+rct_s2p$Subtype[ rct_s2p$Stoi < 0] <- 'substrate'
+rct_s2p$Subtype[ rct_s2p$Stoi > 0] <- 'product'
 
 #write.table(rct_s2p[,c("ReactionID","Reversible","Type","SubstrateID","BindingSite","Stoi","Hill")],file='./Python/testinp.tsv',row.names=F,col.names=F,sep='\t')
 
@@ -1365,7 +1365,7 @@ rct_s2p$Subtype[ rct_s2p$Stoi >0] <- 'product'
 #### Add modifiers ####
 
 if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metaboliteAffinities.tsv')){
-  modTable <- read.table('./flux_cache/modTable.tsv',header=T,sep='\t')
+  modTable <- read.delim('./flux_cache/modTable.tsv',header=T,sep='\t')
 } else {
   
   splilistTID <- function(input,split){
@@ -1526,6 +1526,7 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
   write.table(modTable,file='./flux_cache/modTable.tsv',col.names=T,row.names=F,sep='\t', quote = F)
 }
 
+
 #### Write the reaction laws and the rxnf structure with metabolite and protein measurements ####
 # Functions
 
@@ -1537,17 +1538,21 @@ addInfo2rxnf <- function(rxnf){
   
   # prepare the rxnParYeast
   rownames(rxnParYeast) <- rxnParYeast$ReactionID
-  # load the proteomics data if necessary
-  if (!'enzyme_abund' %in% ls()){
-  enzyme_abund <- read.delim("./Data/matchCompounds/proteinAbundance.tsv")
+  
+  # load the protein relative abundance, standard deviation and association to reactions
+  enzyme_abund <- read.delim("./companionFiles/proteinAbundance.tsv")
   rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
-  }
+  enzyme_precision <- read.delim("./companionFiles/proteinPrecision.tsv", sep = " ")
+  
+  rxn_enzyme_groups <- read.delim("./flux_cache/rxn_enzyme_groups.tsv")
+  
   # assert that the proteomics data is ordered the same as the metabolite data
   colnames(enzyme_abund) <- toupper(colnames(enzyme_abund))
   idx <- sapply(colnames(tab_boer[,4:28]),function(x){
     chmatch(x,colnames(enzyme_abund))
   })
   enzyme_abund <- enzyme_abund[,idx]
+  enzyme_precision <- enzyme_precision[,idx]
   
   # Use the information from the rxnFormData to pull the rest of the data
 
@@ -1572,6 +1577,16 @@ addInfo2rxnf <- function(rxnf){
         rxnf[[entry]]$originMet[tID] <- metOrigin[rowBoer]
       }
     }
+    
+    # Add the standard deviation of metabolites and their residual correlations
+    
+    measuredTid <- rxnf[[entry]]$originMet[rxnf[[entry]]$originMet != "nm"]
+    
+    rxnf[[entry]]$met_SD <- matrix(unlist(remapped_SD[dicttIDBoer[chmatch(names(measuredTid), names(dicttIDBoer))],]), nrow = n_c, ncol = length(measuredTid), byrow = T)
+    colnames(rxnf[[entry]]$met_SD) <- names(measuredTid)
+    
+    rxnf[[entry]]$met_Corr <- expanded_met_correlations[dicttIDBoer[chmatch(names(measuredTid), names(dicttIDBoer))],dicttIDBoer[chmatch(names(measuredTid), names(dicttIDBoer))]]
+    
     # Add the rxnID
     rxnf[[entry]]$rxnID <- substr(entry,1,6)
     
@@ -1600,8 +1615,80 @@ addInfo2rxnf <- function(rxnf){
     # enzyme groups
     rxnf[[entry]]$enzGroup <- rxnEnzGroup$group[fil]
     names(rxnf[[entry]]$enzGroup) <- rxnEnzGroup$enzyme[fil]
-    # Protein measurements
-    rxnf[[entry]]$enzymeAbund = enzyme_abund[unlist(sapply(rxnEnzGroup$enzyme[fil], function(x){grep(x, rownames(enzyme_abund))})),]
+    # Protein measurements - estimate of mean and precision (inverse varianc) - precision more naturally allows calculation of weighted mean
+    rxnf[[entry]]$enzymeAbund = enzyme_abund[unlist(sapply(unique(rxnEnzGroup$enzyme[fil]), function(x){grep(x, rownames(enzyme_abund))})),]
+    rxnf[[entry]]$enzymePrec = enzyme_precision[unlist(sapply(unique(rxnEnzGroup$enzyme[fil]), function(x){grep(x, rownames(enzyme_abund))})),]
+    
+    # Aggregate protein relative abundances to form complexes weighted by measurement precision
+    
+    measuredEnzymeGroups <- rxnf[[entry]]$enzGroup[names(rxnf[[entry]]$enzGroup) %in% rownames(rxnf[[entry]]$enzymeAbund)]
+    
+    if(length(unique(measuredEnzymeGroups)) > 1){
+      
+      # filter subsumable protein groups to generate a parsimonious set of protein groups
+      meg_matrix <- matrix(0, ncol = length(unique(names(measuredEnzymeGroups))), nrow = length(unique(measuredEnzymeGroups)))
+      rownames(meg_matrix) <- unique(measuredEnzymeGroups); colnames(meg_matrix) <- unique(names(measuredEnzymeGroups))
+      for(i in unique(measuredEnzymeGroups)){
+        meg_matrix[rownames(meg_matrix) == i, colnames(meg_matrix) %in% names(measuredEnzymeGroups)[measuredEnzymeGroups == i]] <- 1
+        }
+      
+      # collapse equivalent protein sets and rename set as joint
+      meg_matrix_unique <- unique(meg_matrix)
+      for(pset in rownames(meg_matrix)[duplicated(meg_matrix)]){
+        row_match <- apply(meg_matrix_unique, 1, function(x){all(x ==  meg_matrix[rownames(meg_matrix) == pset,])})
+        rownames(meg_matrix_unique)[row_match] <- paste(rownames(meg_matrix_unique)[row_match], pset, sep = "/")
+        }
+      
+      # for each row, see if it is a subset of proteins in any other group, and has 1+ non-ascertained components -> subsume into another complex 
+      prot_group_subset <- rep(NA, nrow(meg_matrix_unique))
+      for(i in 1:nrow(meg_matrix_unique)){
+        complement_groups <- matrix(meg_matrix_unique[-i,meg_matrix_unique[i,] == 1], ncol = sum(meg_matrix_unique[i,] == 1))
+        prot_group_subset[i] <- any(apply(complement_groups, 1, function(x){all(x == 1)}))
+        }
+      incomplete_groups <- unique(rxnf[[entry]]$enzGroup[!(names(rxnf[[entry]]$enzGroup) %in% rownames(rxnf[[entry]]$enzymeAbund))]) #identify groups with 1+ unascertained proteins
+      incomplete_unique_groups <- sapply(rownames(meg_matrix_unique), function(x){all(strsplit(x, split = '/')[[1]] %in% incomplete_groups)}) # after combining equivalent groups, are there any which are fully measured
+      
+      measuredEnzymeGroups <- measuredEnzymeGroups[!(measuredEnzymeGroups %in% rownames(meg_matrix_unique)[(prot_group_subset & incomplete_unique_groups)])] # remove protein groups which are both subsumable and have missing components
+      
+    }
+    
+    # take a weighted average of protein RA to determine complex RA - weighting with precision
+    enzymeComplexes <- matrix(NA, ncol = n_c, nrow = length(unique(measuredEnzymeGroups)))
+    rownames(enzymeComplexes) <- sapply(unique(measuredEnzymeGroups), function(x){paste(x, paste(names(measuredEnzymeGroups)[measuredEnzymeGroups == x], collapse = "/"), sep = "-")})
+    colnames(enzymeComplexes) <- colnames(enzyme_abund)
+    enzymeComplex_SD <- enzymeComplexes
+    
+    for(i in unique(measuredEnzymeGroups)){
+      
+      E <- rxnf[[entry]]$enzymeAbund[rownames(rxnf[[entry]]$enzymeAbund) %in% names(measuredEnzymeGroups)[measuredEnzymeGroups == i],]
+      W <- rxnf[[entry]]$enzymePrec[rownames(rxnf[[entry]]$enzymeAbund) %in% names(measuredEnzymeGroups)[measuredEnzymeGroups == i],]
+      
+      if(nrow(E) == 1){
+        
+        # unambiguous case if only a single specie
+        enzymeComplexes[c(1:length(unique(measuredEnzymeGroups)))[unique(measuredEnzymeGroups) == i],] <- unlist(E)
+        enzymeComplex_SD[c(1:length(unique(measuredEnzymeGroups)))[unique(measuredEnzymeGroups) == i],] <- unlist(1/sqrt(W))
+        
+      }else{
+        
+        # if multiple proteins are combined, combine them according to their precision
+        enzymeComplexes[c(1:length(unique(measuredEnzymeGroups)))[unique(measuredEnzymeGroups) == i],] <- apply(E * W, 2, sum)/apply(W, 2, sum)
+        enzymeComplex_SD[c(1:length(unique(measuredEnzymeGroups)))[unique(measuredEnzymeGroups) == i],] <- 1/sqrt(apply(W, 2, sum))
+        
+      }
+    }
+    
+    rxnf[[entry]]$enzymeComplexes <- enzymeComplexes
+    
+    rxnf[[entry]]$all_species_SD <- cbind(rxnf[[entry]]$met_SD, t(enzymeComplex_SD))
+    
+    all_species_corr <- diag(ncol(rxnf[[entry]]$all_species_SD))
+    colnames(all_species_corr) <- rownames(all_species_corr) <- colnames(rxnf[[entry]]$all_species_SD)
+    
+    all_species_corr[1:ncol(rxnf[[entry]]$met_SD),1:ncol(rxnf[[entry]]$met_SD)] <- rxnf[[entry]]$met_Corr
+    
+    rxnf[[entry]]$all_species_corr <- all_species_corr
+  
   }
   return(rxnf)
 }
@@ -1693,7 +1780,7 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 
-## Write out allosteric activator and inhibitor reaction equations for a generic regulator
+## Write out allosteric activator and inhibitor reac tion equations for a generic regulator
 
 deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_metX", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1234)
 deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)    
