@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Jul 9 10:28:04 2013
+Created on Tue Jul  9 10:28:04 2013
 
 Does the optimization with gurobi
 
@@ -9,16 +9,11 @@ Does the optimization with gurobi
 
 #!/usr/bin/python
 
-#import re
 import numpy as np
 import re
-#import matplotlib.pyplot as plt
-#import sys
 from gurobipy import *
 import scipy
 from scipy import linalg, matrix
-#import os
-#os.chdir('/home/vitoz/Dropbox/Rabino/git/FBA_SRH/Yeast_genome_scale/Gurobi_python')
 
 def null(A, eps=1e-15):
     u, s, vh = scipy.linalg.svd(A)
@@ -30,9 +25,9 @@ def dense_optimize(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
                    rownames,colnames):
     model = Model()
     model.setParam('BarConvTol',1e-16)
-    model.setParam('OptimalityTol',1e-9)
-    model.setParam('FeasibilityTol',1e-9)
-    model.setParam('Method',1)
+    model.setParam('OptimalityTol',1e-9)    
+    model.setParam('FeasibilityTol',1e-9) 
+    model.setParam('Method',1) 
     # Add variables to model
     for j in range(cols):
         model.addVar(lb=lb[j], ub=ub[j], vtype=vtype[j],name=colnames[j])
@@ -55,7 +50,7 @@ def dense_optimize(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
         for j in range(cols):
             if Q[i][j] != 0:
                 #obj += Q[i][j]*vars[i]*vars[j]
-                #the /2 is arbitrary, but the R version does it and we want consistency
+                #the /2 is arbitrary, but the R version does it and we want consistency                
                 obj += Q[i][j]*vars[i]*vars[j]
     for j in range(cols):
         if c[j] != 0:
@@ -74,9 +69,9 @@ def dense_optimize_dir(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
                    rownames,colnames,method):
     model = Model()
     model.setParam('BarConvTol',1e-16)
-    model.setParam('OptimalityTol',1e-9)
-    model.setParam('FeasibilityTol',1e-9)
-    model.setParam('Method',method)
+    model.setParam('OptimalityTol',1e-9)    
+    model.setParam('FeasibilityTol',1e-9) 
+    model.setParam('Method',method) 
     
     if max(ub) > 1e10:
         print('Warning two high upper bounds make the integer program unstable and non binding.')
@@ -94,10 +89,10 @@ def dense_optimize_dir(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
                         
     model.update()
     for j in range(cols):
-        # add the switch as a constraint
+        # add the switch as a constraint        
         if colnames[j][-2:] in ['_R','_F']:
             swname = colnames[j][:-2] + '_sw'
-            if colnames[j][-2:] == '_F':
+            if colnames[j][-2:] == '_F':  
                 model.addConstr(modelVars[colnames[j]], GRB.LESS_EQUAL,modelVars[swname] * ub[j])
             elif colnames[j][-2:] == '_R':
                 model.addConstr(modelVars[colnames[j]], GRB.LESS_EQUAL,ub[j] *(1-modelVars[swname]))
@@ -117,7 +112,7 @@ def dense_optimize_dir(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
         for j in range(cols):
             if Q[i][j] != 0:
                 #obj += Q[i][j]*vars[i]*vars[j]
-                #the /2 is arbitrary, but the R version does it and we want consistency
+                #the /2 is arbitrary, but the R version does it and we want consistency                
                 obj += Q[i][j]*modelVars[colnames[i]]*modelVars[colnames[j]]
     for j in range(cols):
         if c[j] != 0:
@@ -136,18 +131,18 @@ def dense_optimize_loopless(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
                    rownames,colnames,method):
     
     model = Model()
-    # Loopless from Schellenberger2011
+    # Loopless from  Schellenberger2011
     model.setParam('BarConvTol',1e-16)
-    model.setParam('OptimalityTol',1e-9)
-    model.setParam('FeasibilityTol',1e-9)
-    model.setParam('Method',method)
+    model.setParam('OptimalityTol',1e-9)    
+    model.setParam('FeasibilityTol',1e-9) 
+    model.setParam('Method',method) 
     maxUb = max(ub)
     if maxUb > 1e10:
         print('VZ: Warning two high upper bounds make the binary constraints unstable and non binding.')
     
     # filter for internal reactions
     # (assumptions: only internal reactions start with 'r_)
-    intRxn = [i for i in range(cols) if re.match('^r_',colnames[i])]
+    intRxn = [i for i in range(cols) if re.match('^r_',colnames[i])]  
     # Add variables to model
     modelVars = dict()
     for j in range(cols):
@@ -166,16 +161,16 @@ def dense_optimize_loopless(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
                         
     model.update()
     for j in range(cols):
-        # add the switch as a constraint
+        # add the switch as a constraint        
         if colnames[j][-2:] in ['_R','_F']:
             swname = colnames[j][:-2] + '_sw'
-            if colnames[j][-2:] == '_F':
+            if colnames[j][-2:] == '_F':  
                 model.addConstr(modelVars[colnames[j]], GRB.LESS_EQUAL,modelVars[swname] * ub[j])
             elif colnames[j][-2:] == '_R':
                 model.addConstr(modelVars[colnames[j]], GRB.LESS_EQUAL,ub[j] *(1-modelVars[swname]))
             # constrain the Gs such that at always either the forward or the backward reaction is runnig
             if j in intRxn:
-                if colnames[j][-2:] == '_F':
+                if colnames[j][-2:] == '_F':  
                     model.addConstr(modelVars[colnames[j]+'_G'], GRB.LESS_EQUAL,modelVars[swname] * maxUb)
                     model.addConstr(modelVars[colnames[j]+'_G'], GRB.GREATER_EQUAL,modelVars[swname])
                 elif colnames[j][-2:] == '_R':
@@ -212,7 +207,7 @@ def dense_optimize_loopless(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
         for j in range(cols):
             if Q[i][j] != 0:
                 #obj += Q[i][j]*vars[i]*vars[j]
-                #
+                #              
                 obj += Q[i][j]*modelVars[colnames[i]]*modelVars[colnames[j]]
     for j in range(cols):
         if c[j] != 0:
@@ -232,9 +227,9 @@ def dense_optimize_thdyn(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
     
     model = Model()
     model.setParam('BarConvTol',1e-16)
-    model.setParam('OptimalityTol',1e-9)
-    model.setParam('FeasibilityTol',1e-9)
-    model.setParam('Method',method)
+    model.setParam('OptimalityTol',1e-9)    
+    model.setParam('FeasibilityTol',1e-9) 
+    model.setParam('Method',method) 
     model.setParam('TimeLimit',120)
     
     if max(ub) > 1e10:
@@ -254,10 +249,10 @@ def dense_optimize_thdyn(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
     
     model.update()
     for j in range(cols):
-        # add the switch as a constraint
+        # add the switch as a constraint        
         if colnames[j][-2:] in ['_R','_F']:
             swname = colnames[j][:-2] + '_sw'
-            if colnames[j][-2:] == '_F':
+            if colnames[j][-2:] == '_F':  
                 model.addConstr(modelVars[colnames[j]], GRB.LESS_EQUAL,modelVars[swname] * ub[j])
             elif colnames[j][-2:] == '_R':
                 model.addConstr(modelVars[colnames[j]], GRB.LESS_EQUAL,ub[j] *(1-modelVars[swname]))
@@ -277,7 +272,7 @@ def dense_optimize_thdyn(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
         for j in range(cols):
             if Q[i][j] != 0:
                 #obj += Q[i][j]*vars[i]*vars[j]
-                #the /2 is arbitrary, but the R version does it and we want consistency
+                #the /2 is arbitrary, but the R version does it and we want consistency                
                 obj += Q[i][j]*modelVars[colnames[i]]*modelVars[colnames[j]]
     for j in range(cols):
         if c[j] != 0:
@@ -303,13 +298,13 @@ def dense_optimize_thdyn(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
         col = colnames.index(rxndGnames[i])
         for row in range(rows):
             if A[row][col] != 0:
-                expr += A[row][col]*modelVars['RTlnc_' +rownames[row]]
+                expr  += A[row][col]*modelVars['RTlnc_' +rownames[row]]
         expr+= rxndGci[i]
         model.addConstr(expr, GRB.EQUAL, modelVars['dGr_'+rxn],name=('Calc_dG_'+rxn))
         # second law thdyn
         if rxn[-2:] in ['_R','_F']:
             swname = rxn[:-2] + '_sw'
-            if rxn[-2:] == '_F':
+            if rxn[-2:] == '_F':  
                 model.addConstr(modelVars['dGr_'+rxn] * modelVars[swname],GRB.LESS_EQUAL,0,name='thdyn_'+rxn)
             elif rxn[-2:] == '_R':
                 model.addConstr(modelVars['dGr_'+rxn] * (1-modelVars[swname]),GRB.LESS_EQUAL,0,name='thdyn_'+rxn)
@@ -322,7 +317,7 @@ def dense_optimize_thdyn(rows, cols, c, Q, A, sense, rhs, lb, ub, vtype,
     
     # Solve
     model.optimize()
-    #model.computeIIS()
+    #model.computeIIS() 
     #model.write("model.ilp")
     return model
 
@@ -391,8 +386,8 @@ def readRpythonDat(pythonDat):
         line = line.replace('\n','')
         line = line.replace('"','')
         line = line.split('\t')
-        if not(line[0] in inDat.keys()):
-            inDat[line[0]] = list()
+        if not(line[0] in inDat.keys()):   
+            inDat[line[0]] = list()    
         try:
             inDat[line[0]].append(map(float,line[1:]))
         except ValueError:
@@ -452,35 +447,62 @@ def fva_qp(model,objvals):
                 
             names.remove(curVar)
             
+            # determine the minimum flux through reaction which is consistent with the QP solution
+            
             model.setObjective(tobj,GRB.MINIMIZE )
             model.optimize()
             minCode = model.status
-            try:
+            
+            # if an optimal solution (2) is found continue
+            # if a suboptimal solution (13) is found, save and rerun
+            # otherwise rerun up to 10 times
+            
+            if minCode == 2:
                 minV= model.getObjective().getValue()
-            except:
-                minV=float("-inf")
-                pass
+            else:
+                count = 0
+                bestSol = float("-inf")
+                while (count < 9 and minCode != 2):
+                    if minCode == 13:
+                        bestSol = model.getObjective().getValue()
+                    model.reset
+                    model.optimize()
+                    minCode = model.status
+                    count += 1
+                minV = bestSol
+            
             fvaList.append([rxnName+'_FVA_'+str(val) +'_min',minV, 'status_'+str(model.status)])
             
+            # determine the maximum flux through reaction which is consistent with the QP solution
             
             model.setObjective(tobj,GRB.MAXIMIZE)
             model.optimize()
             maxCode = model.status
-            try:
-                maxV=model.getObjective().getValue()
-            except:
-                maxV=float("inf")
-                pass
+            
+            if maxCode == 2:
+                maxV= model.getObjective().getValue()
+            else:
+                count = 0
+                bestSol = float("inf")
+                while (count < 9 and maxCode != 2):
+                    if maxCode == 13:
+                        bestSol = model.getObjective().getValue()
+                    model.reset
+                    model.optimize()
+                    maxCode = model.status
+                    count += 1
+                maxV = bestSol
+            
             fvaList.append([rxnName+'_FVA_'+str(val) +'_max',maxV, 'status_'+str(model.status)])
             
     return fvaList
-   
-
+    
+    
 
 ## Start script
 
-#pythonDat = sys.stdin.readlines()
-pythonDat = open('./test_files/pythonDat_25.txt','r').readlines()
+pythonDat = sys.stdin.readlines()
+#pythonDat = open('./test_files/pythonDat_25.txt','r').readlines()
 inDat = readRpythonDat(pythonDat)
 
 ## calc some input
@@ -491,24 +513,24 @@ for i in range(len(inDat['ub'][0])):
     inDat['ub'][0][i] = min(inDat['ub'][0][i],GRB.INFINITY)
 
 # do the optimization:
-if inDat['mode'][0][0] == 'simple':
-    model = dense_optimize(nrow,ncol,inDat['obj'][0], inDat['Q'],
-                           inDat['A'], inDat['sense'][0], inDat['rhs'][0],
+if inDat['mode'][0][0] == 'simple': 
+    model = dense_optimize(nrow,ncol,inDat['obj'][0], inDat['Q'], 
+                           inDat['A'], inDat['sense'][0], inDat['rhs'][0], 
     inDat['lb'][0],inDat['ub'][0], vtype, inDat['rownamesA'][0], inDat['colnamesA'][0])
     model.setParam('Presolve',0) # for continuous models only -> for FVA
     model.setParam('BarHomogeneous',1) # for continuous models only -> for FVA
 ### varList = inDat['colnamesA'][0]
 elif inDat['mode'][0][0] == 'dir':
-    model = dense_optimize_dir(nrow,ncol,inDat['obj'][0], inDat['Q'],
-                               inDat['A'], inDat['sense'][0], inDat['rhs'][0],
+    model = dense_optimize_dir(nrow,ncol,inDat['obj'][0], inDat['Q'], 
+                               inDat['A'], inDat['sense'][0], inDat['rhs'][0], 
     inDat['lb'][0],inDat['ub'][0], vtype, inDat['rownamesA'][0], inDat['colnamesA'][0],-1)
 elif inDat['mode'][0][0] == 'll':
-    model = dense_optimize_loopless(nrow,ncol,inDat['obj'][0], inDat['Q'],
-                               inDat['A'], inDat['sense'][0], inDat['rhs'][0],
+    model = dense_optimize_loopless(nrow,ncol,inDat['obj'][0], inDat['Q'], 
+                               inDat['A'], inDat['sense'][0], inDat['rhs'][0], 
     inDat['lb'][0],inDat['ub'][0], vtype, inDat['rownamesA'][0], inDat['colnamesA'][0],-1)
 elif inDat['mode'][0][0] == 'thdyn':
-    model = dense_optimize_thdyn(nrow,ncol,inDat['obj'][0], inDat['Q'],
-                                 inDat['A'], inDat['sense'][0], inDat['rhs'][0],
+    model = dense_optimize_thdyn(nrow,ncol,inDat['obj'][0], inDat['Q'], 
+                                 inDat['A'], inDat['sense'][0], inDat['rhs'][0], 
     inDat['lb'][0],inDat['ub'][0], vtype, inDat['rownamesA'][0], inDat['colnamesA'][0],
     inDat['rxndGnames'][0],inDat['rxndGci'][0],inDat['thdMetnames'][0],inDat['thdMetlb'][0],
     inDat['thdMetub'][0],-1)
@@ -517,27 +539,26 @@ elif inDat['mode'][0][0] == 'thdyn':
 vars = model.getVars()
 values = model.getAttr('x', vars)
 names = model.getAttr('VarName',vars)
+optstatus = [''] * len(names)
+
 
 if inDat['FVA'][0][0] == 'T':
     obj = model.getObjective()
     objval = obj.getValue()
     # todo: work the flux direction constraints in
     #model = dense_optimize(nrow,ncol,inDat['obj'][0], inDat['Q'],
-    # inDat['A'], inDat['sense'][0], inDat['rhs'][0],
-	#inDat['lb'][0],inDat['ub'][0], vtype, inDat['rownamesA'][0], inDat['colnamesA'][0])
-    #objvals =list(objval + np.power(167.25,np.linspace(0.,0.35,8)).round(1)-1)
+    #                       inDat['A'], inDat['sense'][0], inDat['rhs'][0],
+#inDat['lb'][0],inDat['ub'][0], vtype, inDat['rownamesA'][0], inDat['colnamesA'][0])
+   # objvals =list(objval + np.power(167.25,np.linspace(0.,0.35,8)).round(1)-1)  
     objvals = objval
     fvaRes = fva_qp(model,objvals)
     for el in fvaRes:
         names.append(el[0])
         values.append(el[1])
-## varList = inDat['colnamesA'][0]
-
+        optstatus.append(el[2])
 
 
 sys.stdout.write('output_start'+'\n')
 for i in range(len(values)):
-    #if ( names[i] in inDat['colnamesA'][0]):
-    # sys.stdout.write(str(values[i])+'\n')
-    sys.stdout.write(names[i] + '\t' + str(values[i])+'\n')
+    sys.stdout.write(names[i] + '\t' + str(values[i])+ '\t' + str(optstatus[i]) + '\n')
 sys.stdout.write('output_end'+'\n')
