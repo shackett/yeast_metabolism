@@ -17,7 +17,7 @@ options(stringsAsFactors = FALSE)
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
 chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.05H2")),] # the 25 chemostat conditions of interest and their actual growth rates
 
-##### Import list of metabolite abundances and rxn forms
+##### Import list of metabolite abundances and rxn forms - **rxnf**
 
 ##### to construct a list of reaction information, including a mechanism.
 # Match Boer metabolites to tIDs using chemical similarity (ChEBI + ChemmineR)
@@ -28,7 +28,7 @@ chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.0
 # Generate a list of reaction form parameterizations
 ### Using reversible MM kinetics as the base form
 ### Additional reactions with BRENDA activators and inhibitors
-### To search for novel allosteric modifiers in an unsupervised manner - allow for reaction for extensions which 
+### To search for novel allosteric modifiers in an unsupervised manner - allow for reaction with extensions an abundance profile that is not specified a priori
 
 if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
   source("reactionStructures.r")
@@ -36,8 +36,12 @@ if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
   load("flux_cache/rxnf_formulametab.rdata")
 }
 
-##### Import list of flux fluxes from FBA_run_full_reco.R 
-load("fluxSummaryQP.Rdata") #load flux through each reaction
+##### Import list of flux fluxes from FBA_run_full_reco.R - **flux_summary**
+# IDs - reaction ID to reaction name correspondence for reactions with non-zero flux in the standard QP optimization
+# cellularFluxes - intracellular fluxes (moles per hr per mL cellular volume) across all 25 nutrients conditions for reactions with non-zero flux in some condition with the standard QP optimization.
+# fva_summary - rxns ~ conditions ~ min and maximum bound at QP solution - reactions are those that are moderately constrained under a majority of conditions
+
+load("flux_cache/fluxSummaryQP.Rdata")
 
 
 ##### Import enzyme abundances

@@ -681,8 +681,10 @@ if(QPorLP == "QP"){
         
         ## add offset back in
         fva_sum[,grep('FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('FVA[min|max]', colnames(fva_sum))] + t(t(ifelse(!is.na(fva_sum$offset), fva_sum$offset, 0))) %*% rep(1, length(grep('FVA[min|max]', colnames(fva_sum))))
+        ## remove flux elevation factor
+        fva_sum[,grep('FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('FVA[min|max]', colnames(fva_sum))]/flux_elevation_factor
         fva_sum <- fva_sum[,colnames(fva_sum) != "offset"]
-        fva_sum <- data.table(melt.data.frame(fva_sum, id.vars = "asID"))
+        fva_sum <- data.table(melt(fva_sum, id.vars = "asID"))
         
         fva_sum[, boundType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
         fva_sum[, logLikelihood:= strsplit(as.character(variable), split = "_")[[1]][2], by = variable]
@@ -914,6 +916,8 @@ flux_summary$cellularFluxes = fluxMat_per_cellVol
 
 #### summarize flux variability analysis fluxes
 fva_summary_df <- acast(fva_summary, formula = "asID ~ treatment ~ boundType", value.var = "value")
+cell_dens_scaling <- array(rep(chemostatInfo$VolFrac_mean[1:n_c], each = nrow(fva_summary_df)), dim = dim(fva_summary_df)) # scale flux-per-L culture/h, to flux-per-mL intracellular volume/h
+fva_summary_df <- fva_summary_df/cell_dens_scaling
 
 #### Determine which reactions' fluxes are sufficiently constrained to merit further analysis
 
@@ -941,6 +945,27 @@ flux_constrained <- ifelse((!is.na(abs(median_fva_gap$med_fva_gap)) & abs(median
 ggplot(median_fva_gap, aes(x = abs(med_fva_gap), fill = ifelse(flux_constrained, "red", "blue"))) + geom_bar(width = 0.05) + scale_fill_identity() + scale_x_continuous("median[maximum flux - minimum flux / sup|max, min|]") + ggtitle("Flux variability at solution, scaled by magnitude")
 
 flux_summary$fva_summary_df = fva_summary_df[flux_constrained,,]
+colnames(flux_summary$fva_summary_df) <- colnames(fluxMat_per_cellVol)
+
+# verify comparable fluxes between standard QP and FVA approaches
+
+sharedRx <- grep('^r_[0-9]{4}', intersect(flux_summary$IDs$reactionID, rownames(flux_summary$fva_summary_df)), value = T)
+
+standard_QP <- flux_summary$cellularFluxes[flux_summary$IDs$reactionID %in% sharedRx,]; rownames(standard_QP) <- sharedRx
+fva_QP <- flux_summary$fva_summary_df[rownames(flux_summary$fva_summary_df) %in% sharedRx,,]
+
+SQPmelt <- melt(standard_QP); colnames(SQPmelt) <- c("rID", "condition", "flux"); SQPmelt$model = "standardQP"
+FVAQPmelt <- melt(fva_QP); colnames(FVAQPmelt) <- c("rID", "condition", "model", "flux")
+allFluxMelt <- rbind(SQPmelt[,chmatch(colnames(SQPmelt), colnames(FVAQPmelt))], FVAQPmelt)
+compaFluxes <- dcast(allFluxMelt, formula = "rID + condition ~ model", value.var = "flux")
+
+# is the flux calculated using the standard QP formulation captured between the FVA upper and lower bound
+compaFluxes$fluxCap <- between(x = compaFluxes$standardQP, lower = compaFluxes$FVAmin, upper = compaFluxes$FVAmax, incbounds = T)
+# fractional departure between QP solution and closest bound relative to ub-lb
+compaFluxes$fluxDeparture <- apply(abs(compaFluxes$standardQP - data.frame(compaFluxes$FVAmax, compaFluxes$FVAmin))/(compaFluxes$FVAmax - compaFluxes$FVAmin), 1, min)
+
+hist(compaFluxes$fluxDeparture[!compaFluxes$fluxCap])
+
 
 # save flux summaries and pipe into FBGA.R #
 
