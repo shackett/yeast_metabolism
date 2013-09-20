@@ -465,7 +465,7 @@ def fva_qp(model,objvals):
                 while (count < 9 and minCode != 2):
                     if minCode == 13:
                         bestSol = model.getObjective().getValue()
-                    model.reset
+                    model.reset()
                     model.optimize()
                     minCode = model.status
                     count += 1
@@ -487,7 +487,7 @@ def fva_qp(model,objvals):
                 while (count < 9 and maxCode != 2):
                     if maxCode == 13:
                         bestSol = model.getObjective().getValue()
-                    model.reset
+                    model.reset()
                     model.optimize()
                     maxCode = model.status
                     count += 1
