@@ -1780,7 +1780,7 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 
-## Write out allosteric activator and inhibitor reac tion equations for a generic regulator
+## Write out allosteric activator and inhibitor reaction equations for a generic regulator
 
 deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_metX", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1234)
 deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)    
@@ -1792,8 +1792,11 @@ for (x in names(rxnForms)){
 }
 
 rm(rxnForms)
-    
-    
+
+# add information for the hypothetical metabolite, t_metX, to information list
+listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = "", row = nrow(listTID) + 1))
+
+
 # add the infos to the rxn structure
 rxnf <- addInfo2rxnf(rxnf)
 

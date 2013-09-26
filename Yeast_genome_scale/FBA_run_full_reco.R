@@ -169,6 +169,7 @@ reactionMatches$pathway = sapply(reactionMatches$KEGGrxnID, function(x){
   paste(PS, collapse = "__")
 })
 
+write.table(reactionMatches, "./flux_cache/reactionPathways.tsv", sep = "\t", col.names = T, row.names = F, quote = F)
 
 ### Determine which pathways are associated with a protein ###
 
@@ -910,14 +911,19 @@ heatmap.2(std_flux, trace = "none", Colv = F)
 
 
 
+
+
 flux_summary <- list()
 flux_summary$IDs = rxNames
-flux_summary$cellularFluxes = fluxMat_per_cellVol
+flux_summary$cellularFluxes = fluxMat_per_cellVol[,cond_order_check(colnames(fluxMat_per_cellVol))] # save cellular fluxes and verify correct ordering
+
 
 #### summarize flux variability analysis fluxes
 fva_summary_df <- acast(fva_summary, formula = "asID ~ treatment ~ boundType", value.var = "value")
 cell_dens_scaling <- array(rep(chemostatInfo$VolFrac_mean[1:n_c], each = nrow(fva_summary_df)), dim = dim(fva_summary_df)) # scale flux-per-L culture/h, to flux-per-mL intracellular volume/h
 fva_summary_df <- fva_summary_df/cell_dens_scaling
+
+
 
 #### Determine which reactions' fluxes are sufficiently constrained to merit further analysis
 
@@ -945,7 +951,8 @@ flux_constrained <- ifelse((!is.na(abs(median_fva_gap$med_fva_gap)) & abs(median
 ggplot(median_fva_gap, aes(x = abs(med_fva_gap), fill = ifelse(flux_constrained, "red", "blue"))) + geom_bar(width = 0.05) + scale_fill_identity() + scale_x_continuous("median[maximum flux - minimum flux / sup|max, min|]") + ggtitle("Flux variability at solution, scaled by magnitude")
 
 flux_summary$fva_summary_df = fva_summary_df[flux_constrained,,]
-colnames(flux_summary$fva_summary_df) <- colnames(fluxMat_per_cellVol)
+colnames(flux_summary$fva_summary_df) <- colnames(fluxMat_per_cellVol)[cond_order_check(colnames(fluxMat_per_cellVol))]
+
 
 # verify comparable fluxes between standard QP and FVA approaches
 
@@ -962,10 +969,15 @@ compaFluxes <- dcast(allFluxMelt, formula = "rID + condition ~ model", value.var
 # is the flux calculated using the standard QP formulation captured between the FVA upper and lower bound
 compaFluxes$fluxCap <- between(x = compaFluxes$standardQP, lower = compaFluxes$FVAmin, upper = compaFluxes$FVAmax, incbounds = T)
 # fractional departure between QP solution and closest bound relative to ub-lb
-compaFluxes$fluxDeparture <- apply(abs(compaFluxes$standardQP - data.frame(compaFluxes$FVAmax, compaFluxes$FVAmin))/(compaFluxes$FVAmax - compaFluxes$FVAmin), 1, min)
+compaFluxes$rangefluxDeparture <- apply(abs(compaFluxes$standardQP - data.frame(compaFluxes$FVAmax, compaFluxes$FVAmin))/(compaFluxes$FVAmax - compaFluxes$FVAmin), 1, min)
+# same thing relative to maximum flux
+compaFluxes$magfluxDeparture <- apply(abs(compaFluxes$standardQP - data.frame(compaFluxes$FVAmax, compaFluxes$FVAmin))/apply(data.frame(abs(compaFluxes$FVAmax), abs(compaFluxes$FVAmin)), 1, max, na.rm = T), 1, min)
 
-hist(compaFluxes$fluxDeparture[!compaFluxes$fluxCap])
+total_flux_cast <- acast(allFluxMelt, formula = "rID ~ condition ~ model", value.var = "flux")
+flux_summary$total_flux_cast <- total_flux_cast[,cond_order_check(colnames(total_flux_cast)),]
+colnames(flux_summary$total_flux_cast) <- toupper(colnames(flux_summary$total_flux_cast))
 
+plot(sort(compaFluxes$magfluxDeparture[!compaFluxes$fluxCap])[1:3500])
 
 # save flux summaries and pipe into FBGA.R #
 

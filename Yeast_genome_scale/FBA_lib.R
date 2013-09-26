@@ -545,8 +545,6 @@ FVA_read <- function(pythout){
   if (length(idxE)==0){
     idxE = length(pythout)
   }
-  gurobiOutL[[treatment]] <- pythout[1:(idxS-1)]
-  #print(gurobiOutL[[treatment]])
   
   solvedModel = list()
   modelOut <- data.frame(param = sapply(pythout[idxS:idxE],function(x){strsplit(x,'\t')[[1]][1]}))
@@ -647,7 +645,6 @@ FVA_summary <- function(modelOut){
   
   # look at backwards reactions
   fil = modelOut$rxnNet < 0
-  
   
   # write reactions out for fluxviz
   fil <- modelOut$asType =='rxn' & abs(modelOut$rxnNet) != 0
@@ -940,6 +937,30 @@ reaction_info_FBGA <- function(rxnName){
       paste(strsplit(rxnInfo$pathway, split = "__")[[1]], collapse = "\n")), collapse = "\n\n")
       , cex = 3, valign = "top", halign = "left")
   }  
+
+
+cond_order_check <- function(query){
+  
+  require(plyr)
+  
+  # determine how to align a vector query sequence to match the standard naming in the reference -> first capitalize all letters and match numbers
+  
+  reference <- data.frame(standard = c("P", "C", "N", "L", "U"), boer = c("PO4", "GLU", "NH4", "LEU", "URA"))
+  reference$standard <- factor(met_cond_match$standard)
+
+  condSummary <- data.frame(name = query, index = 1:length(query), limitation = regmatches(query, regexpr('^[A-Za-z]', query)), DR = regmatches(query, regexpr('[0-9.]{3,4}', query)))
+  condSummary$limitation <- factor(toupper(condSummary$limitation), levels = reference$standard)
+  condSummary$DR <- sprintf("%.2f", as.numeric(condSummary$DR))
+  
+  if(!all(met_cond_match$limitation %in% met_cond_match$standard)){
+    return(print("limtation names are invalid"))
+  }else{
+    resort <- arrange(condSummary, limitation, DR)
+    resort$newOrder <- 1:length(query)
+    rank(resort$index)
+    }
+  
+}
 
 
 

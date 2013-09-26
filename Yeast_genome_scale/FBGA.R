@@ -40,6 +40,7 @@ if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
 # IDs - reaction ID to reaction name correspondence for reactions with non-zero flux in the standard QP optimization
 # cellularFluxes - intracellular fluxes (moles per hr per mL cellular volume) across all 25 nutrients conditions for reactions with non-zero flux in some condition with the standard QP optimization.
 # fva_summary - rxns ~ conditions ~ min and maximum bound at QP solution - reactions are those that are moderately constrained under a majority of conditions
+# total_flux_cast - rxn ~ conditions ~ min, max and QP solution -> same as fva_summary but with intersection of cellular fluxes boiled in
 
 load("flux_cache/fluxSummaryQP.Rdata")
 
@@ -53,66 +54,49 @@ load("flux_cache/fluxSummaryQP.Rdata")
 ##### Associate enzymes with pathways ######
 
 kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
+rxn_pathways <- read.delim("./flux_cache/reactionPathways.tsv")
+rxn_enzyme_measured <- read.delim("./flux_cache/prot_matches.tsv")
 
 
-##### For each reaction in the consensus reconstruction, determine which pathways and genes are associated ######
-
-rxnFile <- read.delim('rxn_yeast.tsv', stringsAsFactors = FALSE)
-met_genes <- data.frame(reaction = unique(rxnFile$ReactionID), genes = NA, pathway = NA)
-
-for(rxN in 1:length(met_genes[,1])){
-  rxSubset <- rxnFile[rxnFile$ReactionID == met_genes$reaction[rxN],]
-  gene_subset <- strsplit(paste(rxSubset$MetName[is.na(rxSubset$StoiCoef)], collapse = ":"), split = ":")[[1]]
-  if(length(gene_subset) == 0){
-    met_genes$genes[rxN] <- ""
-  }else{
-    met_genes$genes[rxN] <- paste(unique(sort(gene_subset)), collapse = "/")
-  }
-  
-  met_genes$pathway[rxN] <- paste(unique(strsplit(paste(kegg_enzyme_dict[kegg_enzyme_dict$SYST %in% gene_subset,]$PATHWAY, collapse = "__"), "__")[[1]]), collapse = "__")
-}
-
-###### Create a list containing model and experimental information for all reactions in the consensus reconstruction #####
-
-rxnList_all <- rxnf
-
-for(rxN in c(1:length(rxnList_all))){
-  kegg_subset <- met_genes[met_genes$reaction == substr(names(rxnList_all),1,6)[rxN],]
-  if(length(kegg_subset[,1]) == 0){next}
-  
-  rxnList_all[[names(rxnList_all)[rxN]]]$pathway = kegg_subset$pathway
-  rxnList_all[[names(rxnList_all)[rxN]]]$genes = kegg_subset$genes
-  
-  rxnList_all[[names(rxnList_all)[rxN]]]$enzymeAbund = enzyme_abund[unlist(sapply(strsplit(kegg_subset$genes, split = '[/:]')[[1]], function(x){grep(x, rownames(enzyme_abund))})),]
-  
-}
-
-
-
-####### Narrow the previous list to only rxns which carry flux #####
+####### Narrow reactions txwo those that are well-constrained & non-zero in a majority of conditions #####
 ### When considering reactions which carry zero flux under a subset of conditions, analyze reactions both when v = 0, and by removing conditions where v = 0 ### 
 rmCondList <- data.frame() # reactions which will be duplicated with some conditions rmoved
 
-rxnList <- rxnf[substr(names(rxnf),1,6) %in% flux_summary$IDs$reactionID]
 
-for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactionID)]){
-  kegg_subset <- met_genes[met_genes$reaction == flux_summary$IDs$reactionID[rxN],]
-  idx <- names(rxnList)[grep(flux_summary$IDs$reactionID[rxN],names(rxnList))]
-  if(length(kegg_subset[,1]) == 0 | length(idx) ==0){next}
+# valid reactions have well-constrained, non-zero fluxes and measured enzymes (a reaction possessing a minimal complement of metabolites is enforced in reactionStructures.R -> rxnf"
+valid_rxns <- grep('r_[0-9]{4}', rownames(flux_summary$total_flux_cast), value = T) # valid flux
+valid_rxns <- valid_rxns[valid_rxns %in% rxn_enzyme_measured$reaction[rxn_enzyme_measured$measured]] # valid proteins
+valid_rxns <- valid_rxns[valid_rxns %in% unique(substr(names(rxnf), 1, 6))] # valid metabolites
+
+rxnList <- rxnf[substr(names(rxnf),1,6) %in% valid_rxns]
+
+for(rxN in 1:length(valid_rxns)){
+  
+  idx <- names(rxnList)[grep(valid_rxns[rxN],names(rxnList))]
+  if(length(idx) ==0){print("no matches"); next}
+  
+  if(valid_rxns[rxN] %in% rxn_pathways$reactionID){
+    Rxpathway <- rxn_pathways$pathway[rxn_pathways$reactionID == valid_rxns[rxN]]
+  }else{Rxpathway <- ''}
+  
+  if(rxnList[[idx[1]]]$genes %in% kegg_enzyme_dict$SYST){
+    geneInfo <- kegg_enzyme_dict[chmatch(rxnList[[idx[1]]]$genes[rxnList[[idx[1]]]$genes %in% kegg_enzyme_dict$SYST], kegg_enzyme_dict$SYST),]
+  }else{geneInfo <- NA}
+  
+  rxFlux <- as.data.frame(flux_summary$total_flux_cast[rownames(flux_summary$total_flux_cast) == valid_rxns[rxN],,])
   
   #Add the rxns with lacking fluxes to the rmCondList
-  if (any(flux_summary$cellularFluxes[rxN,] == 0)){
-    rmCondList <- rbind(rmCondList ,data.frame(rxn = flux_summary$IDs$reactionID[rxN],
-                       cond = paste(names(flux_summary$cellularFluxes[rxN,])[flux_summary$cellularFluxes[rxN,] == 0],collapse=';'),
-                       source = 'zeroFluxes', nZero = sum(flux_summary$cellularFluxes[rxN,] == 0)))
+  if (any(rxFlux$standardQP == 0)){
+    rmCondList <- rbind(rmCondList ,data.frame(rxn = valid_rxns[rxN],
+                       cond = paste(rownames(rxFlux)[rxFlux$standardQP == 0],collapse=';'),
+                       source = 'zeroFluxes', nZero = sum(rxFlux$standardQP == 0)))
   }
   
-  for (entry in names(rxnList)[grep(flux_summary$IDs$reactionID[rxN],names(rxnList))]){
+  for (entry in idx){
     rxnList[[entry]]$reaction = flux_summary$IDs$Name[rxN]
-    rxnList[[entry]]$pathway = kegg_subset$pathway
-    rxnList[[entry]]$genes = kegg_subset$genes
-    rxnList[[entry]]$enzymeAbund = enzyme_abund[unlist(sapply(strsplit(kegg_subset$genes, split = '[/:]')[[1]], function(x){grep(x, rownames(enzyme_abund))})),]
-    rxnList_all[[entry]]$flux <- rxnList[[entry]]$flux <- flux_summary$cellularFluxes[rxN,]
+    rxnList[[entry]]$pathway = Rxpathway
+    rxnList[[entry]]$geneInfo = geneInfo
+    rxnList[[entry]]$flux <- rxFlux
   }
 }
 
@@ -123,34 +107,50 @@ for(rxN in c(1:length(flux_summary$IDs[,1]))[grep('r_', flux_summary$IDs$reactio
 rmCondList <- rmCondList[rmCondList$nZero < 10,]
 
 for (i in 1:nrow(rmCondList)){
-  rxN <- which(flux_summary$IDs$reactionID == rmCondList$rxn[i])
-  for (entry in names(rxnList)[grep(flux_summary$IDs$reactionID[rxN],names(rxnList))]){
+  rxn <- rmCondList$rxn[i]
+  for (entry in names(rxnList)[grep(rxn,names(rxnList))]){
     nEntry <- paste(entry,'_rmCond',sep='')
     rxnList[[nEntry]] <- rxnList[[entry]]
     conds <- strsplit(rmCondList$cond[i],';')[[1]]
     conds <- c(conds,toupper(conds))
-    rxnList[[nEntry]]$flux <- rxnList[[nEntry]]$flux[!names(rxnList[[nEntry]]$flux) %in% conds]
+    rxnList[[nEntry]]$flux <- rxnList[[nEntry]]$flux[!rownames(rxnList[[nEntry]]$flux) %in% conds,]
     rxnList[[nEntry]]$rxnMet <- rxnList[[nEntry]]$rxnMet[!rownames(rxnList[[nEntry]]$rxnMet) %in% conds,]
-    rxnList[[nEntry]]$enzymeAbund <- rxnList[[nEntry]]$enzymeAbund[,!names(rxnList[[nEntry]]$enzymeAbund) %in% conds]
+    rxnList[[nEntry]]$all_species_SD <- rxnList[[nEntry]]$all_species_SD[!rownames(rxnList[[nEntry]]$all_species_SD) %in% conds,]
+    rxnList[[nEntry]]$enzymeComplexes <- rxnList[[nEntry]]$enzymeComplexes[,!colnames(rxnList[[nEntry]]$enzymeAbund) %in% conds]
+  
     rxnList[[nEntry]]$listEntry <- paste(rxnList[[nEntry]]$listEntry, '_rmCond',sep='')
     
-    rxnList_all[[nEntry]] <- rxnList[[nEntry]]
-    
-  }
+    }
 }
 
 
 
-save(rxnList_all, file = "all_rxnList.Rdata")
+save(rxnList, file = "all_rxnList.Rdata")
 
 
 ### ensure that the ordering of conditions is the same ###
 
-cond_mapping <- data.frame(standard = chemostatInfo$condition, e = colnames(enzyme_abund), m = rownames(rxnList[[1]]$rxnMet), f = colnames(flux_summary$cellularFluxes))
+cond_mapping <- data.frame(standard = chemostatInfo$condition, e = colnames(rxnList[[1]]$enzymeComplexes), m = rownames(rxnList[[1]]$rxnMet), f = rownames(rxnList[[1]]$flux))
 
 if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapping$enzyme_cond == cond_mapping$met_cond)){
   warning('There is a problem with the order of the conditions. (check cond_mapping)')
 }
+
+#### Determine which reaction have valid reaction mechanisms ####
+
+reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$listEntry, NA)})  
+rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
+n_c <- nrow(chemostatInfo)
+
+#### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
+
+# chunks to break rxnList into
+chunk_size <- 100
+chunk_assignment <- data.frame(set = names(rxnList_form), chunk = c(rep(1:floor(length(rxnList_form)/chunk_size), each = chunk_size), rep(ceiling(length(rxnList_form)/chunk_size), length(rxnList_form) %% chunk_size)))
+print(paste("The number of parameter chunks is", ceiling(length(rxnList_form)/chunk_size), "submit this parameter when batch submitting processes in FluxOptim.sh"))
+
+save(rxnList_form, cond_mapping, chunk_assignment, file = "paramOptim.Rdata")
+
 
 
 
@@ -160,13 +160,13 @@ reaction_pred_log <- data.frame(nmetab = rep(NA, length(grep('rm$', names(rxnLis
 reaction_pred_linear <- data.frame(nmetab = rep(NA, length(grep('rm$', names(rxnList)))), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, varExplainedJointly = NA, TSS = NA)
 
 for(rxN in grep('rm$', names(rxnList))){
-  reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeAbund[,1])
+  reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeComplexes[,1])
   reaction_pred_linear$nmetab[rxN] <- reaction_pred_log$nmetab[rxN] <- sum(!is.na(rxnList[[rxN]]$rxnMet))/25
   
-  if(all(rxnList[[rxN]]$flux >= 0)){
-    rxFlux <- log2(rxnList[[rxN]]$flux)
-  } else if(all(rxnList[[rxN]]$flux <= 0)){
-    rxFlux <- log2(-1*rxnList[[rxN]]$flux)
+  if(all(rxnList[[rxN]]$flux$standardQP >= 0)){
+    rxFlux <- log2(rxnList[[rxN]]$flux$standardQP)
+  } else if(all(rxnList[[rxN]]$flux$standardQP <= 0)){
+    rxFlux <- log2(-1*rxnList[[rxN]]$flux$standardQP)
   } else{
     next
   } #if only forward flux consider its log, if only backwards flux consider the log of -1*flux, if the directionality changes then skip this rxn.
@@ -175,9 +175,9 @@ for(rxN in grep('rm$', names(rxnList))){
   reaction_pred_log$nCond[rxN] <- reaction_pred_linear$nCond[rxN] <- sum(!is.na(rxFlux))
   
   if(reaction_pred_linear$nenz[rxN] != 0){
-    enzyme_df = rxnList[[rxN]]$enzymeAbund
+    enzyme_df = rxnList[[rxN]]$enzymeComplexes
     
-    lenzymes <- as.matrix(data.frame(t(enzyme_df))); rownames(lenzymes) <- colnames(enzyme_abund)
+    lenzymes <- as.matrix(data.frame(t(enzyme_df)))
     enzymes <- 2^lenzymes
   }else{lenzymes <- enzymes <- NULL}
   if(reaction_pred_linear$nmetab[rxN] != 0){
@@ -199,9 +199,9 @@ for(rxN in grep('rm$', names(rxnList))){
     reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lenzymes))$Sum)
     
     ### prediction using linear measures ###
-    reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes))$F[1]
-    reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ enzymes))$Sum[1]
-    reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes))$Sum)  
+    reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$F[1]
+    reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$Sum[1]
+    reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$Sum)  
   }  
   
   if(reaction_pred_linear$nmetab[rxN] != 0){
@@ -212,14 +212,14 @@ for(rxN in grep('rm$', names(rxnList))){
     reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lmetabs))$Sum)
     
     ### prediction using linear measures ###
-    reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ metabs))$F[1]
-    reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux ~ metabs))$Sum[1]
-    reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ metabs))$Sum)
+    reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$F[1]
+    reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$Sum[1]
+    reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$Sum)
   }  
   
   if(reaction_pred_linear$nmetab[rxN] != 0 & reaction_pred_linear$nenz[rxN] != 0){
     ### both metabolites and enzymes ###
-    reaction_pred_linear$varExplainedTotal[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux ~ enzymes + metabs))$Sum[1:2])
+    reaction_pred_linear$varExplainedTotal[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes + metabs))$Sum[1:2])
     if(reaction_pred_linear$varExplainedTotal[rxN] < max(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN])){
       reaction_pred_linear$varExplainedTotal[rxN] <- max(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN])  
     }
@@ -319,20 +319,6 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 
 
-#### Determine which reaction have valid reaction mechanisms ####
-
-reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$listEntry, NA)})  
-rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
-n_c <- nrow(chemostatInfo)
-
-#### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
-
-# chunks to break rxnList into
-chunk_size <- 100
-chunk_assignment <- data.frame(set = names(rxnList_form), chunk = c(rep(1:floor(length(rxnList_form)/chunk_size), each = chunk_size), rep(ceiling(length(rxnList_form)/chunk_size), length(rxnList_form) %% chunk_size)))
-print(paste("The number of parameter chunks is", ceiling(length(rxnList_form)/chunk_size), "submit this parameter when batch submitting processes in FluxOptim.sh"))
-
-save(rxnList_form, cond_mapping, chunk_assignment, file = "paramOptim.Rdata")
 
 
 ##### looking at subset of reactions where a kinetic form was produced because most/all substrates were ascertained ####
