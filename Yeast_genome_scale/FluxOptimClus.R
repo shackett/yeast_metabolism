@@ -1,8 +1,7 @@
-#qsub -l 1day -cwd -sync n Rscript FluxOptimClus.R runNum=0
 #qsub -l 1day -cwd -sync n Rscript FluxOptimClus.R runNum=$a_run chunk=$a_chunk
 
-
-setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
+#setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
+setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 library(nnls)
 
@@ -15,15 +14,15 @@ chunkNum = as.numeric(unlist(strsplit(args[grep("chunk", args)], "="))[2])
 
 run_summary <- list() #### MCMC run output and formatted inputs
 
-markov_pars <- list()
-markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-markov_pars$n_samples <- 2000 #how many total markov samples are desired
-markov_pars$burn_in <- 500 #how many initial samples should be skipped
-
 #markov_pars <- list()
 #markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-#markov_pars$n_samples <- 100 #how many total markov samples are desired
-#markov_pars$burn_in <- 0 #how many initial samples should be skipped
+#markov_pars$n_samples <- 2000 #how many total markov samples are desired
+#markov_pars$burn_in <- 500 #how many initial samples should be skipped
+
+markov_pars <- list()
+markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+markov_pars$n_samples <- 100 #how many total markov samples are desired
+markov_pars$burn_in <- 0 #how many initial samples should be skipped
 
 
 run_summary$markov_pars <- markov_pars
@@ -31,6 +30,21 @@ run_summary$markov_pars <- markov_pars
 load("paramOptim.Rdata")
 rxnList_form <- rxnList_form[names(rxnList_form) %in% chunk_assignment$set[chunk_assignment$chunk == chunkNum]]
 
+if(chunkNum %in% chunk_assignment$chunk[grep('metX', chunk_assignment$set)]){
+  # If there are reactions proposing hypothetical regulators, load principal components
+  load('flux_cache/metaboliteTables.RData')
+  }
+
+  
+#cherryPicked <- c("r_0232-rm", "r_0277-rm", "r_0789-rm", "r_0484-rm", "r_0859-rm", "r_0941-rm",
+# "r_0232-rm-t_0717-inh-noncomp", "r_0232-rm-t_0287-inh-noncomp", "r_0232-rm-t_0582-act-allo",  
+# "r_0789-rm-t_0248-act-allo", "r_0859-rm-t_0296-act-allo", "r_0859-rm-t_0248-act-allo",  
+# "r_0859-rm-t_0604-act-allo", "r_0859-rm-t_0231-act-allo", "r_0859-rm-t_0254-inh-noncomp",
+# "r_0859-rm-t_0283-inh-noncomp", "r_0941-rm-t_0296-act-allo", "r_0941-rm-t_0283-inh-noncomp",
+# "r_0859-rm-t_0446-inh-noncomp", "r_0859-rm-t_0446-inh-comp", "r_0859-rm-t_0446-inh-uncomp")
+
+  
+  
 
 ########### Functions ##########
 
@@ -70,15 +84,15 @@ lik_calc <- function(proposed_params){
 
 for(rxN in 1:length(rxnList_form)){
   
-  n_c <- length(rxnList_form[[rxN]]$flux)
-  
   rxnSummary <- rxnList_form[[rxN]]
+  n_c <- length(rxnSummary$flux)
+  occupancyEq <- rxnSummary$rxnForm # a parametric form relating metabolites and constants to fraction of maximal activity
+  l_occupandyEq <- as.formula(paste(gsub('([^_])(t_)', '\\12^\\2', occupancyEq), collapse = "")) # same equation using naturally using log2 data
   
-  occupancyEq <- rxnSummary$rxnForm
-  
+    
   ### Create a data.frame describing the relevent parameters for the model ###
-  kineticPars <- data.frame(rel_spec = c(rownames(rxnSummary$enzymeAbund), colnames(rxnSummary$rxnMet)), 
-  SpeciesType = c(rep("Enzyme", times = nrow(rxnSummary$enzymeAbund)), rep("Metabolite", times = ncol(rxnSummary$rxnMet))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
+  kineticPars <- data.frame(rel_spec = c(rownames(rxnSummary$enzymeComplexes), colnames(rxnSummary$rxnMet)), 
+  SpeciesType = c(rep("Enzyme", times = nrow(rxnSummary$enzymeComplexes)), rep("Metabolite", times = ncol(rxnSummary$rxnMet))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
   kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste("E", rxnSummary$rxnID, sep = "_")
   kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
   kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metNames[names(rxnSummary$metNames) == x]}))
@@ -91,7 +105,7 @@ for(rxN in 1:length(rxnList_form)){
   kineticPars <- rbind(kineticPars, c("keq", "keq", NA, NA, paste("Keq", rxnSummary$rxnID, sep = ""), NA))
   
   ### Create a matrix containing the metabolites and enzymes 
-  enzyme_abund <- t(rxnSummary$enzymeAbund); colnames(enzyme_abund) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
+  enzyme_abund <- t(rxnSummary$enzymeComplexes); colnames(enzymeComplexes) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
   met_abund <- rxnSummary$rxnMet
   met_abund <- met_abund[,colnames(met_abund) %in% kineticPars$rel_spec]
   
@@ -104,14 +118,20 @@ for(rxN in 1:length(rxnList_form)){
       }
   
   
-  ### set missing data to invariant across conditions
-  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 0
+  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 0 # set missing data to invariant across conditions
+  
+  ### get data ready for fitting ###
+  
   met_abund <- 2^met_abund
   colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
   
   enzyme_abund <- 2^enzyme_abund
   
-  flux <- rxnSummary$flux/median(abs(rxnSummary$flux[rxnSummary$flux != 0])) #flux, scaled to a prettier range
+  flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0])) #flux, scaled to a prettier range
+  
+  all_species_SD
+  
+  
   
   #### write flux parameters to a list ####
   run_summary[[names(rxnList_form)[rxN]]]$metabolites <- met_abund
@@ -120,6 +140,9 @@ for(rxN in 1:length(rxnList_form)){
   run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- occupancyEq
   run_summary[[names(rxnList_form)[rxN]]]$all_species <- all_species
   run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
+  run_summary[[names(rxnList_form)[rxN]]]$specSD <- rxnSummary$all_species_SD
+  run_summary[[names(rxnList_form)[rxN]]]$specCorr <- rxnSummary$all_species_corr
+  
   
   
   
@@ -178,5 +201,6 @@ for(rxN in 1:length(rxnList_form)){
   
   }
 
+save(run_summary, file = "cherryPickedRxns.Rdata")
   
 save(run_summary, file = paste(c("paramSets/paramSet", "C", chunkNum, "R", runNum, ".Rdata"), collapse = ""))

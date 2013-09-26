@@ -16,6 +16,7 @@ options(stringsAsFactors = FALSE)
 
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
 chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.05H2")),] # the 25 chemostat conditions of interest and their actual growth rates
+n_c <- nrow(chemostatInfo)
 
 ##### Import list of metabolite abundances and rxn forms - **rxnf**
 
@@ -257,9 +258,8 @@ for(rxN in grep('rm$', names(rxnList))){
 }
 
 
-hist(reaction_pred_linear$Fmetab)
-hist(reaction_pred_linear$Fenz)
-
+#hist(reaction_pred_linear$Fmetab)
+#hist(reaction_pred_linear$Fenz)
 
 reaction_pred_summary_log <- data.frame(N = reaction_pred_log$nCond, metaboliteVarianceExplained = reaction_pred_log$varExplainedMetab/reaction_pred_log$TSS, enzymeVarianceExplained = reaction_pred_log$varExplainedEnzy/reaction_pred_log$TSS, 
                                         varianceAmbiguouslyExplained = reaction_pred_log$varExplainedEither/reaction_pred_log$TSS, varianceJointlyExplained = reaction_pred_log$varExplainedJointly/reaction_pred_log$TSS)
@@ -280,13 +280,6 @@ reaction_pred_summary_log <- reaction_pred_summary_log[order(apply(reaction_pred
 reaction_pred_summary_linear <- reaction_pred_summary_linear[order(apply(reaction_pred_summary_linear, 1, sum, na.rm = TRUE)),]
 
 
-### remove the fraction of variance accounted for by either metabolites or enzymes from each of them ####
-
-#reaction_pred_summary_log$metaboliteVarianceExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)] <- reaction_pred_summary_log$metaboliteVarianceExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)] - reaction_pred_summary_log$varianceJointlyExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)]
-#reaction_pred_summary_log$enzymeVarianceExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)] <- reaction_pred_summary_log$enzymeVarianceExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)] - reaction_pred_summary_log$varianceJointlyExplained[!is.na(reaction_pred_summary_log$varianceJointlyExplained)]
-
-#reaction_pred_summary_linear$metaboliteVarianceExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)] <- reaction_pred_summary_linear$metaboliteVarianceExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)] - reaction_pred_summary_linear$varianceJointlyExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)]
-#reaction_pred_summary_linear$enzymeVarianceExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)] <- reaction_pred_summary_linear$enzymeVarianceExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)] - reaction_pred_summary_linear$varianceJointlyExplained[!is.na(reaction_pred_summary_linear$varianceJointlyExplained)]
 
 
 reaction_pred_summary_plotter <- rbind(data.frame(modelType = "logFlux ~ logMetab + logEnzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_log[,1])), reaction_pred_summary_log), id.vars = "index")),
@@ -308,27 +301,10 @@ rxnPredictionPlot + geom_bar(stat ="identity", width=0.75) + barplot_theme + geo
 ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 
-### compare variance explained using NNLS vs LS vs rxn form
-### flux vs predicted flux colored by condition
-### metabolite abundance ~ DR colored by condition, faceted over metabolites
-### enzyme abundance ~ DR colored by condition, faceted over enzymes
-### import conditions list
-### analyze metabolomics data - convert to the same DR in proteomics/flux
 
-
-
-
-
-
-
-##### looking at subset of reactions where a kinetic form was produced because most/all substrates were ascertained ####
-
-
-
-
-
-
-###### import cluster parameter results #####
+##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
+######## Import cluster parameter results #########
+##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
 
 load("paramOptim.Rdata")
 
