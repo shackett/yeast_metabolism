@@ -361,15 +361,30 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   plot(matrix_svd$d^2/sum(matrix_svd$d^2)) #scree-plot - fraction of variance explained by each PC
   
   library(missMDA)
-  #determine how many significant principal components should be included based on repeated random sub-sampling validation
+  ### determine how many significant principal components should be included based on repeated random sub-sampling validation ###
   pcrange <- c(2,18)
   npc.compare <- estim_ncpPCA(metabolomicsMatrix, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 100)
   npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.01 + min(npc.compare$criterion)][1]
   
-  plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs")
-  abline(v = npc, col = "RED", lwd = 2)
+  ### metabolomic PC summary ###
   
-  #save(list = ls(), file = "tmp.Rdata")
+  pdf(file = "Figures/metPCnum.pdf", height = 6, width = 6)
+  plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs", main = "Optimal number of metabolomic principal components")
+  abline(v = npc, col = "RED", lwd = 2)
+  plot((matrix_svd$d)^2 / sum((matrix_svd$d)^2) ~ c(1:length(matrix_svd$d)), pch = 16, cex = 2, col = "RED", xlab = "PC Number", ylab = "Fraction of variance explained")
+  dev.off()
+  
+  metPCs <- matrix_svd$v[,1:npc]; rownames(metPCs) <- colnames(metabolomicsMatrix); colnames(metPCs) <- paste("PC", c(1:npc))
+  pc_plot_df <- melt(metPCs)
+  colnames(pc_plot_df) <- c("condition", "PC", "value")
+  pc_plot_df$cond <- factor(sapply(as.character(pc_plot_df$condition), function(x){unlist(strsplit(x, ""))[1]}))
+  pc_plot_df$PC <- factor(pc_plot_df$PC, levels = paste("PC", c(1:npc)))
+
+  factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol = 2, scales = "free_y") + scale_x_discrete("Experimental condition") + scale_y_continuous("Principal Component Value") + theme(panel.grid.minor = element_blank(), panel.background = element_rect(fill = "aliceblue"), strip.background = element_rect(fill = "cadetblue1"), text = element_text(size = 15), axis.text.x = element_text(angle = 90), title = element_text(size = 25, face = "bold"))
+  factor_plot + geom_line() + ggtitle("Metabolomic principal components")
+  ggsave(file = "Figures/metPCs.pdf", height = 10, width = 12)
+
+  ### remap chemostat metabolite abundances to proteomics/flux condition DR ###
   
   metSVD <- svd(metabolomicsMatrix)
   metMatrixProj <- metSVD$u[,1:npc] %*% diag(metSVD$d[1:npc]) %*% t(metSVD$v[,1:npc])
@@ -1653,7 +1668,7 @@ addInfo2rxnf <- function(rxnf){
     }
     
     # take a weighted average of protein RA to determine complex RA - weighting with precision
-    enzymeComplexes <- matrix(NA, ncol = n_c, nrow = length(unique(measuredEnzymeGroups)))
+    enzymeComplexes <- as.data.frame(matrix(NA, ncol = n_c, nrow = length(unique(measuredEnzymeGroups))))
     rownames(enzymeComplexes) <- sapply(unique(measuredEnzymeGroups), function(x){paste(x, paste(names(measuredEnzymeGroups)[measuredEnzymeGroups == x], collapse = "/"), sep = "-")})
     colnames(enzymeComplexes) <- colnames(enzyme_abund)
     enzymeComplex_SD <- enzymeComplexes
