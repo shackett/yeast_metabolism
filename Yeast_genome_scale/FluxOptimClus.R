@@ -55,12 +55,12 @@ par_draw <- function(updates){
   for(par_n in updates){
     if(kineticParPrior$distribution[par_n] == "unif"){
       draw[par_n] <- runif(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
-      } else if(kineticParPrior$distribution[par_n] == "unif"){
+    } else if(kineticParPrior$distribution[par_n] == "norm"){
       draw[par_n] <- rnorm(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n])
-      }
     }
-  draw
   }
+  draw
+}
 
 lik_calc <- function(proposed_params){
   #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
@@ -69,10 +69,18 @@ lik_calc <- function(proposed_params){
   par_stack <- exp(par_stack)
   occupancy_vals <- data.frame(met_abund, par_stack)
   
-  predOcc <- model.matrix(occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  predOcc <- model.matrix(l_occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
   
-  flux_fit <- nnls(enzyme_activity, flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  # fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  # flux objective is set as the average of the minimal and maximal allowable flux flowing through the reaction at the optimal solution
+  
+  flux_fit <- nnls(enzyme_activity, (flux$FVAmax - flux$FVAmin)/2) 
+  
+  
+  flux_fit$x
+  
+  
   fit_resid_error <- sqrt(mean((flux_fit$resid - mean(flux_fit$resid))^2))
   
   sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
@@ -85,15 +93,15 @@ lik_calc <- function(proposed_params){
 for(rxN in 1:length(rxnList_form)){
   
   rxnSummary <- rxnList_form[[rxN]]
-  n_c <- length(rxnSummary$flux)
+  n_c <- nrow(rxnSummary$flux)
   occupancyEq <- rxnSummary$rxnForm # a parametric form relating metabolites and constants to fraction of maximal activity
-  l_occupandyEq <- as.formula(paste(gsub('([^_])(t_)', '\\12^\\2', occupancyEq), collapse = "")) # same equation using naturally using log2 data
+  l_occupancyEq <- as.formula(paste(gsub('([^_])(t_)', '\\12^\\2', occupancyEq), collapse = "")) # same equation using naturally using log2 data
   
-    
+  
   ### Create a data.frame describing the relevent parameters for the model ###
   kineticPars <- data.frame(rel_spec = c(rownames(rxnSummary$enzymeComplexes), colnames(rxnSummary$rxnMet)), 
   SpeciesType = c(rep("Enzyme", times = nrow(rxnSummary$enzymeComplexes)), rep("Metabolite", times = ncol(rxnSummary$rxnMet))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
-  kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste("E", rxnSummary$rxnID, sep = "_")
+  kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste(paste("E", rxnSummary$rxnID, sep = "_"), kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"], sep = "_")
   kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
   kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metNames[names(rxnSummary$metNames) == x]}))
   kineticPars$commonName[kineticPars$SpeciesType == "Enzyme"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
@@ -105,7 +113,7 @@ for(rxN in 1:length(rxnList_form)){
   kineticPars <- rbind(kineticPars, c("keq", "keq", NA, NA, paste("Keq", rxnSummary$rxnID, sep = ""), NA))
   
   ### Create a matrix containing the metabolites and enzymes 
-  enzyme_abund <- t(rxnSummary$enzymeComplexes); colnames(enzymeComplexes) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
+  enzyme_abund <- t(rxnSummary$enzymeComplexes); colnames(enzyme_abund) <- all_species$rel_spec[all_species$SpeciesType == "Enzyme"]
   met_abund <- rxnSummary$rxnMet
   met_abund <- met_abund[,colnames(met_abund) %in% kineticPars$rel_spec]
   
@@ -117,32 +125,39 @@ for(rxN in 1:length(rxnList_form)){
       kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
       }
   
-  
   met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 0 # set missing data to invariant across conditions
   
-  ### get data ready for fitting ###
+  # expression combining the log-occupancy equation and scaling of enzyme abundance by activity
   
-  met_abund <- 2^met_abund
-  colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
+  KcatEs <- mapply(function(E, Kcat){paste(Kcat, E, sep = " * ")}, E = sapply(all_species$rel_spec[all_species$SpeciesType == "Enzyme"], function(x){paste("2^", x, sep = "")}), Kcat = all_species$formulaName[all_species$SpeciesType == "Enzyme"])
+  KcatExpression <- paste('(', paste(KcatEs, collapse = " + "), ')', sep = "")
+  Kcatpaste <- paste('I(', KcatExpression, '*')
+    
+  full_kinetic_form <- as.formula(gsub('(I\\()', Kcatpaste, l_occupancyEq))
   
-  enzyme_abund <- 2^enzyme_abund
+  
+  
+  
+  #colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
+  #met_abund <- 2^met_abund
+  #enzyme_abund <- 2^enzyme_abund
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0])) #flux, scaled to a prettier range
   
-  all_species_SD
-  
-  
+  species_SD <- rxnSummary$all_species_SD
+  species_corr <- rxnSummary$all_species_corr
   
   #### write flux parameters to a list ####
   run_summary[[names(rxnList_form)[rxN]]]$metabolites <- met_abund
   run_summary[[names(rxnList_form)[rxN]]]$enzymes <- enzyme_abund
   run_summary[[names(rxnList_form)[rxN]]]$flux <- flux
-  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- occupancyEq
+  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq$linear <- occupancyEq
+  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq$log <- l_occupancyEq
+  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq$full <- full_kinetic_form
   run_summary[[names(rxnList_form)[rxN]]]$all_species <- all_species
   run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
-  run_summary[[names(rxnList_form)[rxN]]]$specSD <- rxnSummary$all_species_SD
-  run_summary[[names(rxnList_form)[rxN]]]$specCorr <- rxnSummary$all_species_corr
-  
+  run_summary[[names(rxnList_form)[rxN]]]$specSD <- species_SD
+  run_summary[[names(rxnList_form)[rxN]]]$specCorr <- species_corr
   
   
   
@@ -150,8 +165,9 @@ for(rxN in 1:length(rxnList_form)){
   kineticParPrior$distribution <- "unif"
   kineticParPrior$par_1 <- -10; kineticParPrior$par_2 <- 10
   for(exp_param in kineticPars$modelName[!is.na(kineticPars$measured) & kineticPars$measured == TRUE]){
-    kineticParPrior[kineticPars$modelName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(log(met_abund[,colnames(met_abund) == exp_param])) + c(-10,10)
+    kineticParPrior[kineticPars$modelName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(met_abund[,colnames(met_abund) == exp_param]) + c(-10,10)
     }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
+  run_summary[[names(rxnList_form)[rxN]]]$kineticParPrior <- data.frame(kineticPars, kineticParPrior)
   
   
   lik_track <- NULL
@@ -182,7 +198,6 @@ for(rxN in 1:length(rxnList_form)){
       }
     }
   
-  #colnames(markov_par_vals) <- ifelse(kineticPars$SpeciesType == "keq", "keq", kineticPars$commonName)
   colnames(markov_par_vals) <- kineticPars$rel_spec
     
   kineticPars$formatted[kineticPars$SpeciesType != "keq"] <- unname(sapply(kineticPars$commonName[kineticPars$SpeciesType != "keq"], function(name_int){
@@ -200,7 +215,5 @@ for(rxN in 1:length(rxnList_form)){
   run_summary[[names(rxnList_form)[rxN]]]$likelihood <- lik_track
   
   }
-
-save(run_summary, file = "cherryPickedRxns.Rdata")
   
 save(run_summary, file = paste(c("paramSets/paramSet", "C", chunkNum, "R", runNum, ".Rdata"), collapse = ""))

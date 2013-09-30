@@ -384,6 +384,26 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   factor_plot + geom_line() + ggtitle("Metabolomic principal components")
   ggsave(file = "Figures/metPCs.pdf", height = 10, width = 12)
 
+  ### summary of SVD of metabolomics matrix ###
+  reorgMets <- metabolomicsMatrix[hclust(d = dist(metabolomicsMatrix))$order,]
+  reorgMetSVD <- svd(reorgMets, nu = npc, nv = npc)
+  
+  library(colorRamps)
+  
+  pdf("Figures/PCsummary.pdf", height = 10, width = 10)
+  
+  heatmap.2(reorgMets, Rowv = F, Colv = F, trace = "none", symkey = T, col = blue2yellow(50), main = "Raw")
+  heatmap.2(reorgMetSVD$u, Rowv = F, Colv = F, trace = "none", symkey = T, col = blue2yellow(50), main = "U: Principal Component Loadings")
+  heatmap.2(diag(reorgMetSVD$d[1:npc]), Rowv = F, Colv = F, trace = "none", symkey = T, col = blue2yellow(50), main = "D: Principal Component Eigenvalues")
+  heatmap.2(t(reorgMetSVD$v), Rowv = F, Colv = F, trace = "none", symkey = T, col = blue2yellow(50), main = "t(V): Principal Components")
+  
+  svd_projection <- reorgMetSVD$u %*% diag(reorgMetSVD$d[1:npc]) %*% t(reorgMetSVD$v)
+  
+  heatmap.2(svd_projection, Rowv = F, Colv = F, trace = "none", symkey = T, col = blue2yellow(50), main = "UDt(V) - 8 dimensional summary")
+  heatmap.2(reorgMets - svd_projection, trace = "none", symkey = T, col = blue2yellow(50), main = "Residual Variation - Reclustered")
+  
+  dev.off()
+  
   ### remap chemostat metabolite abundances to proteomics/flux condition DR ###
   
   metSVD <- svd(metabolomicsMatrix)
@@ -1628,7 +1648,7 @@ addInfo2rxnf <- function(rxnf){
     rxnf[[entry]]$genes <- paste(rxnEnzGroup$enzyme[fil] ,collapse='/')
     if(is.null(rxnf[[entry]]$genes)){rxnf[[entry]]$genes <- ''}
     # enzyme groups
-    rxnf[[entry]]$enzGroup <- rxnEnzGroup$group[fil]
+    rxnf[[entry]]$enzGroup <- LETTERS[rxnEnzGroup$group[fil]] #recode enzyme groups with letters to avoid problems associated with leading numbers when interpreted in equation
     names(rxnf[[entry]]$enzGroup) <- rxnEnzGroup$enzyme[fil]
     # Protein measurements - estimate of mean and precision (inverse varianc) - precision more naturally allows calculation of weighted mean
     rxnf[[entry]]$enzymeAbund = enzyme_abund[unlist(sapply(unique(rxnEnzGroup$enzyme[fil]), function(x){grep(x, rownames(enzyme_abund))})),]
@@ -1669,7 +1689,9 @@ addInfo2rxnf <- function(rxnf){
     
     # take a weighted average of protein RA to determine complex RA - weighting with precision
     enzymeComplexes <- as.data.frame(matrix(NA, ncol = n_c, nrow = length(unique(measuredEnzymeGroups))))
-    rownames(enzymeComplexes) <- sapply(unique(measuredEnzymeGroups), function(x){paste(x, paste(names(measuredEnzymeGroups)[measuredEnzymeGroups == x], collapse = "/"), sep = "-")})
+    rownames(enzymeComplexes) <- sapply(unique(measuredEnzymeGroups), function(x){paste(x, paste(names(measuredEnzymeGroups)[measuredEnzymeGroups == x], collapse = "."), sep = "_")})
+    rownames(enzymeComplexes) <- gsub('-', '_', rownames(enzymeComplexes)) #hyphens cause problems later when interpretted mathematically as subtraction
+    
     colnames(enzymeComplexes) <- colnames(enzyme_abund)
     enzymeComplex_SD <- enzymeComplexes
     
