@@ -33,6 +33,10 @@ rxnList_form <- rxnList_form[names(rxnList_form) %in% chunk_assignment$set[chunk
 if(chunkNum %in% chunk_assignment$chunk[grep('metX', chunk_assignment$set)]){
   # If there are reactions proposing hypothetical regulators, load principal components
   load('flux_cache/metaboliteTables.RData')
+  
+  apply(metSVD$u, 2, mean)
+  apply(metSVD$u, 2, sd)
+  
   }
 
   
@@ -75,20 +79,69 @@ lik_calc <- function(proposed_params){
   # fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
   # flux objective is set as the average of the minimal and maximal allowable flux flowing through the reaction at the optimal solution
   
-  flux_fit <- nnls(enzyme_activity, (flux$FVAmax - flux$FVAmin)/2) 
+  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2) 
   
+  # calculate SD of fitted flux
+  # propagate variance from enzyme + metabolite measurements into predicted flux using partial derivatives of reaction form
+  # A) partial derivatives by condition
+  # -@-@ form of partial derivatives: D_full_kinetic_form
+  # -@-@ metabolite abundance and current parameter value
+  # A) covariance matrix by condition - residual correlation * SDa * SDb
+  # -@-@ residual correlation calculated across all conditions
+  # -@-@ standard deviation calculated by condition
   
-  flux_fit$x
+  nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- all_species$formulaName[all_species$SpeciesType == "Enzyme"]
   
+  all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
+
+  # partial derivatives of each measured specie in a condition
+  comp_partials <- matrix(NA, nrow = n_c, ncol = length(D_full_kinetic_form))
+  colnames(comp_partials) <- names(D_full_kinetic_form)
   
-  fit_resid_error <- sqrt(mean((flux_fit$resid - mean(flux_fit$resid))^2))
+  for(j in 1:ncol(comp_partials)){
+    comp_partials[,j] <- with(all_components ,eval(D_full_kinetic_form[[j]]))
+  }
   
-  sum(dnorm(flux, flux_fit$fitted, fit_resid_error, log = TRUE))
+  # calculate the fitted standard deviation after first finding the by-condition residual covariance matrix
   
+  flux_SD <- rep(NA, n_c)
+  for(i in 1:n_c){
+    sampleCov <- species_corr * t(t(species_SD[i,])) %*% species_SD[i,]
+    flux_SD[i] <- sqrt(t(comp_partials[i,]) %*% sampleCov %*% t(t(comp_partials[i,])))
+    }
+  
+  # evaluate the relative density a gaussian centered about fitted flux with the SD calculated above
+  
+  # if p(x = Xmax) - p(x = Xmin) != 0 (for numerical reasons)
+  # Di = p(x - Xmax) - p(x = Xmin) / Xmax - Xmin
+  
+  lik <- (pnorm(flux$FVAmax, flux_fit$fitted, flux_SD) - pnorm(flux$FVAmin, flux_fit$fitted, flux_SD))/(flux$FVAmax - flux$FVAmin)
+  
+  log_cumsum <- data.frame(high_max = pnorm(flux$FVAmax[lik == 0], flux_fit$fitted[lik == 0], flux_SD[lik == 0], log = T, lower.tail = F),
+    high_min = pnorm(flux$FVAmin[lik == 0], flux_fit$fitted[lik == 0], flux_SD[lik == 0], log = T, lower.tail = F),
+    low_max = pnorm(flux$FVAmax[lik == 0], flux_fit$fitted[lik == 0], flux_SD[lik == 0], log = T, lower.tail = T),
+    low_min = pnorm(flux$FVAmax[lik == 0], flux_fit$fitted[lik == 0], flux_SD[lik == 0], log = T, lower.tail = T))
+  
+  # For minute densities: calculate them in log space
+  # To find log[p(x) / xmax - xmin] -> log[p(x)] - log(xmax - xmin)
+  # -@-@ Find log[p(x)] -> log[p(max)] + log(1 - exp(log[p(max)] - log[p(min)]))
+  # -@-@ subtract log[FVAmax - FVAmin]
+  
+  logLik = log(lik)
+  
+  logLik[lik == 0] <- apply(data.frame(RT = log_cumsum$high_min + log(1 - exp(log_cumsum$high_max - log_cumsum$high_min)) - log(flux$FVAmax[lik == 0] - flux$FVAmin[lik == 0]), 
+             LT = log_cumsum$low_max + log(1 - exp(log_cumsum$low_min - log_cumsum$low_max)) - log(flux$FVAmax[lik == 0] - flux$FVAmin[lik == 0])), 1, max)
+  
+  if(any(logLik == "-Inf")){
+    die
+    }else{
+     sum(logLik)
+      }
+ 
   }
 
 
-############# Body ###########
++############# Body ###########
 
 for(rxN in 1:length(rxnList_form)){
   
@@ -124,25 +177,45 @@ for(rxN in 1:length(rxnList_form)){
     }else{
       kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
       }
+  kineticPars$measured <- as.logical(kineticPars$measured)
   
-  met_abund[,!as.logical(kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)])] <- 0 # set missing data to invariant across conditions
+  met_abund[,!kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)]] <- 0 # set missing data (unascertained) to invariant across conditions
   
   # expression combining the log-occupancy equation and scaling of enzyme abundance by activity
   
   KcatEs <- mapply(function(E, Kcat){paste(Kcat, E, sep = " * ")}, E = sapply(all_species$rel_spec[all_species$SpeciesType == "Enzyme"], function(x){paste("2^", x, sep = "")}), Kcat = all_species$formulaName[all_species$SpeciesType == "Enzyme"])
   KcatExpression <- paste('(', paste(KcatEs, collapse = " + "), ')', sep = "")
   Kcatpaste <- paste('I(', KcatExpression, '*')
-    
+  
   full_kinetic_form <- as.formula(gsub('(I\\()', Kcatpaste, l_occupancyEq))
+  # find the partial derivatives of the kinetic form for each reaction specie
+  eq <- eval(parse(text = paste('expression(',gsub('I\\(', '\\(', as.character(full_kinetic_form)[2]),')')))
   
-  
-  
+  D_full_kinetic_form <- list()
+  for(spec in c(kineticPars$rel_spec[kineticPars$measured & !is.na(kineticPars$measured)], all_species$rel_spec[all_species$SpeciesType == "Enzyme"])){
+    D_full_kinetic_form[[spec]] <- D(eq, spec)
+    }
+      
   
   #colnames(met_abund) <- unname(sapply(colnames(met_abund), function(x){kineticPars$modelName[kineticPars$rel_spec == x]}))
   #met_abund <- 2^met_abund
   #enzyme_abund <- 2^enzyme_abund
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0])) #flux, scaled to a prettier range
+  
+  #If FVA min flux is greater than max flux, switch them (and print a warning).
+  
+  if(sum(!(flux$FVAmax >= flux$FVAmin)) != 0){
+    print("maximum flux is less than minimum flux")
+    }
+  
+  flux[!(flux$FVAmax >= flux$FVAmin),c('FVAmin', 'FVAmax')] <- flux[!(flux$FVAmax >= flux$FVAmin),c('FVAmax', 'FVAmin')]
+  
+  #If bounds are exactly equal, then introduce a minute spread so a range can be calculated ###
+  
+  flux$FVAmax[flux$FVAmax == flux$FVAmin] <- flux$FVAmax[flux$FVAmax == flux$FVAmin] + flux$FVAmax[flux$FVAmax == flux$FVAmin]*10^-4
+  
+  
   
   species_SD <- rxnSummary$all_species_SD
   species_corr <- rxnSummary$all_species_corr
