@@ -66,6 +66,8 @@ par_draw <- function(updates){
   draw
 }
 
+
+
 lik_calc <- function(proposed_params){
   #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
   
@@ -317,12 +319,12 @@ for(rxN in 1:length(rxnList_form)){
       proposed_par <- par_draw(j)
       if("t_metX" %in% all_species$rel_spec){met_abund$t_metX <- metX_calc(proposed_par, kineticPars, treatmentPCs)}
       proposed_lik <- lik_calc(proposed_par)
-      if(runif(1, 0, 1) < exp(proposed_lik - current_lik)){
+      if(runif(1, 0, 1) < exp(proposed_lik - current_lik) | (proposed_lik == current_lik & proposed_lik == -Inf)){
         current_pars <- proposed_par
         current_lik <- proposed_lik
         }
       }
-    
+     
     if(i > markov_pars$burn_in){
       if((i - markov_pars$burn_in) %% markov_pars$sample_freq == 0){
         markov_par_vals[(i - markov_pars$burn_in)/markov_pars$sample_freq,] <- current_pars

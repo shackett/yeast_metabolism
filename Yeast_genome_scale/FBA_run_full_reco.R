@@ -974,12 +974,31 @@ compaFluxes$rangefluxDeparture <- apply(abs(compaFluxes$standardQP - data.frame(
 compaFluxes$magfluxDeparture <- apply(abs(compaFluxes$standardQP - data.frame(compaFluxes$FVAmax, compaFluxes$FVAmin))/apply(data.frame(abs(compaFluxes$FVAmax), abs(compaFluxes$FVAmin)), 1, max, na.rm = T), 1, min)
 
 total_flux_cast <- acast(allFluxMelt, formula = "rID ~ condition ~ model", value.var = "flux")
-flux_summary$total_flux_cast <- total_flux_cast[,cond_order_check(colnames(total_flux_cast)),]
-colnames(flux_summary$total_flux_cast) <- toupper(colnames(flux_summary$total_flux_cast))
+total_flux_cast <- total_flux_cast[,cond_order_check(colnames(total_flux_cast)),]
+colnames(total_flux_cast) <- toupper(colnames(total_flux_cast))
+
+# Dealing with some infinite fluxes (very few) introduced through FVA #
+
+invalid_flux <- melt(apply(total_flux_cast[,,names(total_flux_cast[1,1,]) != "standardQP"], c(1,2), function(x){any(is.infinite(x))}))
+invalid_flux <- invalid_flux[invalid_flux$value,]
+
+for(i in 1:nrow(invalid_flux)){
+  
+  fva_rep <- total_flux_cast[rownames(total_flux_cast) == invalid_flux[i,1], colnames(total_flux_cast) == invalid_flux[i,2],]
+  
+  fva_rep[grep('max', names(fva_rep))][is.infinite(fva_rep[grep('max', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * 10
+  fva_rep[grep('min', names(fva_rep))][is.infinite(fva_rep[grep('min', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * -10
+  
+  total_flux_cast[rownames(total_flux_cast) == invalid_flux[i,1], colnames(total_flux_cast) == invalid_flux[i,2],] <- fva_rep
+  
+  }
+
+
 
 plot(sort(compaFluxes$magfluxDeparture[!compaFluxes$fluxCap])[1:3500])
 
 # save flux summaries and pipe into FBGA.R #
+flux_summary$total_flux_cast <- total_flux_cast
 
 save(flux_summary, file = "flux_cache/fluxSummaryQP.Rdata")
 
