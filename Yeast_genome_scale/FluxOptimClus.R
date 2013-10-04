@@ -4,7 +4,6 @@
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 library(nnls)
-library(data.table)
 
 options(stringsAsFactors = FALSE)
 
@@ -22,7 +21,7 @@ run_summary <- list() #### MCMC run output and formatted inputs
 
 markov_pars <- list()
 markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-markov_pars$n_samples <- 100 #how many total markov samples are desired
+markov_pars$n_samples <- 10 #how many total markov samples are desired
 markov_pars$burn_in <- 0 #how many initial samples should be skipped
 
 
@@ -38,16 +37,16 @@ if(chunkNum %in% chunk_assignment$chunk[grep('metX', chunk_assignment$set)]){
   
   PC_loading_pars <- data.frame(mean = apply(metSVD$u, 2, mean), sd = apply(metSVD$u, 2, sd)) # metabolomic loadings of principal components
   
-  }
+}
 
-  
-  
+
+
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
 ############# Functions ###############
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
 
 par_draw <- function(updates){
-  ### update parameters using their prior (given by kineticParPrior) - update those those parameters whose index is in "updates" ###
+  ### Update parameters using their prior (given by kineticParPrior) - update those those parameters whose index is in "updates" ###
   ### Parameters are all returned in log-space (base e) ###
   
   draw <- current_pars
@@ -69,7 +68,7 @@ par_draw <- function(updates){
 
 
 lik_calc <- function(proposed_params){
-  #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
+  ### Determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ###
   
   par_stack <- rep(1, n_c) %*% t(proposed_params); colnames(par_stack) <- kineticPars$formulaName
   par_stack <- par_stack[,!(kineticPars$SpeciesType %in% "PCL")]
@@ -97,7 +96,7 @@ lik_calc <- function(proposed_params){
   nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- all_species$formulaName[all_species$SpeciesType == "Enzyme"]
   
   all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
-
+  
   # partial derivatives of each measured specie in a condition
   comp_partials <- matrix(NA, nrow = n_c, ncol = length(D_full_kinetic_form))
   colnames(comp_partials) <- names(D_full_kinetic_form)
@@ -112,7 +111,7 @@ lik_calc <- function(proposed_params){
   for(i in 1:n_c){
     sampleCov <- species_corr * t(t(species_SD[i,])) %*% species_SD[i,]
     flux_SD[i] <- sqrt(t(comp_partials[i,]) %*% sampleCov %*% t(t(comp_partials[i,])))
-    }
+  }
   
   
   # evaluate the relative density a gaussian centered about fitted flux with the SD calculated above
@@ -133,7 +132,7 @@ lik_calc <- function(proposed_params){
     
     RT <- ifelse(log_cumsum$high_max < log_cumsum$low_min, T, F) # is flux FVA >> par -> TRUE
     
-    log_cumsum$high_min[RT][log_cumsum$high_max[RT] == log_cumsum$high_min[RT]] <- log_cumsum$high_min[log_cumsum$high_max[RT] == log_cumsum$high_min[RT]] + 10^-4
+    log_cumsum$high_min[RT][log_cumsum$high_max[RT] == log_cumsum$high_min[RT]] <- log_cumsum$high_min[RT][log_cumsum$high_max[RT] == log_cumsum$high_min[RT]] + 10^-4
     log_cumsum$low_max[!RT][log_cumsum$low_min[!RT] == log_cumsum$low_max[!RT]] <- log_cumsum$low_max[!RT][log_cumsum$low_min[!RT] == log_cumsum$low_max[!RT]] + 10^-4
     
     # For minute densities: calculate them in log space
@@ -149,13 +148,13 @@ lik_calc <- function(proposed_params){
   
   if(any(logLik == "-Inf")){
     die
-    }else if(any(flux_SD == 0)){
-      -Inf
-    }else{
-     sum(logLik)
-      }
- 
+  }else if(any(flux_SD == 0)){
+    -Inf
+  }else{
+    sum(logLik)
   }
+  
+}
 
 
 
@@ -165,24 +164,24 @@ metX_calc <- function(proposed_params, kineticPars, treatmentPCs){
   
   c(proposed_params[kineticPars$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(treatmentPCs))
   
-  }
-  
-  
+}
 
-  
-  
+
+
+
+
 
 
 
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
 ############### Body ##################
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
-
-for(rxN in 1:length(rxnList_form)){
+for(rxN in grep('r_0211|r_0536', names(rxnList_form))){
+#for(rxN in 1:length(rxnList_form)){
   
   rxnSummary <- rxnList_form[[rxN]]
   n_c <- nrow(rxnSummary$flux)
-  occupancyEq <- rxnSummary$rxnForm # a parametric form relating metabolites and constants to fraction of maximal activity
+  rxnSummary$rxnForm # a parametric form relating metabolites and constants to fraction of maximal activity
   occupancyEq <- as.formula(gsub('\\^1234', '^h_allo', occupancyEq)) # 1234 was a standin for a hill coefficient that isn't pre-specified as a numbewr
   l_occupancyEq <- as.formula(paste(gsub('([^_])(t_)', '\\12^\\2', occupancyEq), collapse = "")) # same equation using naturally using log2 data
   
@@ -208,7 +207,6 @@ for(rxN in 1:length(rxnList_form)){
     # treating each conditions principal components (v) and the eigenvalues (d) as fixed, sample loadings one-by-one, treating each as a seperate parameter w.r.t. metropolis optimization
     
     treatmentPCs <- metSVD$v[rownames(metSVD$v) %in% rownames(rxnSummary$rxnMet),]
-    treatmentPCs <- treatmentPCs[chmatch(rownames(treatmentPCs), rownames(rxnSummary$rxnMet)),] #double check order
     
     kineticPars <- rbind(kineticPars, data.frame(rel_spec = paste("PCL", 1:npc, sep = "_"), SpeciesType = "PCL", modelName = NA, commonName = NA, formulaName = NA, measured = NA))
     
@@ -224,9 +222,9 @@ for(rxN in 1:length(rxnList_form)){
     met_abund <- data.frame(met_abund)
     colnames(met_abund) <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
     kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- !all(is.na(met_abund))
-    }else{
-      kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
-      }
+  }else{
+    kineticPars$measured[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){(apply(is.na(met_abund), 2, sum) == 0)[names((apply(is.na(met_abund), 2, sum) == 0)) == x]}))
+  }
   kineticPars$measured <- as.logical(kineticPars$measured)
   
   met_abund[,!kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)]] <- 0 # set missing data (unascertained) to invariant across conditions
@@ -239,13 +237,13 @@ for(rxN in 1:length(rxnList_form)){
   
   full_kinetic_form <- as.formula(gsub('(I\\()', Kcatpaste, l_occupancyEq))
   # find the partial derivatives of the kinetic form for each reaction specie
-  eq <- eval(parse(text = paste('expression(',gsub('I\\(', '\\(', as.character(full_kinetic_form)[2]),')')))
+  eq <- eval(parse(text = paste('expression(',sub('I\\(', '\\(', as.character(full_kinetic_form)[2]),')')))
   
   D_full_kinetic_form <- list()
   for(spec in c(kineticPars$rel_spec[kineticPars$measured & !is.na(kineticPars$measured)], all_species$rel_spec[all_species$SpeciesType == "Enzyme"])){
     D_full_kinetic_form[[spec]] <- D(eq, spec)
-    }
-      
+  }
+  
   
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0])) #flux, scaled to a prettier range
@@ -254,7 +252,7 @@ for(rxN in 1:length(rxnList_form)){
   
   if(sum(!(flux$FVAmax >= flux$FVAmin)) != 0){
     print("maximum flux is less than minimum flux")
-    }
+  }
   flux[!(flux$FVAmax >= flux$FVAmin),c('FVAmin', 'FVAmax')] <- flux[!(flux$FVAmax >= flux$FVAmin),c('FVAmax', 'FVAmin')]
   
   # If bounds are exactly equal, then introduce a minute spread so a range can be calculated ###
@@ -279,7 +277,7 @@ for(rxN in 1:length(rxnList_form)){
   kineticParPrior$par_1[kineticParPrior$distribution == "unif"] <- -10; kineticParPrior$par_2[kineticParPrior$distribution == "unif"] <- 10
   for(exp_param in kineticPars$modelName[!is.na(kineticPars$measured) & kineticPars$measured == TRUE]){
     kineticParPrior[kineticPars$modelName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(met_abund[,colnames(met_abund) == exp_param]) + c(-10,10)
-    }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
+  }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
   
   # Specify prior for hill constants
   kineticParPrior$distribution[kineticPars$SpeciesType == "hillCoefficient"] <- "SpSl"
@@ -287,11 +285,12 @@ for(rxN in 1:length(rxnList_form)){
   kineticParPrior$par_2[kineticPars$SpeciesType == "hillCoefficient"] <- 0.5
   kineticParPrior$par_3[kineticPars$SpeciesType == "hillCoefficient"] <- 0.5
   
-  # Specify prior for principal component loadings
-  kineticParPrior$distribution[kineticPars$SpeciesType == "PCL"] <- "norm"
-  kineticParPrior$par_1[kineticPars$SpeciesType == "PCL"] <- PC_loading_pars$mean
-  kineticParPrior$par_2[kineticPars$SpeciesType == "PCL"] <- PC_loading_pars$sd
-  
+  if("t_metX" %in% all_species$rel_spec){
+    # Specify prior for principal component loadings
+    kineticParPrior$distribution[kineticPars$SpeciesType == "PCL"] <- "norm"
+    kineticParPrior$par_1[kineticPars$SpeciesType == "PCL"] <- PC_loading_pars$mean
+    kineticParPrior$par_2[kineticPars$SpeciesType == "PCL"] <- PC_loading_pars$sd
+  }
   
   
   #### Optimize l(par|X) using Metropolis-Hastings MCMC ####
@@ -322,27 +321,27 @@ for(rxN in 1:length(rxnList_form)){
       if(runif(1, 0, 1) < exp(proposed_lik - current_lik) | (proposed_lik == current_lik & proposed_lik == -Inf)){
         current_pars <- proposed_par
         current_lik <- proposed_lik
-        }
       }
-     
+    }
+    
     if(i > markov_pars$burn_in){
       if((i - markov_pars$burn_in) %% markov_pars$sample_freq == 0){
         markov_par_vals[(i - markov_pars$burn_in)/markov_pars$sample_freq,] <- current_pars
         lik_track <- c(lik_track, current_lik)
-        }
       }
     }
+  }
   
   colnames(markov_par_vals) <- kineticPars$rel_spec
-    
+  
   kineticPars$formatted[kineticPars$SpeciesType != "keq"] <- unname(sapply(kineticPars$commonName[kineticPars$SpeciesType != "keq"], function(name_int){
     if(length(strsplit(name_int, split = "")[[1]]) >= 25){
       split_name <- strsplit(name_int, split = "")[[1]]
       split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(20 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
       split_name[split_pois] <- "\n"
       paste(split_name, collapse = "")
-      }else{name_int}
-    }))
+    }else{name_int}
+  }))
   kineticPars$formatted[kineticPars$SpeciesType == "keq"] <- "keq"
   
   ## Save MC information
@@ -360,9 +359,11 @@ for(rxN in 1:length(rxnList_form)){
   run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
   run_summary[[names(rxnList_form)[rxN]]]$specSD <- species_SD
   run_summary[[names(rxnList_form)[rxN]]]$specCorr <- species_corr
-  # Save priors
+  ## Save priors
   run_summary[[names(rxnList_form)[rxN]]]$kineticParPrior <- data.frame(kineticPars, kineticParPrior)
-    
-  }
   
-save(run_summary, file = paste(c("paramSets/paramSet", "C", chunkNum, "R", runNum, ".Rdata"), collapse = ""))
+  print(paste(names(rxnList_form)[rxN], "finished", sep = " "))
+  
+}
+
+      save(run_summary, file = paste(c("paramSets/paramSet", "C", chunkNum, "R", runNum, ".Rdata"), collapse = ""))
