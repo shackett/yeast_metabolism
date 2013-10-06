@@ -11,18 +11,19 @@ args <- commandArgs()
 runNum = as.numeric(unlist(strsplit(args[grep("runNum", args)], "="))[2])
 chunkNum = as.numeric(unlist(strsplit(args[grep("chunk", args)], "="))[2])
 
+print(paste("CHUNK NUMBER: ", chunkNum, ", RUN NUMBER: ", runNum, sep = ""))
 
-run_summary <- list() #### MCMC run output and formatted inputs
-
-#markov_pars <- list()
-#markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-#markov_pars$n_samples <- 2000 #how many total markov samples are desired
-#markov_pars$burn_in <- 500 #how many initial samples should be skipped
+rurun_summary <- list() #### MCMC run output and formatted inputs
 
 markov_pars <- list()
 markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-markov_pars$n_samples <- 10 #how many total markov samples are desired
-markov_pars$burn_in <- 0 #how many initial samples should be skipped
+markov_pars$n_samples <- 10000 #how many total markov samples are desired
+markov_pars$burn_in <- 500 #how many initial samples should be skipped
+
+#markov_pars <- list()
+#markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+#markov_pars$n_samples <- 10 #how many total markov samples are desired
+#markov_pars$burn_in <- 0 #how many initial samples should be skipped
 
 
 run_summary$markov_pars <- markov_pars
@@ -76,7 +77,7 @@ lik_calc <- function(proposed_params){
   par_stack <- exp(par_stack)
   occupancy_vals <- data.frame(met_abund, par_stack)
   
-  predOcc <- model.matrix(l_occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
   enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
   
   # fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
@@ -146,9 +147,9 @@ lik_calc <- function(proposed_params){
   }
   
   
-  if(any(logLik == "-Inf")){
-    die
-  }else if(any(flux_SD == 0)){
+  if(any(logLik == "-Inf")){ # if there is a parmeter set that is so infeasible that it rounds to -Inf in log-space!
+    -Inf
+  }else if(any(flux_SD == 0)){ # if SD collapses to zero, because kcat = 0 (e.g. flux is always negative and prediction is always positive)
     -Inf
   }else{
     sum(logLik)
@@ -169,21 +170,26 @@ metX_calc <- function(proposed_params, kineticPars, treatmentPCs){
 
 
 
-
-
-
-
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
 ############### Body ##################
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
-for(rxN in grep('r_0211|r_0536', names(rxnList_form))){
+for(rxN in c(1:length(rxnList_form))[names(rxnList_form) %in% c("r_1088-rm", "r_0250-rm-t_0674-inh-comp")]){
 #for(rxN in 1:length(rxnList_form)){
+  
+  t_start = proc.time()[3]
+  print(paste(names(rxnList_form)[rxN], "started", sep = " "))
   
   rxnSummary <- rxnList_form[[rxN]]
   n_c <- nrow(rxnSummary$flux)
-  rxnSummary$rxnForm # a parametric form relating metabolites and constants to fraction of maximal activity
-  occupancyEq <- as.formula(gsub('\\^1234', '^h_allo', occupancyEq)) # 1234 was a standin for a hill coefficient that isn't pre-specified as a numbewr
-  l_occupancyEq <- as.formula(paste(gsub('([^_])(t_)', '\\12^\\2', occupancyEq), collapse = "")) # same equation using naturally using log2 data
+  
+  rxnEquations <- list()
+  rxnEquations[["occupancyEq_list"]] <- paste(deparse(as.list(rxnSummary$rxnForm)[[2]]), collapse = "") # a parametric form relating metabolites and constants to fraction of maximal activity
+  rxnEquations[["occupancyEq_list"]] <- gsub('[ ]+', ' ', rxnEquations[["occupancyEq_list"]])
+  rxnEquations[["occupancyEq_list"]] <- gsub('\\^1234', '^h_allo', rxnEquations[["occupancyEq_list"]]) # 1234 was a standin for a hill coefficient that isn't pre-specified as a numbewr
+  
+  rxnEquations[["l_occupancyEq_list"]] <- rxnEquations[["occupancyEq_list"]]
+  rxnEquations[["l_occupancyEq_list"]] <- gsub('([^_])(t_)', '\\12^\\2', rxnEquations[["l_occupancyEq_list"]])
+  rxnEquations[["l_occupancyEq"]] <- as.formula(paste("~", rxnEquations[["l_occupancyEq_list"]], collapse = "")) # same equation using naturally using log2 data
   
   ### Create a data.frame describing the relevent parameters for the model ###
   kineticPars <- data.frame(rel_spec = c(rownames(rxnSummary$enzymeComplexes), colnames(rxnSummary$rxnMet)), 
@@ -194,11 +200,11 @@ for(rxN in grep('r_0211|r_0536', names(rxnList_form))){
   kineticPars$commonName[kineticPars$SpeciesType == "Enzyme"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"]
   kineticPars$formulaName[kineticPars$SpeciesType == "Metabolite"] <- paste("K", rxnSummary$rxnID, kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"], sep = "_")
   
-  all_species <- kineticPars[sapply(kineticPars$formulaName, function(ele_used){length(grep(ele_used, occupancyEq)) != 0}) | kineticPars$SpeciesType == "Enzyme",]
-  kineticPars <- kineticPars[sapply(kineticPars$formulaName, function(ele_used){length(grep(ele_used, occupancyEq)) != 0}),] #remove species which dont appear in the reaction equation
+  all_species <- kineticPars[sapply(kineticPars$formulaName, function(ele_used){length(grep(ele_used, rxnEquations[["occupancyEq_list"]])) != 0}) | kineticPars$SpeciesType == "Enzyme",]
+  kineticPars <- kineticPars[sapply(kineticPars$formulaName, function(ele_used){length(grep(ele_used, rxnEquations[["occupancyEq_list"]])) != 0}),] #remove species which dont appear in the reaction equation
   
   kineticPars <- rbind(kineticPars, c("keq", "keq", NA, NA, paste("Keq", rxnSummary$rxnID, sep = ""), NA))
-  if(length(grep('\\^h', occupancyEq)) != 0){ # an unspecified hill coefficient was found
+  if(length(grep('\\^h', rxnEquations[["occupancyEq_list"]])) != 0){ # an unspecified hill coefficient was found
     kineticPars <- rbind(kineticPars, c("h_allo", "hillCoefficient", NA, NA, "h_allo", NA))
   }
   if("t_metX" %in% all_species$rel_spec){
@@ -233,11 +239,14 @@ for(rxN in grep('r_0211|r_0536', names(rxnList_form))){
   
   KcatEs <- mapply(function(E, Kcat){paste(Kcat, E, sep = " * ")}, E = sapply(all_species$rel_spec[all_species$SpeciesType == "Enzyme"], function(x){paste("2^", x, sep = "")}), Kcat = all_species$formulaName[all_species$SpeciesType == "Enzyme"])
   KcatExpression <- paste('(', paste(KcatEs, collapse = " + "), ')', sep = "")
-  Kcatpaste <- paste('I(', KcatExpression, '*')
+  Kcatpaste <- paste('I(', KcatExpression, ' * ', sep = "")
   
-  full_kinetic_form <- as.formula(gsub('(I\\()', Kcatpaste, l_occupancyEq))
+  rxnEquations[["full_kinetic_form_list"]] <- rxnEquations[["l_occupancyEq_list"]]
+  rxnEquations[["full_kinetic_form_list"]] <- gsub('(I\\()', Kcatpaste, rxnEquations[["full_kinetic_form_list"]])
+  rxnEquations[["full_kinetic_form_list"]] <- sub('I\\(', '\\(', rxnEquations[["full_kinetic_form_list"]])
+  
   # find the partial derivatives of the kinetic form for each reaction specie
-  eq <- eval(parse(text = paste('expression(',sub('I\\(', '\\(', as.character(full_kinetic_form)[2]),')')))
+  eq <- eval(parse(text = paste('expression(',rxnEquations[["full_kinetic_form_list"]],')')))
   
   D_full_kinetic_form <- list()
   for(spec in c(kineticPars$rel_spec[kineticPars$measured & !is.na(kineticPars$measured)], all_species$rel_spec[all_species$SpeciesType == "Enzyme"])){
@@ -248,7 +257,7 @@ for(rxN in grep('r_0211|r_0536', names(rxnList_form))){
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0])) #flux, scaled to a prettier range
   
-  #I f FVA min flux is greater than max flux, switch them (and print a warning).
+  # If FVA min flux is greater than max flux, switch them (and print a warning).
   
   if(sum(!(flux$FVAmax >= flux$FVAmin)) != 0){
     print("maximum flux is less than minimum flux")
@@ -352,9 +361,7 @@ for(rxN in grep('r_0211|r_0536', names(rxnList_form))){
   run_summary[[names(rxnList_form)[rxN]]]$metabolites <- met_abund
   run_summary[[names(rxnList_form)[rxN]]]$enzymes <- enzyme_abund
   run_summary[[names(rxnList_form)[rxN]]]$flux <- flux
-  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq$linear <- occupancyEq
-  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq$log <- l_occupancyEq
-  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq$full <- full_kinetic_form
+  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- rxnEquations
   run_summary[[names(rxnList_form)[rxN]]]$all_species <- all_species
   run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
   run_summary[[names(rxnList_form)[rxN]]]$specSD <- species_SD
@@ -362,8 +369,9 @@ for(rxN in grep('r_0211|r_0536', names(rxnList_form))){
   ## Save priors
   run_summary[[names(rxnList_form)[rxN]]]$kineticParPrior <- data.frame(kineticPars, kineticParPrior)
   
-  print(paste(names(rxnList_form)[rxN], "finished", sep = " "))
+  print(paste(names(rxnList_form)[rxN], "finished in ", round(proc.time()[3] - t_start, 0), " seconds", sep = " "))
+  
   
 }
 
-      save(run_summary, file = paste(c("paramSets/paramSet", "C", chunkNum, "R", runNum, ".Rdata"), collapse = ""))
+save(run_summary, file = paste(c("paramSets/paramSet", "C", chunkNum, "R", runNum, ".Rdata"), collapse = ""))
