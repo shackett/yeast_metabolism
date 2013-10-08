@@ -1,3 +1,5 @@
+# Works with R version >= 2.15
+
 #qsub -l 1day -cwd -sync n Rscript FluxOptimClus.R runNum=$a_run chunk=$a_chunk
 
 #setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
@@ -45,6 +47,7 @@ if(chunkNum %in% chunk_assignment$chunk[grep('metX', chunk_assignment$set)]){
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
 ############# Functions ###############
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
+
 
 par_draw <- function(updates){
   ### Update parameters using their prior (given by kineticParPrior) - update those those parameters whose index is in "updates" ###
@@ -173,8 +176,10 @@ metX_calc <- function(proposed_params, kineticPars, treatmentPCs){
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
 ############### Body ##################
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
-for(rxN in c(1:length(rxnList_form))[names(rxnList_form) %in% c("r_1088-rm", "r_0250-rm-t_0674-inh-comp")]){
-#for(rxN in 1:length(rxnList_form)){
+
+
+#for(rxN in c(1:length(rxnList_form))[names(rxnList_form) %in% c("r_1088-rm", "r_0250-rm-t_0674-inh-comp")]){
+for(rxN in 1:length(rxnList_form)){
   
   t_start = proc.time()[3]
   print(paste(names(rxnList_form)[rxN], "started", sep = " "))
@@ -281,12 +286,16 @@ for(rxN in c(1:length(rxnList_form))[names(rxnList_form) %in% c("r_1088-rm", "r_
   # -@-@ norm: lognormal: in log2 space draw a value from mean = par_1, sd = par_2
   # -@-@ SpSl: spike and slab (In log2 space: the spike is a point mass at zero with p = par_3, the slab is a normal with mean = par_1 and sd = par_2)
   
-  # Specify prior for kinetic constants
+  # Specify prior for michaelis constants
   kineticParPrior$distribution[kineticPars$SpeciesType %in% c("Metabolite", "keq")] <- "unif"
-  kineticParPrior$par_1[kineticParPrior$distribution == "unif"] <- -10; kineticParPrior$par_2[kineticParPrior$distribution == "unif"] <- 10
+  kineticParPrior$par_1[kineticParPrior$distribution == "unif"] <- -10; kineticParPrior$par_2[kineticParPrior$distribution == "unif"] <- 10 # default value to 2^-10:2^10
+  
   for(exp_param in kineticPars$modelName[!is.na(kineticPars$measured) & kineticPars$measured == TRUE]){
     kineticParPrior[kineticPars$modelName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(met_abund[,colnames(met_abund) == exp_param]) + c(-10,10)
   }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
+  
+  # Prior for keq is centered around sum log(sub) - sum log(prod) - this deals with some species being in absolute space and others being absolute measurements
+  kineticParPrior[kineticPars$SpeciesType == "keq", c(2:3)] <- median(rowSums(met_abund * c(rep(1,n_c)) %*% t(rxnSummary$rxnFormData$Stoi))) + c(-10,10)
   
   # Specify prior for hill constants
   kineticParPrior$distribution[kineticPars$SpeciesType == "hillCoefficient"] <- "SpSl"
