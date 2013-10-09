@@ -126,7 +126,7 @@ for (i in 1:nrow(rmCondList)){
 
 
 
-save(rxnList, file = "all_rxnList.Rdata")
+#save(rxnList, file = "all_rxnList.Rdata")
 
 
 ### ensure that the ordering of conditions is the same ###
@@ -137,11 +137,10 @@ if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapp
   warning('There is a problem with the order of the conditions. (check cond_mapping)')
 }
 
-#### Determine which reaction have valid reaction mechanisms ####
+#### Determine which reaction have valiad reaction mechanisms - all of them as of now ####
 
 reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$listEntry, NA)})  
 rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
-n_c <- nrow(chemostatInfo)
 
 #### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
 
@@ -310,10 +309,8 @@ load("paramOptim.Rdata")
 
 param_sets <- list.files('FBGA_files/paramSets/')
 
-#param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), chunkNum =sapply(param_sets, function(x){as.numeric(sub('C', '', regmatches(x, regexec('C[0-9]+', x))[[1]]))}),
-#                             runNum = sapply(param_sets, function(x){as.numeric(sub('R', '', regmatches(x, regexec('R[0-9]+', x))[[1]]))}), n_samples = NA, sample_freq = NA, burn_in = NA)
-
-param_run_info <- data.frame(file = param_sets, index = 1, chunkNum = 1, runNum = 1, n_samples = NA, sample_freq = NA, burn_in = NA)
+param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), chunkNum =sapply(param_sets, function(x){as.numeric(sub('C', '', regmatches(x, regexec('C[0-9]+', x))[[1]]))}),
+                             runNum = sapply(param_sets, function(x){as.numeric(sub('R', '', regmatches(x, regexec('R[0-9]+', x))[[1]]))}), n_samples = NA, sample_freq = NA, burn_in = NA)
 
 
 
@@ -339,12 +336,20 @@ for(a_chunk in sort(unique(param_run_info$chunkNum))){
   }
 }
 
+### Pull out relevent reaction information - such as reaction ID, number of parameters and maximum likelihood ###
+
+load('flux_cache/metaboliteTables.RData')
+npc <- ncol(metSVD$v)
+
 parSetInfo <- as.data.frame(t(sapply(param_set_list, function(x){x$name})))
 parSetInfo$ML <- sapply(param_set_list, function(x){max(x$lik)})
 
+# npar = number of enzymes (kcat) + number of metabolites (Km) + hill coefficients (which are not 1) 
+# + hypothetical metabolite (trend governed by npc significant PCs) + Keq
+
 reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(rxnList_form), function(x){substr(x, 1, 6)}),
                            form = sapply(names(rxnList_form), function(x){substr(x, 8, 9)}), modification = sapply(names(rxnList_form), function(x){sub(substr(x, 1, 10), '', x)}),
-                           npar = sapply(rxnList_form, function(x){nrow(x$enzymeAbund) + nrow(x$rxnFormData) + 1}))
+                           npar = sapply(rxnList_form, function(x){nrow(x$enzymeAbund) + nrow(x$rxnFormData) + sum(x$rxnFormData$Hill != 1) + ifelse(any(x$rxnFormData$SubstrateID == "t_metX"), npc, 0) + 1}))
 
 reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])})
 
@@ -379,21 +384,15 @@ Qthresh <- 0.1
 reactionInfo$Qvalue <- NA
 reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
 
-save(list = ls(), file = "validParameterSets.Rdata")
 
 ### reduce reactions of interest to primary forms and reparameterizations ###
 
-#cherryPicked <- c("r_0232-rm-t_0717-inh-noncomp", "r_0232-rm-t_0287-inh-noncomp", "r_0232-rm-t_0582-act-allo",  
-# "r_0789-rm-t_0248-act-allo", "r_0859-rm-t_0296-act-allo", "r_0859-rm-t_0248-act-allo",  
-# "r_0859-rm-t_0604-act-allo", "r_0859-rm-t_0231-act-allo", "r_0859-rm-t_0254-inh-noncomp",
-# "r_0859-rm-t_0283-inh-noncomp", "r_0941-rm-t_0296-act-allo", "r_0941-rm-t_0283-inh-noncomp")
-
-#reactionInfo <- reactionInfo[reactionInfo$rMech %in% cherryPicked,]
-#  reactionInfo <- reactionInfo[reactionInfo$rMech %in% cherryPicked | is.na(reactionInfo$Qvalue) | (!is.na(reactionInfo$Qvalue) & reactionInfo$Qvalue < Qthresh),]
+shiny_flux_data <- list()
 
 rxn_fits <- NULL
 rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
+
 
 
 for(arxn in reactionInfo$rMech){
@@ -412,9 +411,19 @@ for(arxn in reactionInfo$rMech){
   load(paste(c("FBGA_files/paramSets/", param_run_info$file[param_run_info$index == par_likelihood$index[1]]), collapse = ""))
   run_rxn <- run_summary[[arxn]]
   
-  if(var(par_likelihood$likelihood) < 10^-10 | all(run_rxn$metabolites == 1)){next} #skip underparameterized reactions - those with essentially no variation
+  ### A couple of catches for poorly defined reactions or if optimization grossly fails ### 
   
-  if(length(run_rxn$enzymes[1,]) != 0){
+  if(sum(is.finite(par_likelihood$likelihood)) == 0){
+    print(paste(arxn, "has zero valid parameter sets")); next
+  } # all parameter sets have a zero likelihood (e.g. SD = 0)
+  
+  if(var(par_likelihood$likelihood) < 10^-10 | all(run_rxn$metabolites == 1)){
+    print(paste(arxn, "does not vary in likelihood, or has too many unmeasured species")); next
+  } #skip underparameterized reactions - those with essentially no variation
+  
+  ### For reactions with both enzymes and metabolites measured 
+  
+  if(nrow(run_rxn$rxnSummary$enzymeComplexes) != 0){
     
     flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
     rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))

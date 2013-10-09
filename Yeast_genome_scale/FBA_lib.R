@@ -1038,6 +1038,74 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
 
 
 
+hypoMetTrend <- function(run_rxn, metSVD){
+  
+  #### Generate informative plots showing the metabolic trends which inhibitors or activators of a reaction may follow ####
+  
+  require(reshape2)
+  require(ggplot2)
+  
+  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "none", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
+                         axis.text = element_text(color = "black"))
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank()) 
+  
+  
+  hypoMetPlots <- list()
+  
+  ### Calculate distribution of interpretable measures ###
+  
+  releventPCs <- metSVD$v[rownames(metSVD$v) %in% rownames(run_rxn$rxnSummary$flux),]
+  npc <- ncol(releventPCs)
+  
+  reconstructedDraws <- run_rxn$markovChain[,run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs)
+  
+  reconstructedDraws <- reconstructedDraws - run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "t_metX"] %*% t(rep(1, nrow(releventPCs))) # convert from relative concentration to relative occupancy
+  
+  allosteryStrength <- log2(1 + (2^reconstructedDraws) ^ (2^run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"] %*% t(rep(1, nrow(releventPCs))))) # 1 + ([A]/[Ka])^h
+  
+  
+  ### Create a violin plot, with the MLE highlighted ###
+  
+  mod_type <- run_rxn$rxnSummary$rxnFormData$Type[run_rxn$rxnSummary$rxnFormData$SubstrateID == "t_metX"]
+  mod_type <- ifelse(mod_type == "act", "allosteric activator", "allosteric inhibitor")
+  
+  PCconds <- data.frame(name = factor(colnames(reconstructedDraws), levels = colnames(reconstructedDraws)), Limitation = factor(substr(colnames(reconstructedDraws),1,1)), DR = gsub('^[A-Z]', '', colnames(reconstructedDraws)))
+  
+  PCreco_melt <- data.frame(melt(cbind(PCconds, t(reconstructedDraws)), id.vars = colnames(PCconds)), allosteryStrength = melt(t(allosteryStrength))$value)
+  
+  ### the MLE ###
+  
+  mle_pars <- par_markov_chain[which.max(par_likelihood$likelihood),]
+  mle_RA <- mle_pars[run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs)
+  mle_occ <- mle_RA - mle_pars[run_rxn$kineticParPrior$rel_spec == "t_metX"]
+  mle_strength <- log2(1 + (2^mle_occ) ^ (2^mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"]))
+  mle_info <- data.frame(PCconds, value = c(mle_occ), allosetryStrength = c(mle_strength))
+  
+  
+  hypoMetPlots$Occupancy <- ggplot() + geom_violin(data = PCreco_melt, aes(x = name, y = value, fill = factor(Limitation))) + scale_y_continuous(expression(log[2]~frac("[M]", K[M])), limits = c(-1,1)*max(abs(PCreco_melt$value))) + 
+    geom_point(data = mle_info, aes(x = name, y = value), size = 2) + scale_fill_brewer(palette = "Pastel1") + 
+    ggtitle(paste("Profile of ", mod_type, " effecting flux", sep = "")) + boxplot_theme 
+  
+  hypoMetPlots$AlloStrength <- ggplot() + geom_violin(data = PCreco_melt, aes(x = name, y = allosteryStrength, fill = factor(Limitation))) + scale_y_continuous(expression(log[2]~1 + bgroup("[", frac("[M]", K[M]), "]")^h)) +
+    geom_point(data = mle_info, aes(x = name, y = allosetryStrength), size = 2) + scale_fill_brewer(palette = "Pastel1") +
+    ggtitle("Strength of allostery") + boxplot_theme
+  
+  
+  ### Show distribution of hill coefficients ###
+  
+  hillDF <- data.frame(hill = run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"])
+  
+  hypoMetPlots$Hill <- ggplot(hillDF, aes(x = hill)) + geom_bar(fill = "coral", binwidth = 0.2) + geom_vline(y = mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2) +
+    scale_x_continuous(expression(log[2] ~ "Hill coefficient"), limits = c(-1,1)*max(abs(hillDF$hill))) + scale_y_continuous("Counts", expand = c(0,0)) +
+    barplot_theme + ggtitle("Hill coefficient posterior samples")
+  
+  return(hypoMetPlots)
+  
+}
+
 
 
 
