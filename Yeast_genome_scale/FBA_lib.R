@@ -983,28 +983,42 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
       panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
       legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
 
-  #scatter_theme <- theme(text = element_text(size = 50, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", 
-  #    panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
-  #    legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
-
-  chemoInfoSubset <- chemostatInfo[chmatch(rownames(flux_fit$fitted_flux), chemostatInfo$condition),]
-  DRordering <- data.frame(DRs = c(0.05, 0.11, 0.16, 0.22, 0.30), order = 1:5)
-  chemoInfoSubset$DRorder <- DRordering$order[chmatch(as.character(chemoInfoSubset$DRgoal), as.character(DRordering$DRs))]
+  
+  flux <- run_rxn$flux
+  #avg_flux <- (flux$FVAmax + flux$FVAmin)/2
+  
+  met_abund <- run_rxn$metabolites
+  met_abund <- apply(met_abund[,colSums(met_abund == 0) != n_c], c(1,2), as.numeric)
+  
+  enzyme_abund <- run_rxn$enzymes
+  enzyme_abund <- apply(data.frame(enzyme_abund), c(1,2), as.numeric)
+  
+  Chemoconds <- data.frame(name = factor(rownames(enzyme_abund), levels = rownames(enzyme_abund)), Limitation = factor(substr(rownames(enzyme_abund),1,1)), DR = gsub('^[A-Z]', '', rownames(enzyme_abund)))
+  Chemoconds$actualDR <- chemostatInfo$actualDR[chmatch(as.character(Chemoconds$name), toupper(chemostatInfo$condition))]
+  
+  DRordering <- data.frame(DRs = as.character(c("0.05", "0.11", "0.16", "0.22", "0.30")), order = 1:5)
+  Chemoconds$DRorder <- DRordering$order[chmatch(as.character(Chemoconds$DR), DRordering$DRs)]
     
   
-  flux_plot_alt <- data.frame(FBA = run_rxn$flux, Parametric = flux_fit$fitted_flux, condition = chemoInfoSubset$limitation, DR = chemoInfoSubset$DRorder)
+  flux_plot_alt <- data.frame(FBA = (flux$FVAmin + flux$FVAmax)/2, Parametric = flux_fit$fitted_flux, condition = Chemoconds$Limitation, DR = Chemoconds$DRorder)
   flux_range <- range(c(0, flux_plot_alt$FBA, flux_plot_alt$Parametric))
+  
+  ### Numerical levels of growth rates and condition shown for parametric flux fit versus FBA determined flux
   
   output_plots$flux_plot1 <- ggplot() + scatter_theme +
     geom_text(data = flux_plot_alt, aes(x = FBA, y = Parametric, col = condition, label = DR), size = 20) + scale_size_identity() + 
     scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2) + 
     xlim(flux_range[1], flux_range[2]) + ylim(flux_range[1], flux_range[2])
   
-  flux_plot <- data.frame(FBA = run_rxn$flux, Parametric = flux_fit$fitted_flux, condition = chemoInfoSubset$limitation, DR = chemoInfoSubset$actualDR)
-  #output_plots$flux_plot2 <- ggplot() + geom_path(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = 2)) + scatter_theme +
-  #  geom_point(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = DR*50)) + scale_size_identity() + 
-  #  scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2) +
-  #  xlim(flux_range[1], flux_range[2]) + ylim(flux_range[1], flux_range[2])
+  
+  
+  flux_plot <- data.frame(FBA = (flux$FVAmin + flux$FVAmax)/2, Parametric = flux_fit$fitted_flux, condition = Chemoconds$Limitation, DR = Chemoconds$actualDR)
+  output_plots$flux_plot2 <- ggplot() + geom_path(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = 2)) + scatter_theme +
+    geom_point(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = DR*50)) + scale_size_identity() + 
+    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2) +
+    xlim(flux_range[1], flux_range[2]) + ylim(flux_range[1], flux_range[2])
+  
+  
   
   FBA_flux_range <- range(c(0, flux_plot_alt$FBA))
   output_plots$FBA_flux <- ggplot() + geom_path(data = flux_plot, aes(x = DR, y = FBA, col = condition, size = 2)) + scatter_theme +
@@ -1012,13 +1026,28 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA") +
     ylim(FBA_flux_range[1], FBA_flux_range[2])
     
-  all_species <- data.frame(run_rxn$enzymes, run_rxn$metabolites)
-  colnames(all_species) <- run_rxn$all_species$commonName
+  #### Changes in species abundance across dilution rates ###
+  
+  all_species <- data.frame(enzyme_abund, met_abund)
+  
+  if('t_metX' %in% run_rxn$kineticPars$modelName){
+    
+    ### hypothetical metabolite overwriten with value from PCs ###
+    
+    mle_pars <- par_markov_chain[which.max(par_likelihood$likelihood),]
+    releventPCs <- metSVD$v[rownames(metSVD$v) %in% rownames(flux),]
+    npc <- ncol(releventPCs)
+    
+    all_species$t_metX <- t(mle_pars[run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs))
+    
+  }
+  
+  colnames(all_species) <- run_rxn$all_species$commonName[chmatch(colnames(all_species), run_rxn$all_species$rel_spec)]
   
   all_species_tab <- run_rxn$all_species[colSums(all_species != 1) != 0,]
   all_species <- all_species[,colSums(all_species != 1) != 0]
   
-  species_df <- melt(data.frame(all_species, condition = chemoInfoSubset$limitation, DR = chemoInfoSubset$actualDR, flux = run_rxn$flux), id.vars = c("condition", "DR", "flux"))
+  species_df <- melt(data.frame(all_species, condition = Chemoconds$Limitation, DR = Chemoconds$actualDR, flux = (flux$FVAmin + flux$FVAmax)/2), id.vars = c("condition", "DR", "flux"))
   
   scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
       panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
@@ -1033,9 +1062,26 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_x_continuous("Relative concentration") +
     geom_point(data = species_df, aes(x = value, y = flux, col = condition, size =  DR*30)) + ggtitle("Relationship between metabolite/enzyme levels and flux carried") + expand_limits(y = 0)
   
-  output_plots
+  return(output_plots)
   }
 
+
+likViolin <- function(par_likelihood, markovPars){
+    
+    ### show the distribution of likelihood values for each markov chain - similarity of their shapes is a good indication of convergence to the posterior
+    ### strong deviations should be corrected by decreasing autocorrelation (by decreasing how often a markov sample is saved) or increasing the lenght of burnin or number of samples
+    
+    boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+                           panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 60, vjust = 0.6), axis.line = element_blank(), strip.background = element_rect(fill = "darkseagreen2"),
+                           strip.text = element_text(size = 25, colour = "darkblue"))
+    
+    likRange <- range(par_likelihood$likelihood)
+    parList <- data.frame(x = 2, y = likRange[1] + c(likRange[2] - likRange[1])/10 * c(0:2), parameter = unname(mapply(function(x,y){paste(x, y, sep = ": ")}  , x = names(unlist(markovPars)), y = unname(unlist(markovPars)))))
+    
+    ggplot() + geom_violin(data = par_likelihood, aes(x = factor(index), y = likelihood), fill = "darkblue") + geom_text(data = parList, aes(x = x, y = y, label = parameter)) +
+      boxplot_theme + scale_x_discrete("Chain Number") + scale_y_continuous("Log-likelihood")
+    
+    }
 
 
 hypoMetTrend <- function(run_rxn, metSVD){
@@ -1114,36 +1160,79 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   require(data.table)
   require(nnls)
   
-  # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
-  param_interval <- exp(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
-  param_interval <- data.frame(cbind(t(param_interval), median = exp(apply(par_markov_chain, 2, median)), MLE = exp(par_markov_chain[which.max(par_likelihood$likelihood),])))
-  
   n_c <- nrow(run_rxn$metabolites )
   
-  # take the maximum likelihood estimate
-  par_stack <- rep(1, n_c) %*% t(exp(par_markov_chain[which.max(par_likelihood$likelihood),]))
-  colnames(par_stack) <- run_rxn$kineticPars$formulaName
-  occupancy_vals <- data.frame(run_rxn$metabolites, par_stack)
-  predOcc <- model.matrix(run_rxn$occupancyEq, data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
+  param_interval <- 2^(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
+  param_interval <- data.frame(cbind(t(param_interval), median = 2^(apply(par_markov_chain, 2, median)), MLE = 2^(par_markov_chain[which.max(par_likelihood$likelihood),])))
   
-  enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*run_rxn$enzymes #occupany of enzymes * relative abundance of enzymes
-  flux_fit <- nnls(enzyme_activity, run_rxn$flux) #fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  ### Reproduce the flux and sd(flux) of the most likely parameter set ###
   
-  fit_summary <- data.frame(residDF = sum(run_rxn$flux != 0) - length(par_stack[1,]), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
+  flux <- run_rxn$flux
+  met_abund <- run_rxn$metabolites
+  enzyme_abund <- run_rxn$enzymes
   
-  ### using LS regression, how much variance is explained
-  fit_summary$LS_met = anova(lm(run_rxn$flux ~ run_rxn$metabolites))$S[1]
-  fit_summary$LS_enzyme = anova(lm(run_rxn$flux ~ run_rxn$enzymes))$S[1]
-  fit_summary$LS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S[1:2])
-  fit_summary$TSS = sum(anova(lm(run_rxn$flux ~ run_rxn$metabolites + run_rxn$enzymes))$S)
+  mle_pars <- par_markov_chain[which.max(par_likelihood$likelihood),]
+  
+  if('t_metX' %in% run_rxn$kineticPars$modelName){
+  
+    ### hypothetical metabolite overwriten with value from PCs ###
+    releventPCs <- metSVD$v[rownames(metSVD$v) %in% rownames(flux),]
+    npc <- ncol(releventPCs)
+  
+    met_abund$t_metX <- t(mle_pars[run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs))
+  
+  }
+  
+  mle_pars <- mle_pars[run_rxn$kineticPars$SpeciesType != "PCL"]
+  #par_stack <- rep(1, n_c) %*% t(2^mle_pars); colnames(par_stack) <- run_rxn$kineticPars$formulaName[run_rxn$kineticPars$SpeciesType != "PCL"]
+  par_stack <- rep(1, n_c) %*% t(exp(mle_pars)); colnames(par_stack) <- run_rxn$kineticPars$formulaName[run_rxn$kineticPars$SpeciesType != "PCL"]
+  
+  occupancy_vals <- data.frame(met_abund, par_stack)
+  
+  predOcc <- model.matrix(run_rxn$occupancyEq[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  
+  # point estimate of flux(M, E, par)
+  
+  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)  
+  
+  # determine the sd of the fitted measures
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  #####
+  
+  
+  fit_summary <- data.frame(residDF = nrow(run_rxn$flux) - ncol(par_markov_chain), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
+  
+  met_abund <- apply(met_abund[,colSums(met_abund == 0) != n_c], c(1,2), as.numeric)
+  
+  enzyme_abund <- apply(data.frame(enzyme_abund), c(1,2), as.numeric)
+  
+  avg_flux <- (flux$FVAmax + flux$FVAmin)/2
+  
+  ### using LS regression, how much variance is explained.  Not really a fair comparison
+  fit_summary$LS_met = anova(lm(avg_flux ~ met_abund))$S[1]
+  fit_summary$LS_enzyme = anova(lm(avg_flux ~ enzyme_abund))$S[1]
+  fit_summary$LS = sum(anova(lm(avg_flux ~ met_abund + enzyme_abund))$S[1:2])
+  fit_summary$TSS = sum(anova(lm(avg_flux ~ met_abund + enzyme_abund))$S)
   
   ### using flux fitted from the MLE parameter set, how much variance is explained
-  #fit_summary$parametricFit = anova(lm(run_rxn$flux ~ flux_fit$fitted+0))$S[1]
   
   fit_summary$parametricFit <- fit_summary$TSS-sum((flux_fit$residuals)^2)
   
   ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
-  NNLSmetab <- run_rxn$metabolites * -1*(rep(1, n_c) %*% t(unname(run_rxn$rxnSummary$rxnStoi)[chmatch(colnames(run_rxn$metabolites), names(run_rxn$rxnSummary$rxnStoi))]))
+  NNLSmetab <- met_abund * -1*(rep(1, n_c) %*% t(unname(run_rxn$rxnSummary$rxnStoi)[chmatch(colnames(met_abund), names(run_rxn$rxnSummary$rxnStoi))]))
   ### add potential activators and inhibitors
   if(length(run_rxn$rxnSummary$rxnFormData$Subtype[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))]) != 0){
     modifiers = data.frame(modifier = run_rxn$rxnSummary$rxnFormData$SubstrateID[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))], direction = ifelse(run_rxn$rxnSummary$rxnFormData$Type[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))] == "act", 1, -1))
@@ -1156,30 +1245,29 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   }
   NNLSmetab <- NNLSmetab[,apply(NNLSmetab, 2, function(x){var(x) != 0})]
   
-  if(all(run_rxn$flux < 0)){
+  if(all(avg_flux < 0)){
     
-    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), -1*run_rxn$flux)
-    tpred <-nnls_fit$residuals
+    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, enzyme_abund)), -1*avg_flux)
+    tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
   
-    fit_summary$nnlsPearson <- cor(-1*nnls_fit$fitted, run_rxn$flux, method = "pearson")
-    fit_summary$nnlsSpearman <- cor(-1*nnls_fit$fitted, run_rxn$flux, method = "spearman")
-  
+    fit_summary$nnlsPearson <- cor(-1*nnls_fit$fitted, avg_flux, method = "pearson")
+    fit_summary$nnlsSpearman <- cor(-1*nnls_fit$fitted, avg_flux, method = "spearman")
     
   }else{
     
-    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, run_rxn$enzymes)), run_rxn$flux)
+    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, enzyme_abund)), avg_flux)
     tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
     
-    fit_summary$nnlsPearson <- cor(nnls_fit$fitted, run_rxn$flux, method = "pearson")
-    fit_summary$nnlsSpearman <- cor(nnls_fit$fitted, run_rxn$flux, method = "spearman")
+    fit_summary$nnlsPearson <- cor(nnls_fit$fitted, avg_flux, method = "pearson")
+    fit_summary$nnlsSpearman <- cor(nnls_fit$fitted, avg_flux, method = "spearman")
   
   }
    
   ### correlations
-  fit_summary$parPearson <- cor(flux_fit$fitted, run_rxn$flux, method = "pearson")
-  fit_summary$parSpearman <- cor(flux_fit$fitted, run_rxn$flux, method = "spearman")
+  fit_summary$parPearson <- cor(flux_fit$fitted, avg_flux, method = "pearson")
+  fit_summary$parSpearman <- cor(flux_fit$fitted, avg_flux, method = "spearman")
   
   output <- list()
   output$fit_summary <- fit_summary
@@ -1187,6 +1275,9 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   output$fitted_flux <- flux_fit$fitted
   output
 }
+
+
+
 
 
 calcElast <- function(run_rxn, par_markov_chain, par_likelihood){

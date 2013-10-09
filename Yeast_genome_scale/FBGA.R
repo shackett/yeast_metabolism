@@ -126,7 +126,6 @@ for (i in 1:nrow(rmCondList)){
 
 
 
-#save(rxnList, file = "all_rxnList.Rdata")
 
 
 ### ensure that the ordering of conditions is the same ###
@@ -141,6 +140,9 @@ if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapp
 
 reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$listEntry, NA)})  
 rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
+
+
+rxnList_form <- rxnList_form[order(names(rxnList_form))] # order alpha-numerically so that the workload is spread out more evenly during optimization
 
 #### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
 
@@ -421,27 +423,32 @@ for(arxn in reactionInfo$rMech){
     print(paste(arxn, "does not vary in likelihood, or has too many unmeasured species")); next
   } #skip underparameterized reactions - those with essentially no variation
   
-  ### For reactions with both enzymes and metabolites measured 
-  
-  if(nrow(run_rxn$rxnSummary$enzymeComplexes) != 0){
-    
-    flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
-    rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
-    rxn_fit_params[[arxn]] <- flux_fit$param_interval  
-    
-    ### Take the fractional flux departure and dot-product between FBA and parametric vector
-  
-    fraction_flux_deviation <- rbind(fraction_flux_deviation, data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux - run_rxn$flux))/sum(abs(run_rxn$flux)),
-    dotProduct = sum(flux_fit$fitted/sqrt(sum((flux_fit$fitted)^2)) * run_rxn$flux/sqrt(sum((run_rxn$flux)^2)))))
-    
-  }
   
   
-  pdf(file = paste(c("FBGA_files/outputPlots/", arxn, ".pdf"), collapse = ""), width = 20, height = 20)
   
-  reaction_info_FBGA(rxnName)
+  ### Determine how closely fluxes predicted from a parametric form match fluxes determined via constraint based modeling ###
   
-  print(ggplot() + geom_violin(data = par_likelihood, aes(x = factor(index), y = likelihood), fill = "RED"))
+  flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
+  rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
+  rxn_fit_params[[arxn]] <- flux_fit$param_interval  
+  
+  ### Take the fractional flux departure and dot-product between FBA and parametric vector
+  
+  fraction_flux_deviation <- rbind(fraction_flux_deviation, data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux - run_rxn$flux))/sum(abs(run_rxn$flux)),
+                                                                       dotProduct = sum(flux_fit$fitted/sqrt(sum((flux_fit$fitted)^2)) * run_rxn$flux/sqrt(sum((run_rxn$flux)^2)))))
+  
+  
+  
+  ### Generate plots which show reaction information, species variation, flux fitting ... ###
+  
+  #pdf(file = paste(c("FBGA_files/outputPlots/", arxn, ".pdf"), collapse = ""), width = 20, height = 20)
+  
+  shiny_flux_data[[arxn]]$reactionInfo <- reaction_info_FBGA(rxnName)
+  
+  likViolin(par_likelihood, run_summary$markov_pars)
+  
+  
+  
   #print(param_compare(run_rxn, par_markov_chain, par_likelihood))
   species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
   print(species_plots[[1]])
