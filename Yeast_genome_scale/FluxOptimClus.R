@@ -17,15 +17,15 @@ print(paste("CHUNK NUMBER: ", chunkNum, ", RUN NUMBER: ", runNum, sep = ""))
 
 rurun_summary <- list() #### MCMC run output and formatted inputs
 
-markov_pars <- list()
-markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-markov_pars$n_samples <- 10000 #how many total markov samples are desired
-markov_pars$burn_in <- 500 #how many initial samples should be skipped
-
 #markov_pars <- list()
 #markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-#markov_pars$n_samples <- 10 #how many total markov samples are desired
-#markov_pars$burn_in <- 0 #how many initial samples should be skipped
+#markov_pars$n_samples <- 10000 #how many total markov samples are desired
+#markov_pars$burn_in <- 500 #how many initial samples should be skipped
+
+markov_pars <- list()
+markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+markov_pars$n_samples <- 10 #how many total markov samples are desired
+markov_pars$burn_in <- 0 #how many initial samples should be skipped
 
 
 run_summary$markov_pars <- markov_pars
@@ -77,7 +77,7 @@ lik_calc <- function(proposed_params){
   par_stack <- rep(1, n_c) %*% t(proposed_params); colnames(par_stack) <- kineticPars$formulaName
   par_stack <- par_stack[,!(kineticPars$SpeciesType %in% "PCL")]
   
-  par_stack <- exp(par_stack)
+  par_stack <- 2^par_stack
   occupancy_vals <- data.frame(met_abund, par_stack)
   
   predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
