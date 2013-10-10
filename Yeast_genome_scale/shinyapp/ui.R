@@ -8,10 +8,18 @@ shinyUI(pageWithSidebar(
   # Sidebar with controls to select the variable to plot against mpg
   # and to specify whether outliers should be included
   sidebarPanel(
-    selectInput("reaction", "Reaction:",
-                as.list(unique_rxns)),
     
-    uiOutput("subrxns")            
+    # Select the pathway of interest (or all reactions)
+    selectInput("pathway", "Pathway:", as.list(pathwaySet$display)),
+    
+    # Select the reaction within this pathway which is to be considered
+    uiOutput("reactions_available"),
+    
+    # Select the reaction subtype of interest
+    uiOutput("subforms_available"),
+    
+    checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(names(ggplotList)))
+      
     ),
     
     # Partial example
