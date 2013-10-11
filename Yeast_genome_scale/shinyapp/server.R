@@ -4,6 +4,7 @@ setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 library(shiny)
 library(ggplot2)
+library(gridExtra)
 
 #valid_rMechs <- reactionInfo[is.na(reactionInfo$Qvalue) | reactionInfo$Qvalue < 0.1 & !is.na(reactionInfo$Qvalue),]
 
@@ -46,23 +47,28 @@ shinyServer(function(input, output) {
   
   #######
   
+  plots <- reactive({input$plots_chosen})
   
-  
+  plot_subset <- reactive({ggplotList[names(ggplotList) %in% plots()]})
   
   # specify which reaction form is desired
-  #  
-  output$test <- renderText(rID())
-  
-  output$indicator <- renderText(subtypeChoices())
+    
+  output$indicator <- renderText(plots())
 
+  output$test <- renderText(length(plot_subset()))
   
-
- 
   # Generate a plot of the requested variable against mpg and only 
   # include outliers if requested
-  output$mpgPlot <- renderPlot({
-    boxplot(as.formula(formulaText()), 
-            data = mpgData,
-            outline = input$outliers)
+  
+  #grid.arrange(plot1, plot2, ncol=2)
+  
+  output$P1 <- renderPlot({
+    if(length(plot_subset) != 0){
+      do.call(grid.arrange,  plot_subset())
+    }else{
+      return(NULL) 
+    }
   })
+  
+  
 })

@@ -34,6 +34,6 @@ shinyUI(pageWithSidebar(
     
     h3(textOutput("test")),
     
-    plotOutput("mpgPlot")
+    plotOutput("P1")
   )
 ))
