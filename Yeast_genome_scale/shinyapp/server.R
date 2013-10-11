@@ -51,9 +51,11 @@ shinyServer(function(input, output) {
   
   plot_subset <- reactive({ggplotList[names(ggplotList) %in% plots()]})
   
+  column_number <- reactive({as.numeric(input$col_num)})
+  
   # specify which reaction form is desired
     
-  output$indicator <- renderText(plots())
+  output$indicator <- renderText(column_number())
 
   output$test <- renderText(length(plot_subset()))
   
@@ -64,7 +66,10 @@ shinyServer(function(input, output) {
   
   output$P1 <- renderPlot({
     if(length(plot_subset) != 0){
-      do.call(grid.arrange,  plot_subset())
+      subList <- plot_subset()
+      subList$ncol = column_number()
+      
+      do.call(grid.arrange,  subList)
     }else{
       return(NULL) 
     }

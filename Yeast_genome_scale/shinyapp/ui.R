@@ -18,8 +18,12 @@ shinyUI(pageWithSidebar(
     # Select the reaction subtype of interest
     uiOutput("subforms_available"),
     
-    checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(names(ggplotList)))
-      
+    # Which subset of plots to choose
+    checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(names(ggplotList))),
+    
+    # How many columns should ggplot figures be displayed in
+    selectInput("col_num", "Number of plot columns", c("1", "2", "3", "4"), selected = "2")
+    
     ),
     
     # Partial example
