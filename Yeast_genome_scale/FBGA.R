@@ -94,7 +94,7 @@ for(rxN in 1:length(valid_rxns)){
   }
   
   for (entry in idx){
-    rxnList[[entry]]$reaction = flux_summary$IDs$Name[rxN]
+    rxnList[[entry]]$reaction = flux_summary$IDs$Name[flux_summary$IDs$reactionID == valid_rxns[rxN]]
     rxnList[[entry]]$pathway = Rxpathway
     rxnList[[entry]]$geneInfo = geneInfo
     rxnList[[entry]]$flux <- rxFlux
@@ -305,6 +305,7 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
 ######## Import cluster parameter results #########
+##@##@ Start here if loading parameter sets ##@##@#
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
 
 load("paramOptim.Rdata")
@@ -379,6 +380,7 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
 }
 
 ### Identify reaction form modification which significantly improve the likelihood function ###
+### comparisons are relative to reversible michaelis-menten kinetics ###
 
 library(qvalue)
 Qthresh <- 0.1
@@ -386,18 +388,88 @@ Qthresh <- 0.1
 reactionInfo$Qvalue <- NA
 reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
 
+signifCO <- data.frame(q_cutoff = c(0.1, 0.001, 0.00001), code = c("*", "**", "***"))
 
-### reduce reactions of interest to primary forms and reparameterizations ###
+reactionInfo$signifCode <- sapply(reactionInfo$Qvalue, function(x){
+  if(is.na(x) | x > signifCO$q_cutoff[1]){
+    ""
+  }else{
+    rev(signifCO$code[x < signifCO$q_cutoff])[1]
+  }
+})
+
+
+
+#### Setup indexing so that fits can be interactively analysed using a Shiny application #####
+
+reactionInfo$Name = NA
+reactionInfo$Name[reactionInfo$modification %in% c('', 'rmCond') & reactionInfo$form == "rm"] <- "Reversible michaelis-menten (default)"
+reactionInfo$Name[reactionInfo$modification %in% c('', 'rmCond') & reactionInfo$form == "cc"] <- "Convenience kinetics"
+
+for(rxN in grep('act|inh', reactionInfo$modification)){
+  
+  regName <- substr(reactionInfo$modification[rxN], 1, 6)
+  rxRegs <- rxnList_form[[rxN]]$rxnFormData[rxnList_form[[rxN]]$rxnFormData$Type != "rct",]
+  
+  reactionInfo$Name[rxN] <- paste(sub('(^)([a-z])', '\\U\\2', rxRegs$Subtype[rxRegs$SubstrateID == regName], perl = T), 
+                                  ifelse(rxRegs$Type[rxRegs$SubstrateID == regName] == "act", "activation", "inhibition"),
+                                  "by", unname(rxnList_form[[rxN]]$metNames[names(rxnList_form[[rxN]]$metNames) == regName]))
+  
+}
+
+reactionInfo$Name[grep('rmCond', reactionInfo$modification)] <- sapply(reactionInfo$Name[grep('rmCond', reactionInfo$modification)], function(x){paste(x, "(zero flux reactions removed)")})
+
+reactionInfo$Name <- mapply(function(x,y){paste(x,y)}, x = reactionInfo$signifCode, y = reactionInfo$Name)
+
+
+
+### Base reaction specific information ###
+
+rxToPW <- NULL
+
+for(rxN in grep('rm$', names(rxnList_form))){
+  
+  RXannot <- rxnList_form[[rxN]]$pathway
+  GENEannot <- rxnList_form[[rxN]]$geneInfo
+  
+  if(RXannot == "" | is.na(RXannot)){
+    if(all(is.na(GENEannot))){
+      pathways <- "Not annotated"
+      RELannot <- NA
+    }else{
+      RELannot <- GENEannot$PATHWAY
+      if(RELannot == "" |is.na(RELannot)){
+      print(rxN)  
+      }
+    }
+  }else{
+    RELannot <- RXannot
+  }
+  
+  if(!is.na(RELannot)){
+    pathways <- strsplit(RELannot, split = '__')[[1]]
+  }
+  
+  rxToPW <- rbind(rxToPW, data.frame(rxN = rxN, rID = rxnList_form[[rxN]]$rxnID, reactionName = rxnList_form[[rxN]]$reaction, pathway = pathways))
+    
+}  
+
+rxToPW <- rbind(rxToPW, data.frame(unique(rxToPW[,1:3]), pathway = "ALL REACTIONS"))
+
+pathwaySet <- sort(table(rxToPW$pathway), decreasing = T)
+pathwaySet <- data.frame(pathway = names(pathwaySet), members = unname(pathwaySet), display = paste(names(pathwaySet), ' (', unname(pathwaySet), ')', sep = ""))
+
+
+#### Generate reaction plots and summaries ####
 
 shiny_flux_data <- list()
-
 rxn_fits <- NULL
 rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
 
 
 
-for(arxn in reactionInfo$rMech){
+for(arxn in reactionInfo$rMech[1:100]){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -430,7 +502,9 @@ for(arxn in reactionInfo$rMech){
   
   flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
   rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
-  rxn_fit_params[[arxn]] <- flux_fit$param_interval  
+  rxn_fit_params[[arxn]] <- flux_fit$param_interval
+  rxn_fit_params[[arxn]]$absoluteQuant <- ifelse(rownames(rxn_fit_params[[arxn]]) %in% names(run_rxn$rxnSummary$originMet)[run_rxn$rxnSummary$originMet == "abs"], T, F)
+    
   
   ### Take the fractional flux departure and dot-product between FBA and parametric vector
   
@@ -443,28 +517,37 @@ for(arxn in reactionInfo$rMech){
   
   #pdf(file = paste(c("FBGA_files/outputPlots/", arxn, ".pdf"), collapse = ""), width = 20, height = 20)
   
-  shiny_flux_data[[arxn]]$reactionInfo <- reaction_info_FBGA(rxnName)
   
-  likViolin(par_likelihood, run_summary$markov_pars)
+  shiny_flux_data[[arxn]]$reactionInfo <- reaction_info_FBGA(rxnName) # Reaction information
   
+  shiny_flux_data[[arxn]]$plotChoices$likelihood <- likViolin(par_likelihood, run_summary$markov_pars) # Log-likelihoods of each markov chain
   
+  if("t_metX" %in% run_rxn$kineticPars$modelName){
+  shiny_flux_data[[arxn]]$plotChoices$hypoMet <- hypoMetTrend(run_rxn, metSVD, tab_boer)
+  }
   
   #print(param_compare(run_rxn, par_markov_chain, par_likelihood))
   species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
-  print(species_plots[[1]])
-  print(species_plots[[2]])
-  print(species_plots[[3]])
-  print(species_plots[[4]])
+  shiny_flux_data[[arxn]] <- unlist(species_plots)
+  
+  shiny_flux_data[[arxn]]$plotChoices <- species_plots
+  
+  
+  #print(species_plots[[1]])
+  #print(species_plots[[2]])
+  #print(species_plots[[3]])
+  #print(species_plots[[4]])
+  
   #elastPlots <- calcElast(run_rxn, par_markov_chain, par_likelihood)
   #print(elastPlots$elast)
   #print(elastPlots$occ) 
 
-  dev.off()
+  #dev.off()
   
 }
 
-save(param_set_list, file = "param_set_list.Rdata")
-save(rxn_fit_params, file = "paramDist.Rdata")
+#save(param_set_list, file = "param_set_list.Rdata")
+#save(rxn_fit_params, file = "paramDist.Rdata")
 
 
 under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
@@ -503,7 +586,6 @@ rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = rxnMech, y = value, 
 rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
   scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2")
 ggsave("parFitQuality.pdf", height = 20, width = 20)
-
 
 
 #### plot correlation of flux and prediction ####
@@ -634,9 +716,14 @@ sum(reactionInfo$ML[rmfil] > reactionInfo$ML[ccfil])
 hist(reactionInfo$ML[rmfil]-reactionInfo$ML[ccfil],40)
 
 
+######### Compare Km values found through optimization to those from literature ################
+
+all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
+
+### Using 95% confidence intervals for reaction parameters
+rxn_fit_params
 
 
 
-
-
+### Use literature mean & SD of Km as a comparison
 

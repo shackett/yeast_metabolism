@@ -857,6 +857,8 @@ reaction_info <- function(rxnName){
 
 reaction_info_FBGA <- function(rxnName){
   
+  ### Return reaction name and stoichiometry ###
+  
   require(gplots)
   
   #### similar to reaction_info but using a run_rxn file and dumping output as flat text
@@ -931,12 +933,17 @@ reaction_info_FBGA <- function(rxnName){
   rxn_stoi <- gsub(' $', '', rxn_stoi)
   rxn_stoi <- gsub('\n ', '\n', rxn_stoi)
   
-  textplot(paste(c(rxnInfo$reaction,
+  return(paste(c(rxnInfo$reaction,
       rxnInfo$genes,
       rxn_stoi,             
-      paste(strsplit(rxnInfo$pathway, split = "__")[[1]], collapse = "\n")), collapse = "\n\n")
-      , cex = 3, valign = "top", halign = "left")
-  }  
+      paste(strsplit(rxnInfo$pathway, split = "__")[[1]], collapse = "\n")), collapse = "\n\n"))
+  
+  #textplot(paste(c(rxnInfo$reaction,
+  #    rxnInfo$genes,
+  #    rxn_stoi,             
+  #    paste(strsplit(rxnInfo$pathway, split = "__")[[1]], collapse = "\n")), collapse = "\n\n")
+  #    , cex = 3, valign = "top", halign = "left")
+  }
 
 
 cond_order_check <- function(query){
@@ -988,10 +995,11 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   #avg_flux <- (flux$FVAmax + flux$FVAmin)/2
   
   met_abund <- run_rxn$metabolites
-  met_abund <- apply(met_abund[,colSums(met_abund == 0) != n_c], c(1,2), as.numeric)
+  v_metab <- colnames(met_abund)[colSums(met_abund == 0) != n_c] # coerce metabolite abundances to a matrix
+  met_abund <- as.matrix(met_abund[,colSums(met_abund == 0) != n_c]) 
+  colnames(met_abund) <- v_metab
   
   enzyme_abund <- run_rxn$enzymes
-  enzyme_abund <- apply(data.frame(enzyme_abund), c(1,2), as.numeric)
   
   Chemoconds <- data.frame(name = factor(rownames(enzyme_abund), levels = rownames(enzyme_abund)), Limitation = factor(substr(rownames(enzyme_abund),1,1)), DR = gsub('^[A-Z]', '', rownames(enzyme_abund)))
   Chemoconds$actualDR <- chemostatInfo$actualDR[chmatch(as.character(Chemoconds$name), toupper(chemostatInfo$condition))]
@@ -1056,7 +1064,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   output_plots$species <- ggplot() + geom_path(data = species_df, aes(x = DR, y = value, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free_y") +
     scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_y_continuous("Relative concentration") +
-    ggtitle("Relationship between metabolites/enzyme levels and condition") + expand_limits(y = 0)
+    ggtitle("Relationship between metabolites/enzyme levels and condition")
   
   output_plots$flux_species <- ggplot() + geom_path(data = species_df, aes(x = value, y = flux, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free") +
     scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_x_continuous("Relative concentration") +
@@ -1084,7 +1092,7 @@ likViolin <- function(par_likelihood, markovPars){
     }
 
 
-hypoMetTrend <- function(run_rxn, metSVD){
+hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   #### Generate informative plots showing the metabolic trends which inhibitors or activators of a reaction may follow ####
   
@@ -1098,6 +1106,10 @@ hypoMetTrend <- function(run_rxn, metSVD){
   barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
                          panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank()) 
   
+  scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+                         panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
+                         legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text.x = element_text(angle = 90), axis.text = element_text(color = "black"))
+  
   
   hypoMetPlots <- list()
   
@@ -1108,9 +1120,9 @@ hypoMetTrend <- function(run_rxn, metSVD){
   
   reconstructedDraws <- run_rxn$markovChain[,run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs)
   
-  reconstructedDraws <- reconstructedDraws - run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "t_metX"] %*% t(rep(1, nrow(releventPCs))) # convert from relative concentration to relative occupancy
+  reconstructedOcc <- reconstructedDraws - run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "t_metX"] %*% t(rep(1, nrow(releventPCs))) # convert from relative concentration to relative occupancy
   
-  allosteryStrength <- log2(1 + (2^reconstructedDraws) ^ (2^run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"] %*% t(rep(1, nrow(releventPCs))))) # 1 + ([A]/[Ka])^h
+  allosteryStrength <- log2(1 + (2^reconstructedOcc) ^ (2^run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"] %*% t(rep(1, nrow(releventPCs))))) # 1 + ([A]/[Ka])^h
   
   
   ### Create a violin plot, with the MLE highlighted ###
@@ -1118,9 +1130,9 @@ hypoMetTrend <- function(run_rxn, metSVD){
   mod_type <- run_rxn$rxnSummary$rxnFormData$Type[run_rxn$rxnSummary$rxnFormData$SubstrateID == "t_metX"]
   mod_type <- ifelse(mod_type == "act", "allosteric activator", "allosteric inhibitor")
   
-  PCconds <- data.frame(name = factor(colnames(reconstructedDraws), levels = colnames(reconstructedDraws)), Limitation = factor(substr(colnames(reconstructedDraws),1,1)), DR = gsub('^[A-Z]', '', colnames(reconstructedDraws)))
+  PCconds <- data.frame(name = factor(colnames(reconstructedOcc), levels = colnames(reconstructedOcc)), Limitation = factor(substr(colnames(reconstructedOcc),1,1)), DR = gsub('^[A-Z]', '', colnames(reconstructedOcc)))
   
-  PCreco_melt <- data.frame(melt(cbind(PCconds, t(reconstructedDraws)), id.vars = colnames(PCconds)), allosteryStrength = melt(t(allosteryStrength))$value)
+  PCreco_melt <- data.frame(melt(cbind(PCconds, t(reconstructedOcc)), id.vars = colnames(PCconds)), allosteryStrength = melt(t(allosteryStrength))$value)
   
   ### the MLE ###
   
@@ -1144,10 +1156,34 @@ hypoMetTrend <- function(run_rxn, metSVD){
   
   hillDF <- data.frame(hill = run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"])
   
-  hypoMetPlots$Hill <- ggplot(hillDF, aes(x = hill)) + geom_bar(fill = "coral", binwidth = 0.2) + geom_vline(y = mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2) +
+  hypoMetPlots$Hill <- ggplot(hillDF, aes(x = hill)) + geom_bar(fill = "coral") + geom_vline(y = mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2) +
     scale_x_continuous(expression(log[2] ~ "Hill coefficient"), limits = c(-1,1)*max(abs(hillDF$hill))) + scale_y_continuous("Counts", expand = c(0,0)) +
     barplot_theme + ggtitle("Hill coefficient posterior samples")
   
+  ### What measured metabolites most resemble these trends ###
+  
+  specCorrQuantiles <- t(apply(cor(t(tab_boer[,colnames(tab_boer) %in% colnames(reconstructedDraws)]), t(reconstructedDraws)), 1, function(x){quantile(x, probs = c(0.025, 0.5, 0.975))}))
+  specCorrQuantiles <- specCorrQuantiles[order(specCorrQuantiles[,2], decreasing = T),][1:4,]
+  
+  specCorrQuantiles_m <- melt(t(specCorrQuantiles)); colnames(specCorrQuantiles_m) <- c("Quantile", "variable", "Correlation")
+  specCorrQuantiles_m$y <- rep(2:4, times = nrow(specCorrQuantiles))
+  specCorrQuantiles_m$text <- mapply(function(x, y){paste(x,y, sep = ": ")}, x = specCorrQuantiles_m$Quantile, y = round(specCorrQuantiles_m$Correlation,2))
+  
+  specCorrQuantiles_m <- rbind(specCorrQuantiles_m, data.frame(Quantile = NA, variable = rownames(specCorrQuantiles), Correlation = NA, y = 1, text = "Correlation quantiles"))
+  
+  PCsimilaritySubset <- tab_boer[rownames(tab_boer) %in% rownames(specCorrQuantiles),colnames(tab_boer) %in% colnames(reconstructedDraws)]
+  PCsimilaritySubset <- PCsimilaritySubset[chmatch(rownames(PCsimilaritySubset), rownames(specCorrQuantiles)),]
+  subsetRange <- t(apply(PCsimilaritySubset, 1, range))
+  
+  specCorrQuantiles_m$yadj <- mapply(function(x,y){subsetRange[rownames(subsetRange) == x][2] - diff(subsetRange[rownames(subsetRange) == x])/10*y}, x = specCorrQuantiles_m$variable, y = specCorrQuantiles_m$y)
+  
+  similarGeneMelt <- melt(cbind(PCconds, t(PCsimilaritySubset)))
+  
+  hypoMetPlots$candidateMetabolites <- ggplot() + geom_path(data = similarGeneMelt, aes(x = DR, y = value, col = Limitation, size = 2, group = Limitation)) + facet_wrap(~ variable, scale = "free_y", ncol = 2) +
+    geom_text(data = specCorrQuantiles_m, aes(x = 1, y = yadj, label = text), hjust = 0) +
+    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_y_continuous("Relative concentration") +
+    ggtitle("Most highly correlated metabolite to predicted regulator")
+              
   return(hypoMetPlots)
   
 }
@@ -1180,8 +1216,13 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
     releventPCs <- metSVD$v[rownames(metSVD$v) %in% rownames(flux),]
     npc <- ncol(releventPCs)
   
+    if(npc != sum(run_rxn$kineticParPrior$SpeciesType == "PCL")){
+      print(paste("Inconsistent number of principal components for rx", arxn, "likely version problem -> rerun parameter sets"))
+      return(NA)
+      }
+    
     met_abund$t_metX <- t(mle_pars[run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs))
-  
+    
   }
   
   mle_pars <- mle_pars[run_rxn$kineticPars$SpeciesType != "PCL"]
@@ -1215,9 +1256,9 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   fit_summary <- data.frame(residDF = nrow(run_rxn$flux) - ncol(par_markov_chain), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
   
-  met_abund <- apply(met_abund[,colSums(met_abund == 0) != n_c], c(1,2), as.numeric)
-  
-  enzyme_abund <- apply(data.frame(enzyme_abund), c(1,2), as.numeric)
+  v_metab <- colnames(met_abund)[colSums(met_abund == 0) != n_c] # coerce metabolite abundances to a matrix
+  met_abund <- as.matrix(met_abund[,colSums(met_abund == 0) != n_c]) 
+  colnames(met_abund) <- v_metab
   
   avg_flux <- (flux$FVAmax + flux$FVAmin)/2
   
