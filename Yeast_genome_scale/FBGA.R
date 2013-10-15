@@ -456,6 +456,11 @@ for(rxN in grep('rm$', names(rxnList_form))){
 
 rxToPW <- rbind(rxToPW, data.frame(unique(rxToPW[,1:3]), pathway = "ALL REACTIONS"))
 
+reactionInfo$FullName <- mapply(function(x,y){paste(x, y, sep = " - ")}, x = rxToPW$reactionName[chmatch(reactionInfo$reaction, rxToPW$rID)], y = reactionInfo$Name)
+  
+
+
+
 pathwaySet <- sort(table(rxToPW$pathway), decreasing = T)
 pathwaySet <- data.frame(pathway = names(pathwaySet), members = unname(pathwaySet), display = paste(names(pathwaySet), ' (', unname(pathwaySet), ')', sep = ""))
 
@@ -547,54 +552,13 @@ for(arxn in reactionInfo$rMech){
 
 # significant or default reaction forms
 
-pathway <- "Biosynthesis of amino acids (28)"
+pathway <- "Glycolysis / Gluconeogenesis (7)"
 
-pathwayPlots <- function(pathway){
-  
-  require(data.table)
-  
-  #### Generate plots which show how well the optimization is performing according to different metrics ####
-  #### pathway gives a subset of reactions, of which a subset which are significant ########################
-  #### after FDR correction (or are the default form) will be used #########################################
-  
-  reactions <- rxToPW$rID[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathway]]
-  
-  rxInfo_subset <- reactionInfo[reactionInfo$reaction %in% reactions,]
-  rxInfo_subset <- rxInfo_subset[(rxInfo_subset$Qvalue < 0.01 | is.na(rxInfo_subset$Qvalue)) & c(1:nrow(rxInfo_subset)) %in% grep('rmCond', rxInfo_subset$modification, invert = T),]
-  
-  Corr <- data.table(rxn_fits[rxn_fits$rxn %in% rxInfo_subset$rMech,])
-  FFD <- data.table(fraction_flux_deviation[fraction_flux_deviation$rxn %in% rxInfo_subset$rMech,])
-  
-  pathwayPlot_list <- list()
-  
-  for(plotType in c("VarEx", "SpCorr", "DotProd", "Angle")){
-    
-    if(plotType == "VarEx"){
-      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Fit" = parametricFit/TSS, NNLS = NNLS/TSS),]
-      sortVar = "Parametric Fit"
-    }
-    if(plotType == "SpCorr"){
-      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Spearman" = parSpearman, "NNLS Spearman" = nnlsSpearman),]
-      sortVar = "Parametric Spearman"
-    }
-    if(plotType == "DotProd"){
-      plotDat <- FFD[,list(rxnMech = rxn, "Dot Product" = dotProduct),]
-      sortVar = "Dot Product"
-    }
-    if(plotType == "Angle"){
-      plotDat <- FFD[,list(rxnMech = rxn, Angle = angle),]
-      sortVar = "Angle"
-    }
-  
-    plotDat$reaction <- rxInfo_subset$reaction[chmatch(plotDat$rxn, rxInfo_subset$rMech)]
-    
-    
-    
-    
-    
-  
-  }
+pw_plot <- pathwayPlots(pathway)
 
+
+
+  
 
 
 

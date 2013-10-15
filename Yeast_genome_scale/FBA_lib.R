@@ -988,11 +988,11 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   scatter_theme <- theme(text = element_text(size = 50, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
       panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
-      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
+      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"))
 
   
   flux <- run_rxn$flux
-  #avg_flux <- (flux$FVAmax + flux$FVAmin)/2
+  n_c <- nrow(flux)
   
   met_abund <- run_rxn$metabolites
   v_metab <- colnames(met_abund)[colSums(met_abund == 0) != n_c] # coerce metabolite abundances to a matrix
@@ -1006,37 +1006,44 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   DRordering <- data.frame(DRs = as.character(c("0.05", "0.11", "0.16", "0.22", "0.30")), order = 1:5)
   Chemoconds$DRorder <- DRordering$order[chmatch(as.character(Chemoconds$DR), DRordering$DRs)]
-    
-  
-  flux_plot_alt <- data.frame(FBA = (flux$FVAmin + flux$FVAmax)/2, Parametric = flux_fit$fitted_flux, condition = Chemoconds$Limitation, DR = Chemoconds$DRorder)
-  flux_range <- range(c(0, flux_plot_alt$FBA, flux_plot_alt$Parametric))
-  
-  ### Numerical levels of growth rates and condition shown for parametric flux fit versus FBA determined flux
-  
-  output_plots$flux_plot1 <- ggplot() + scatter_theme +
-    geom_text(data = flux_plot_alt, aes(x = FBA, y = Parametric, col = condition, label = DR), size = 20) + scale_size_identity() + 
-    scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2) + 
-    xlim(flux_range[1], flux_range[2]) + ylim(flux_range[1], flux_range[2])
   
   
+  #### Just looking at FBA fit ####
   
-  flux_plot <- data.frame(FBA = (flux$FVAmin + flux$FVAmax)/2, Parametric = flux_fit$fitted_flux, condition = Chemoconds$Limitation, DR = Chemoconds$actualDR)
-  output_plots$flux_plot2 <- ggplot() + geom_path(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = 2)) + scatter_theme +
-    geom_point(data = flux_plot, aes(x = FBA, y = Parametric, col = condition, size = DR*50)) + scale_size_identity() + 
-    scale_color_brewer("Limitation", palette = "Set2") + ggtitle("Flux determined using FBA versus parametric form") + geom_abline(intercept = 0, slope = 1, size = 2) +
-    xlim(flux_range[1], flux_range[2]) + ylim(flux_range[1], flux_range[2])
+  flux_plot_FBA <- data.frame(METHOD = "FBA", FLUX = (flux$FVAmin + flux$FVAmax)/2, LB = flux$FVAmin, UB = flux$FVAmax, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$actualDR)
+  
+  flux_range <- range(c(0, flux_plot_FBA$LB, flux_plot_FBA$UB))
+  
+  output_plots$"FBA flux" <- ggplot(flux_plot_FBA, aes(x = DR, y = FLUX, col = condition)) + geom_hline(y = 0, size = 2) + geom_path(size = 2) + scatter_theme +
+    geom_linerange(aes(ymin = LB, ymax = UB), size = 2) + geom_point(size = sqrt(flux_plot_FBA$DR)*16) +
+    scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA") +
+    scale_y_continuous("Flux Carried", limits = flux_range)
   
   
+  #### Comparision of parametric and FBA fit ####
   
-  FBA_flux_range <- range(c(0, flux_plot_alt$FBA))
-  output_plots$FBA_flux <- ggplot() + geom_path(data = flux_plot, aes(x = DR, y = FBA, col = condition, size = 2)) + scatter_theme +
-    geom_point(data = flux_plot, aes(x = DR, y = FBA, col = condition, size = DR*50)) + scale_size_identity() + 
-    scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA") +
-    ylim(FBA_flux_range[1], FBA_flux_range[2])
-    
+  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+                    panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
+                    legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
+  
+  flux_plot_FBA <- data.frame(METHOD = "FBA", FLUX = (flux$FVAmin + flux$FVAmax)/2, LB = flux$FVAmin, UB = flux$FVAmax, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$DR)
+  flux_plot_PAR <- data.frame(METHOD = "PAR", FLUX = flux_fit$fitted_flux$fitted, LB = flux_fit$fitted_flux$fitted - 2*flux_fit$fitted_flux$SD, UB = flux_fit$fitted_flux$fitted + 2*flux_fit$fitted_flux$SD, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$DR)
+  flux_plot_comp <- rbind(flux_plot_FBA, flux_plot_PAR)
+  
+  flux_range <- range(c(0, flux_plot_comp$LB, flux_plot_comp$UB))
+  
+  flux_plot_header <- data.frame(label = c("FBA-determined flux at optimum", "Parametric fit (95% CI)"), METHOD = c("FBA", "PAR"), x = 1, y = max(flux_range) - diff(flux_range)/15 * c(0,1))
+  
+  output_plots$"Flux comparison" <- ggplot() + geom_hline(y = 0, size = 2) + geom_pointrange(data = flux_plot_comp, aes(x = condName, y = FLUX, ymin = LB, ymax = UB, col = factor(METHOD)), size = 1.5, alpha = 0.8) +
+    geom_text(data = flux_plot_header, aes(x = x, y = y, label = label, col = factor(METHOD)), size = 10, hjust = 0) +
+    ci_theme + scale_color_brewer("Method", palette = "Set1") +
+    scale_y_continuous("Relative Flux", limits = flux_range) + scale_x_discrete("Conditions")
+  
+  
   #### Changes in species abundance across dilution rates ###
   
-  all_species <- data.frame(enzyme_abund, met_abund)
+  all_species <- data.frame(met_abund, enzyme_abund)
+  all_species_SD <- run_rxn$specSD
   
   if('t_metX' %in% run_rxn$kineticPars$modelName){
     
@@ -1047,28 +1054,42 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     npc <- ncol(releventPCs)
     
     all_species$t_metX <- t(mle_pars[run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs))
+    all_species_SD <- cbind(all_species_SD, data.frame("t_metX" = 0))
+    all_species_SD <- all_species_SD[,chmatch(colnames(all_species), colnames(all_species_SD))]
     
   }
   
-  colnames(all_species) <- run_rxn$all_species$commonName[chmatch(colnames(all_species), run_rxn$all_species$rel_spec)]
+  if(any(colnames(all_species) != colnames(all_species_SD))){
+    print(paste(arxn, "has misaligned metabolite point-estimates and standard deviations"))
+    }
   
-  all_species_tab <- run_rxn$all_species[colSums(all_species != 1) != 0,]
-  all_species <- all_species[,colSums(all_species != 1) != 0]
+  colnames(all_species) <- colnames(all_species_SD) <- run_rxn$all_species$commonName[chmatch(colnames(all_species), run_rxn$all_species$rel_spec)]
   
-  species_df <- melt(data.frame(all_species, condition = Chemoconds$Limitation, DR = Chemoconds$actualDR, flux = (flux$FVAmin + flux$FVAmax)/2), id.vars = c("condition", "DR", "flux"))
+  #all_species_tab <- run_rxn$all_species[colSums(all_species != 1) != 0,]
+  #all_species <- all_species[,colSums(all_species != 1) != 0]
   
-  scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+  
+  scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
       panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
-      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"))
-
+      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"))
+ 
+  species_df <- melt(cbind(all_species, data.frame(condition = Chemoconds$Limitation, DR = Chemoconds$actualDR, FLB = flux$FVAmin, FUB = flux$FVAmax)), id.vars = c("condition", "DR", "FLB", "FUB"), value.name = "RA")
+  species_df$SD <- melt(all_species_SD, value.name = "SD")$SD
+  species_df$LB <- species_df$RA - 2*species_df$SD
+  species_df$UB <- species_df$RA + 2*species_df$SD
   
-  output_plots$species <- ggplot() + geom_path(data = species_df, aes(x = DR, y = value, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free_y") +
-    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_y_continuous("Relative concentration") +
-    ggtitle("Relationship between metabolites/enzyme levels and condition")
   
-  output_plots$flux_species <- ggplot() + geom_path(data = species_df, aes(x = value, y = flux, col = condition, size = 2)) + facet_wrap(~ variable, scale = "free") +
-    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_x_continuous("Relative concentration") +
-    geom_point(data = species_df, aes(x = value, y = flux, col = condition, size =  DR*30)) + ggtitle("Relationship between metabolite/enzyme levels and flux carried") + expand_limits(y = 0)
+  output_plots$"Metabolite and enzyme abundance" <- ggplot(species_df, aes(x = DR, y = RA, col = condition)) + geom_path(size = 2, alpha = 0.7) + geom_errorbar(aes(ymin = LB, ymax = UB), size = 1, alpha = 0.7) +
+    facet_wrap(~ variable, scale = "free_y") +
+    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative/ absolute concentration")) +
+    ggtitle("Metabolite and enzyme relative abundance") + scale_x_continuous("Dilution Rate (1/h)")
+  
+  
+  output_plots$"Flux ~ species" <- ggplot(species_df, aes(y = (FLB + FUB)/2, x = 2^RA, ymin = FLB, ymax = FUB, xmin = 2^LB, xmax = 2^UB, col = condition)) + geom_path(size = 2, alpha = 0.7) +
+    facet_wrap( ~ variable, scale = "free_x") + geom_point(aes(size = sqrt(species_df$DR)*14), alpha = 0.7) +
+    geom_errorbar(size = 1) + geom_errorbarh(size = 1) + 
+    expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_x_continuous("Relative/absolute concentration") + 
+    ggtitle("Relationship between metabolite/enzyme levels and flux carried") + scale_y_continuous("Relative flux carried")
   
   return(output_plots)
   }
@@ -1190,8 +1211,11 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
 
 
 
-
 flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
+  
+  ### Look at the MLE parameter set - the posterior sample with the highest likelihood #####
+  ######## Determine overall fit - how well flux(par) matches FBA-determined flux ##########
+  #### Optimization to determine flux and sd(flux) is carried out as in FluxOptimClus.R ####
   
   require(data.table)
   require(nnls)
@@ -1226,8 +1250,7 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   }
   
   mle_pars <- mle_pars[run_rxn$kineticPars$SpeciesType != "PCL"]
-  #par_stack <- rep(1, n_c) %*% t(2^mle_pars); colnames(par_stack) <- run_rxn$kineticPars$formulaName[run_rxn$kineticPars$SpeciesType != "PCL"]
-  par_stack <- rep(1, n_c) %*% t(exp(mle_pars)); colnames(par_stack) <- run_rxn$kineticPars$formulaName[run_rxn$kineticPars$SpeciesType != "PCL"]
+  par_stack <- rep(1, n_c) %*% t(2^(mle_pars)); colnames(par_stack) <- run_rxn$kineticPars$formulaName[run_rxn$kineticPars$SpeciesType != "PCL"]
   
   occupancy_vals <- data.frame(met_abund, par_stack)
   
@@ -1236,22 +1259,33 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   # point estimate of flux(M, E, par)
   
-  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)  
+  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
   
   # determine the sd of the fitted measures
   
+  nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+  
+  all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
+  
+  # partial derivatives of each measured specie in a condition
+  
+  comp_partials <- matrix(NA, nrow = n_c, ncol = length(run_rxn$occupancyEq$kinetic_form_partials))
+  colnames(comp_partials) <- names(run_rxn$occupancyEq$kinetic_form_partials)
+  
+  for(j in 1:ncol(comp_partials)){
+    comp_partials[,j] <- with(all_components ,eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
+  }
+  
+  # calculate the fitted standard deviation after first finding the by-condition residual covariance matrix
+  
+  flux_SD <- rep(NA, n_c)
+  for(i in 1:n_c){
+    sampleCov <- run_rxn$specCorr * t(t(run_rxn$specSD[i,])) %*% run_rxn$specSD[i,]
+    flux_SD[i] <- sqrt(t(comp_partials[i,]) %*% sampleCov %*% t(t(comp_partials[i,])))
+  }
   
   
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  #####
+  ##### Comparison of flux determined through constraint-based modeling and parameteric fitting ######
   
   
   fit_summary <- data.frame(residDF = nrow(run_rxn$flux) - ncol(par_markov_chain), parametricFit = NA, NNLS = NA, LS = NA, LS_met = NA, LS_enzyme = NA, TSS = NA)
@@ -1313,12 +1347,143 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   output <- list()
   output$fit_summary <- fit_summary
   output$param_interval <- param_interval
-  output$fitted_flux <- flux_fit$fitted
+  output$fitted_flux <- data.frame(fitted = flux_fit$fitted, SD = flux_SD)
   output
 }
 
 
-
+pathwayPlots <- function(pathway){
+  
+  require(data.table)
+  require(reshape2)
+  require(ggplot2)
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, color = "black", hjust = 1), axis.line = element_blank(),
+                         strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"), axis.text.y = element_text(size = 6, color = "black"))
+  
+  
+  #### Generate plots which show how well the optimization is performing according to different metrics ####
+  #### pathway gives a subset of reactions, of which a subset which are significant ########################
+  #### after FDR correction (or are the default form) will be used #########################################
+  
+  reactions <- rxToPW$rID[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathway]]
+  
+  rxInfo_subset <- reactionInfo[reactionInfo$reaction %in% reactions,]
+  rxInfo_subset <- rxInfo_subset[(rxInfo_subset$Qvalue < 0.01 | is.na(rxInfo_subset$Qvalue)) & c(1:nrow(rxInfo_subset)) %in% grep('rmCond', rxInfo_subset$modification, invert = T),]
+  
+  Corr <- data.table(rxn_fits[rxn_fits$rxn %in% rxInfo_subset$rMech,])
+  FFD <- data.table(fraction_flux_deviation[fraction_flux_deviation$rxn %in% rxInfo_subset$rMech,])
+  
+  pathwayPlot_list <- list()
+  
+  for(plotType in c("VarEx", "SpCorr", "DotProd", "Angle")){
+    
+    #### Define plotting variables ####
+    
+    if(plotType == "VarEx"){
+      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Fit" = parametricFit/TSS, NNLS = NNLS/TSS),]
+      sortVar = "Parametric Fit"
+      good_dir = "+"
+    }
+    if(plotType == "SpCorr"){
+      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Spearman" = parSpearman, "NNLS Spearman" = nnlsSpearman),]
+      sortVar = "Parametric Spearman"
+      good_dir = "+"
+    }
+    if(plotType == "DotProd"){
+      plotDat <- FFD[,list(rxnMech = rxn, "Dot Product" = dotProduct),]
+      sortVar = "Dot Product"
+      good_dir = "+"
+    }
+    if(plotType == "Angle"){
+      plotDat <- FFD[,list(rxnMech = rxn, Angle = angle),]
+      sortVar = "Angle"
+      good_dir = "-"
+    }
+    
+    #### Order reactions first by lowest/highest value for a rxn and then within a reaction ####
+    
+    plotDat$reaction <- rxInfo_subset$reaction[chmatch(plotDat$rxn, rxInfo_subset$rMech)]
+    plotDat$display <- rxInfo_subset$FullName[chmatch(plotDat$rxn, rxInfo_subset$rMech)]
+    
+    if(good_dir == "+"){
+      
+      rxSort <- plotDat[,max(get(sortVar)), by = reaction] 
+      
+      rxSort[,order := rank(V1),]
+      setkey(rxSort, order)
+      
+      plotDat$reaction <- factor(plotDat$reaction, levels = rxSort$reaction)
+      
+      plotDat <- plotDat[order(plotDat$reaction, plotDat[,get(sortVar),]),]
+      
+      
+    }else{
+      
+      rxSort <- plotDat[,min(get(sortVar)), by = reaction] 
+      
+      rxSort[,order := rank(V1),]
+      setkey(rxSort, order)
+      
+      plotDat$reaction <- factor(plotDat$reaction, levels = rxSort$reaction)
+      
+      plotDat <- plotDat[order(plotDat$reaction, plotDat[,get(sortVar),], decreasing = T),]
+      
+      
+    }
+    
+    plotDat$rxnMech <- factor(plotDat$rxnMech, levels = plotDat$rxnMech)
+    plotDat$display <- factor(plotDat$display, levels = plotDat$display)
+    plotDat_melt <- melt(plotDat, id.vars = c("rxnMech", "reaction", "display"))
+    
+    #### Define plotting method ####
+    
+    if(plotType == "VarEx"){
+      
+      compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = variable)) + barplot_theme + facet_grid( ~ variable)
+      compPlot <- compPlot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+        scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(-1,1)) + scale_fill_brewer("Prediction Method", palette = "Set2") + coord_flip()
+      
+    }
+    
+    if(plotType == "SpCorr"){
+      
+      compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = variable)) + barplot_theme + facet_grid( ~ variable)
+      compPlot <- compPlot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+        scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(-1,1)) + scale_fill_brewer("Prediction Method", palette = "Set2") + coord_flip()
+      
+    }
+    
+    if(plotType %in% c("DotProd", "Angle")){
+      
+      plotDat_melt$rxnType <- "reversible Michaelis-Menten"
+      plotDat_melt$rxnType[grep('act', plotDat_melt$rxnMech)] <- "+ Activator"
+      plotDat_melt$rxnType[grep('inh', plotDat_melt$rxnMech)] <- "+ Inhibitor"
+      plotDat_melt$rxnType <- factor(plotDat_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator", "+ Inhibitor"))
+      
+      if(plotType == "DotProd"){
+        
+        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) + barplot_theme
+        compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+          scale_y_continuous(name = "Unit dot product", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") +
+          ggtitle(expression("Unit dot product:" ~ sum(frac(V^FBA, symbol("|")~V^FBA~symbol("|"))~"*"~frac(V^PAR, symbol("|")~V^PAR~symbol("|"))))) + coord_flip()
+        
+      }
+      
+      if(plotType == "Angle"){
+        
+        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = 90 - value, fill = rxnType)) + barplot_theme
+        compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+          scale_y_continuous(name = "Angle", expand = c(0,0), limits = c(0,90), breaks = seq(0,90, by = 10), labels = rev(seq(0,90, by = 10))) + scale_fill_brewer("Prediction Method", palette = "Set1") +
+          ggtitle(expression("Angle between "~ V^FBA ~ "&" ~ V^PAR)) + coord_flip()
+        
+      }
+    }
+    pathwayPlot_list[[plotType]] <- compPlot
+  }
+  return(pathwayPlot_list)
+}
 
 
 calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
