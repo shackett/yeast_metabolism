@@ -552,14 +552,16 @@ for(arxn in reactionInfo$rMech){
 
 # significant or default reaction forms
 
-pathway <- "Glycolysis / Gluconeogenesis (7)"
+pathway_plot_list <- list()
+for(pw in pathwaySet$display){
+  # iterate through pathways and plot pathway-level figures
+  pathway_plot_list[[pw]] <- pathwayPlots(pw)
+  }
 
-pw_plot <- pathwayPlots(pathway)
+#### Save lists which will be processed by Shiny app ####
 
-
-
-  
-
+save(pathway_plot_list
+shiny_flux_data
 
 
 
