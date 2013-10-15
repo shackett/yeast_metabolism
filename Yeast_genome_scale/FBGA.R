@@ -469,7 +469,7 @@ fraction_flux_deviation <- NULL
 
 
 
-for(arxn in reactionInfo$rMech[1:100]){
+for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -508,9 +508,11 @@ for(arxn in reactionInfo$rMech[1:100]){
   
   ### Take the fractional flux departure and dot-product between FBA and parametric vector
   
-  fraction_flux_deviation <- rbind(fraction_flux_deviation, data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux - run_rxn$flux))/sum(abs(run_rxn$flux)),
-                                                                       dotProduct = sum(flux_fit$fitted/sqrt(sum((flux_fit$fitted)^2)) * run_rxn$flux/sqrt(sum((run_rxn$flux)^2)))))
+  vector_match <- data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux$fitted - (run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2))/sum(abs(run_rxn$flux)),
+                             dotProduct = sum(flux_fit$fitted_flux$fitted/sqrt(sum((flux_fit$fitted_flux$fitted)^2)) * (run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2/sqrt(sum(((run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2)^2))))
+  vector_match$angle <- acos(vector_match$dotProduct) * 180/pi
   
+  fraction_flux_deviation <- rbind(fraction_flux_deviation, vector_match)
   
   
   ### Generate plots which show reaction information, species variation, flux fitting ... ###
@@ -528,15 +530,9 @@ for(arxn in reactionInfo$rMech[1:100]){
   
   #print(param_compare(run_rxn, par_markov_chain, par_likelihood))
   species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
-  shiny_flux_data[[arxn]] <- unlist(species_plots)
   
   shiny_flux_data[[arxn]]$plotChoices <- species_plots
   
-  
-  #print(species_plots[[1]])
-  #print(species_plots[[2]])
-  #print(species_plots[[3]])
-  #print(species_plots[[4]])
   
   #elastPlots <- calcElast(run_rxn, par_markov_chain, par_likelihood)
   #print(elastPlots$elast)
@@ -549,8 +545,77 @@ for(arxn in reactionInfo$rMech[1:100]){
 #save(param_set_list, file = "param_set_list.Rdata")
 #save(rxn_fit_params, file = "paramDist.Rdata")
 
+# significant or default reaction forms
 
-under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
+pathway <- "Biosynthesis of amino acids (28)"
+
+pathwayPlots <- function(pathway){
+  
+  require(data.table)
+  
+  #### Generate plots which show how well the optimization is performing according to different metrics ####
+  #### pathway gives a subset of reactions, of which a subset which are significant ########################
+  #### after FDR correction (or are the default form) will be used #########################################
+  
+  reactions <- rxToPW$rID[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathway]]
+  
+  rxInfo_subset <- reactionInfo[reactionInfo$reaction %in% reactions,]
+  rxInfo_subset <- rxInfo_subset[(rxInfo_subset$Qvalue < 0.01 | is.na(rxInfo_subset$Qvalue)) & c(1:nrow(rxInfo_subset)) %in% grep('rmCond', rxInfo_subset$modification, invert = T),]
+  
+  Corr <- data.table(rxn_fits[rxn_fits$rxn %in% rxInfo_subset$rMech,])
+  FFD <- data.table(fraction_flux_deviation[fraction_flux_deviation$rxn %in% rxInfo_subset$rMech,])
+  
+  pathwayPlot_list <- list()
+  
+  for(plotType in c("VarEx", "SpCorr", "DotProd", "Angle")){
+    
+    if(plotType == "VarEx"){
+      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Fit" = parametricFit/TSS, NNLS = NNLS/TSS),]
+      sortVar = "Parametric Fit"
+    }
+    if(plotType == "SpCorr"){
+      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Spearman" = parSpearman, "NNLS Spearman" = nnlsSpearman),]
+      sortVar = "Parametric Spearman"
+    }
+    if(plotType == "DotProd"){
+      plotDat <- FFD[,list(rxnMech = rxn, "Dot Product" = dotProduct),]
+      sortVar = "Dot Product"
+    }
+    if(plotType == "Angle"){
+      plotDat <- FFD[,list(rxnMech = rxn, Angle = angle),]
+      sortVar = "Angle"
+    }
+  
+    plotDat$reaction <- rxInfo_subset$reaction[chmatch(plotDat$rxn, rxInfo_subset$rMech)]
+    
+    
+    
+    
+    
+  
+  }
+
+
+
+
+
+
+
+reactionInfo
+shiny_flux_data
+rxToPW
+pathwaySet
+
+
+rxToPW
+fraction_flux_deviation
+rxn_fits
+
+
+
+######
+
+under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10 | rxn_fits$rxn %in% sigMechs,]
 rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
 under_determined_rxnFits <- under_determined_rxnFits[under_determined_rxnFits$parametricFit > 0 | under_determined_rxnFits$rxn %in% paste(substr(under_determined_rxnFits$rxn[under_determined_rxnFits$parametricFit > 0], 1, 6), "-rm", sep = ""),] # remove parameteric fits which are worse than mean flux
 under_determined_rxnFits <- under_determined_rxnFits[!(substr(under_determined_rxnFits$rxn, 1, 6) %in% substr(under_determined_rxnFits$rxn[is.na(under_determined_rxnFits$parPearson)], 1, 6)),] #remove reactions with an undefined correlation - no flux variabilty
@@ -577,7 +642,7 @@ rxnFit_frac_melt <- melt(under_determined_rxnFits_frac, id.vars = c("rxn", "rxnM
 
 
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-                       panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
+                       panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 3, angle = 90, color = "black", hjust = 1), axis.line = element_blank(),
                        strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"))
 
 
@@ -586,6 +651,23 @@ rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = rxnMech, y = value, 
 rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
   scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2")
 ggsave("parFitQuality.pdf", height = 20, width = 20)
+
+#### Split into multiple lines ####
+
+nchunks <- 4
+rxnMechChunk <- data.frame(rx = unique(rxnFit_frac_melt$rxnMech), chunk = c(rep(1:(nchunks - 1), each = ceiling(length(unique(rxnFit_frac_melt$rxnMech))/nchunks)), rep(nchunks, length(unique(rxnFit_frac_melt$rxnMech)) - ceiling(length(unique(rxnFit_frac_melt$rxnMech))/nchunks)*(nchunks - 1))))
+rxnFit_frac_melt$chunk <- as.factor(rxnMechChunk$chunk[chmatch(as.character(rxnFit_frac_melt$rxnMech), as.character(rxnMechChunk$r))])
+rxnFit_frac_melt$xpos <- NA
+
+for(i in 1:nchunks){
+  for(rxtype in unique(rxnFit_frac_melt$variable)){
+    rxnFit_frac_melt$xpos[rxnFit_frac_melt$chunk == i & rxnFit_frac_melt$variable == rxtype] <- 1:length(rxnFit_frac_melt$xpos[rxnFit_frac_melt$chunk == i & rxnFit_frac_melt$variable == rxtype])
+    }
+  }
+
+rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = xpos, y = value, fill = variable)) + barplot_theme + facet_grid(variable + chunk ~ .)
+rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+  scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2")
 
 
 #### plot correlation of flux and prediction ####
