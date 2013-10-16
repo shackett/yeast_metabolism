@@ -12,6 +12,8 @@ shinyUI(pageWithSidebar(
     # Select the pathway of interest (or all reactions)
     selectInput("pathway", "Pathway:", as.list(pathwaySet$display)),
     
+    uiOutput("pw_check"),
+    
     # Select the reaction within this pathway which is to be considered
     uiOutput("reactions_available"),
     
@@ -19,7 +21,8 @@ shinyUI(pageWithSidebar(
     uiOutput("subforms_available"),
     
     # Which subset of plots to choose
-    uiOutput("choosePlot"),
+    uiOutput("rx_check"),
+    
     #checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(names(ggplotList))),
     
     # How many columns should ggplot figures be displayed in
@@ -28,10 +31,12 @@ shinyUI(pageWithSidebar(
     ),
     
   mainPanel(
-    h3(textOutput("indicator")),
+    #h3(textOutput("indicator")),
     
-    h3(textOutput("test")),
+    #h3(textOutput("test")),
     
-    plotOutput("P1")
+    plotOutput("PW", height = 1000),
+    
+    plotOutput("RX", height = 1000)
   )
 ))

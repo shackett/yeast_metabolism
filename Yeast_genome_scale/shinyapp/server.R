@@ -1,17 +1,10 @@
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
-#load("validParameterSets.Rdata")
 
 library(shiny)
 library(ggplot2)
 library(gridExtra)
 
-#valid_rMechs <- reactionInfo[is.na(reactionInfo$Qvalue) | reactionInfo$Qvalue < 0.1 & !is.na(reactionInfo$Qvalue),]
-
-#unique_rxns = unique(sort(valid_rMechs$reaction))
-
-
-#valid_rMechsd_rx_info <- rxnf[names(rxnf) %in% valid_rMechs$rMech]
 
 # find all pathways
 # point each pathway to all relevent reactions using a list - order as factors with ALL being first
@@ -27,18 +20,11 @@ library(gridExtra)
 load("shinyapp/shinyData.Rdata")
 
 
-pathwaySet
-rxToPW
-reactionInfo
-pathway_plot_list
-shiny_flux_data
-
-
-ggplotList <- list()
-
-ggplotList$norm <- ggplot(data.frame(x = rnorm(10000, 0, 1)), aes(x = x)) + geom_bar()
-
-ggplotList$pois <- ggplot(data.frame(x = rpois(10000, 5)), aes(x = x)) + geom_bar()
+#pathwaySet
+#rxToPW
+#reactionInfo
+#pathway_plot_list
+#shiny_flux_data
 
 
 shinyServer(function(input, output) {
@@ -47,10 +33,29 @@ shinyServer(function(input, output) {
   pathways_selected <- reactive({input$pathway})
   
   # reactions available
-  reactions_available <- reactive({c("PATHWAY INFORMATION", rxToPW$reactionName[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathways_selected()]])})
+  reactions_available <- reactive({rxToPW$reactionName[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathways_selected()]]})
   output$reactions_available <- renderUI({selectInput("reaction_chosen", "Reaction:", as.list(reactions_available()))})
   
-  viewType = reactive({ifelse(input$reaction_chosen == "PATHWAY INFORMATION", "PW", "RX")})
+  #viewType = reactive({ifelse(input$reaction_chosen == "PATHWAY INFORMATION", "PW", "RX")})
+  
+  ### If a pathway is chosen ###
+  
+  PWplots <- reactive({names(pathway_plot_list[[pathways_selected()]])})
+  
+  output$pw_check <- renderUI({checkboxGroupInput("pathway_plots", "Pathway plots to choose", choices = as.list(PWplots()))})
+  
+  chosenPWplots <- reactive({pathway_plot_list[[pathways_selected()]][names(pathway_plot_list[[pathways_selected()]]) %in% input$pathway_plots]})
+  
+  output$PW <- renderPlot({
+    if(length(chosenPWplots) != 0){
+      pwsubList <- chosenPWplots()
+      do.call(grid.arrange,  pwsubList)
+    }else{
+      return(NULL) 
+    }
+  })
+  
+  
   
   ### If a reaction is chosen ###
   
@@ -60,60 +65,46 @@ shinyServer(function(input, output) {
   output$subforms_available <- renderUI({selectInput("subform_chosen", "Subtype:", as.list(subtypeChoices()))})
   currentRx <- reactive({reactionInfo$rMech[reactionInfo$reaction == rID()][reactionInfo$Name[reactionInfo$reaction == rID()] == input$subform_chosen]})
   
-  RXplots <- reactive({names(shiny_flux_data[[currentRx]])})
+  RXplots <- reactive({names(shiny_flux_data[[currentRx()]]$plotChoices)})
   
-  ### If a pathway is chosen ###
+  output$rx_check <- renderUI({checkboxGroupInput("reaction_plots", "Reaction plots to choose", choices = as.list(RXplots()))})
   
-  PWplots <- reactive({names(pathway_plot_list[[pathways_selected()]])})
+  chosenRXplots <- reactive({shiny_flux_data[[currentRx()]]$plotChoices[names(shiny_flux_data[[currentRx()]]$plotChoices) %in% input$reaction_plots]})
   
-  ### Choose which plots to display ###
+  column_number <- reactive({as.numeric(input$col_num)})
   
-  plotChoose <- function(view){
-    if(view == "PW"){
-     return(PWplots()) 
+  output$RX <- renderPlot({
+    if(length(RXplots) != 0){
+      rxsubList <- chosenRXplots()
+      rxsubList$ncol = column_number()
+      
+      do.call(grid.arrange,  rxsubList)
     }else{
-     return(RXplots()) 
+      return(NULL) 
     }
-  }
-    
-  
-  namez <- reactive({plotChoose(viewType())})
-  
-  output$choosePlot <- renderUI({
-    checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(displayPlots))
   })
   
   
   
   
+  ### Choose which plots to display ###
   
-  plots <- reactive({input$plots_chosen})
   
-  plot_subset <- reactive({ggplotList[names(ggplotList) %in% plots()]})
   
-  column_number <- reactive({as.numeric(input$col_num)})
+  #plots <- reactive({input$plots_chosen})
+  
+  #plot_subset <- reactive({ggplotList[names(ggplotList) %in% plots()]})
   
   # specify which reaction form is desired
     
-  output$indicator <- renderText(namez())
+  #output$indicator <- renderText(namez())
 
-  output$test <- renderText(PWplots())
+  #output$test <- renderText(PWplots())
   
   # Generate a plot of the requested variable against mpg and only 
   # include outliers if requested
   
   #grid.arrange(plot1, plot2, ncol=2)
-  
-  output$P1 <- renderPlot({
-    if(length(plot_subset) != 0){
-      subList <- plot_subset()
-      subList$ncol = column_number()
-      
-      do.call(grid.arrange,  subList)
-    }else{
-      return(NULL) 
-    }
-  })
   
   
 })
