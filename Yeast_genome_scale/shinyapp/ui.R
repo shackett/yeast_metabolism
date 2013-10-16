@@ -19,19 +19,13 @@ shinyUI(pageWithSidebar(
     uiOutput("subforms_available"),
     
     # Which subset of plots to choose
-    checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(names(ggplotList))),
+    uiOutput("choosePlot"),
+    #checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(names(ggplotList))),
     
     # How many columns should ggplot figures be displayed in
     selectInput("col_num", "Number of plot columns", c("1", "2", "3", "4"), selected = "2")
     
     ),
-    
-    # Partial example
-	
-    
-    #uiOutput("rxn_input")
-    
-    #		as.list(names(reactionNames)[reactionChoices %in% reaction_selected])),
     
   mainPanel(
     h3(textOutput("indicator")),

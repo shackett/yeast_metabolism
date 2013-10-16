@@ -17,11 +17,21 @@ library(gridExtra)
 # point each pathway to all relevent reactions using a list - order as factors with ALL being first
 # generate figures and dump out when appropriate
 
+##### Five files loaded #####
+# pathwaySet - number of members in various pathways
+# rxToPW - which pathways is a reaction associated with + name
+# reactionInfo - reactiion -> rxMechanism + sanitized names
+# pathway_plot_list - plots showing information (performance) at a pathway level
+# shiny_flux_data - rxMechanism specific plots
+
+load("shinyapp/shinyData.Rdata")
+
 
 pathwaySet
 rxToPW
 reactionInfo
-
+pathway_plot_list
+shiny_flux_data
 
 
 ggplotList <- list()
@@ -37,15 +47,45 @@ shinyServer(function(input, output) {
   pathways_selected <- reactive({input$pathway})
   
   # reactions available
-  reactions_available <- reactive({rxToPW$reactionName[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathways_selected()]]})
+  reactions_available <- reactive({c("PATHWAY INFORMATION", rxToPW$reactionName[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathways_selected()]])})
   output$reactions_available <- renderUI({selectInput("reaction_chosen", "Reaction:", as.list(reactions_available()))})
   
-  # which reaction was selected - using common name
+  viewType = reactive({ifelse(input$reaction_chosen == "PATHWAY INFORMATION", "PW", "RX")})
+  
+  ### If a reaction is chosen ###
+  
   rID = reactive({rxToPW$rID[rxToPW$reactionName == input$reaction_chosen][1]})
   subtypeChoices <- reactive({reactionInfo$Name[reactionInfo$reaction == rID()]})
-  output$subforms_available <- renderUI({selectInput("subform_chosen", "Subtype:", as.list(subtypeChoices()))})
   
-  #######
+  output$subforms_available <- renderUI({selectInput("subform_chosen", "Subtype:", as.list(subtypeChoices()))})
+  currentRx <- reactive({reactionInfo$rMech[reactionInfo$reaction == rID()][reactionInfo$Name[reactionInfo$reaction == rID()] == input$subform_chosen]})
+  
+  RXplots <- reactive({names(shiny_flux_data[[currentRx]])})
+  
+  ### If a pathway is chosen ###
+  
+  PWplots <- reactive({names(pathway_plot_list[[pathways_selected()]])})
+  
+  ### Choose which plots to display ###
+  
+  plotChoose <- function(view){
+    if(view == "PW"){
+     return(PWplots()) 
+    }else{
+     return(RXplots()) 
+    }
+  }
+    
+  
+  namez <- reactive({plotChoose(viewType())})
+  
+  output$choosePlot <- renderUI({
+    checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(displayPlots))
+  })
+  
+  
+  
+  
   
   plots <- reactive({input$plots_chosen})
   
@@ -55,9 +95,9 @@ shinyServer(function(input, output) {
   
   # specify which reaction form is desired
     
-  output$indicator <- renderText(column_number())
+  output$indicator <- renderText(namez())
 
-  output$test <- renderText(length(plot_subset()))
+  output$test <- renderText(PWplots())
   
   # Generate a plot of the requested variable against mpg and only 
   # include outliers if requested
