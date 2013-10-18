@@ -527,17 +527,18 @@ for(arxn in reactionInfo$rMech){
   
   shiny_flux_data[[arxn]]$reactionInfo <- reaction_info_FBGA(rxnName) # Reaction information
   
-  shiny_flux_data[[arxn]]$plotChoices$likelihood <- likViolin(par_likelihood, run_summary$markov_pars) # Log-likelihoods of each markov chain
+  shiny_flux_data[[arxn]]$plotChoices$Likelihood <- likViolin(par_likelihood, run_summary$markov_pars) # Log-likelihoods of each markov chain
+  
+  species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
+  
+  shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, species_plots)
+  
   
   if("t_metX" %in% run_rxn$kineticPars$modelName){
-  shiny_flux_data[[arxn]]$plotChoices$hypoMet <- hypoMetTrend(run_rxn, metSVD, tab_boer)
+    shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, hypoMetTrend(run_rxn, metSVD, tab_boer))
   }
   
   #print(param_compare(run_rxn, par_markov_chain, par_likelihood))
-  species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
-  
-  shiny_flux_data[[arxn]]$plotChoices <- species_plots
-  
   
   #elastPlots <- calcElast(run_rxn, par_markov_chain, par_likelihood)
   #print(elastPlots$elast)
@@ -547,8 +548,6 @@ for(arxn in reactionInfo$rMech){
   
 }
 
-#save(param_set_list, file = "param_set_list.Rdata")
-#save(rxn_fit_params, file = "paramDist.Rdata")
 
 # significant or default reaction forms
 
@@ -558,10 +557,34 @@ for(pw in pathwaySet$display){
   pathway_plot_list[[pw]] <- pathwayPlots(pw)
   }
 
+# order reactions according to the fit of the best reaction form (currently using DotProduct)
+
+
+lls <- function (pos = 1, pat = "") {
+    dimx <- function(dd) if (is.null(dim(dd)))
+        length(dd)
+    else dim(dd)
+    lll <- ls(pos = pos, pat = pat)
+    cat(formatC("mode", 1, 15), formatC("class", 1, 18), formatC("name",
+        1, max(nchar(lll)) + 1), "size\n-----------------------------------------------------------------\n")
+    if (length(lll) > 0) {
+        for (i in 1:length(lll)) {
+            cat(formatC(eval(parse(t = paste("mode(", lll[i],
+                ")"))), 1, 15), formatC(paste(eval(parse(t = paste("class(",
+                lll[i], ")"))), collapse = " "), 1, 18), formatC(lll[i],
+                1, max(nchar(lll)) + 1), " ", eval(parse(t = paste("dimx(",
+                lll[i], ")"))), "\n")
+        }
+    }
+} 
+
+
+
 #### Save lists which will be processed by Shiny app ####
 
-save(pathway_plot_list
-shiny_flux_data
+print(object.size((shiny_flux_data)), units = "auto")
+
+save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinyData.Rdata")
 
 
 
@@ -578,190 +601,6 @@ fraction_flux_deviation
 rxn_fits
 
 
-
-######
-
-under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10 | rxn_fits$rxn %in% sigMechs,]
-rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
-under_determined_rxnFits <- under_determined_rxnFits[under_determined_rxnFits$parametricFit > 0 | under_determined_rxnFits$rxn %in% paste(substr(under_determined_rxnFits$rxn[under_determined_rxnFits$parametricFit > 0], 1, 6), "-rm", sep = ""),] # remove parameteric fits which are worse than mean flux
-under_determined_rxnFits <- under_determined_rxnFits[!(substr(under_determined_rxnFits$rxn, 1, 6) %in% substr(under_determined_rxnFits$rxn[is.na(under_determined_rxnFits$parPearson)], 1, 6)),] #remove reactions with an undefined correlation - no flux variabilty
-
-under_determined_rxnFits <- under_determined_rxnFits[,-c(1:2)]
-
-rxnFits_correlation <- under_determined_rxnFits[,colnames(under_determined_rxnFits) %in% c("parPearson", "parSpearman", "nnlsPearson", "nnlsSpearman")]
-under_determined_rxnFits_frac <- under_determined_rxnFits/under_determined_rxnFits$TSS
-under_determined_rxnFits_frac <- under_determined_rxnFits_frac[,colnames(under_determined_rxnFits_frac) %in% c("parametricFit", "NNLS")]
-under_determined_rxnFits_frac <- under_determined_rxnFits_frac[rowSums(is.na(under_determined_rxnFits_frac)) == 0,]
-under_determined_rxnFits_frac$rxn <- substr(rownames(under_determined_rxnFits_frac), 1, 6)
-under_determined_rxnFits_frac$rxnMech <- rownames(under_determined_rxnFits_frac)
-
-rxOrder <- data.frame(rx = unique(under_determined_rxnFits_frac$rxn), order = rank(sapply(unique(under_determined_rxnFits_frac$rxn), function(x){max(under_determined_rxnFits_frac$parametricFit[under_determined_rxnFits_frac$rxn == x])})))
-
-under_determined_rxnFits_frac$rxnOrder <- sapply(under_determined_rxnFits_frac$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
-under_determined_rxnFits_frac <- under_determined_rxnFits_frac[order(under_determined_rxnFits_frac$rxnOrder, under_determined_rxnFits_frac$parametricFit),]
-
-#under_determined_rxnFits_frac <- under_determined_rxnFits_frac[order(under_determined_rxnFits_frac$rxnOrder, mapply(function(x,y){max(x,y)}, x = under_determined_rxnFits_frac$parametricFit, y = under_determined_rxnFits_frac$NNLS)),]
-#under_determined_rxnFits_frac$rxnOrder <- c(1:nrow(under_determined_rxnFits_frac))
-under_determined_rxnFits_frac$rxnMech <- factor(under_determined_rxnFits_frac$rxnMech, levels = under_determined_rxnFits_frac$rxnMech)
-
-rxnFit_frac_melt <- melt(under_determined_rxnFits_frac, id.vars = c("rxn", "rxnMech", "rxnOrder"))
-
-
-barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-                       panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 3, angle = 90, color = "black", hjust = 1), axis.line = element_blank(),
-                       strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"))
-
-
-
-rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = rxnMech, y = value, fill = variable)) + barplot_theme + facet_grid(variable ~ .)
-rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-  scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2")
-ggsave("parFitQuality.pdf", height = 20, width = 20)
-
-#### Split into multiple lines ####
-
-nchunks <- 4
-rxnMechChunk <- data.frame(rx = unique(rxnFit_frac_melt$rxnMech), chunk = c(rep(1:(nchunks - 1), each = ceiling(length(unique(rxnFit_frac_melt$rxnMech))/nchunks)), rep(nchunks, length(unique(rxnFit_frac_melt$rxnMech)) - ceiling(length(unique(rxnFit_frac_melt$rxnMech))/nchunks)*(nchunks - 1))))
-rxnFit_frac_melt$chunk <- as.factor(rxnMechChunk$chunk[chmatch(as.character(rxnFit_frac_melt$rxnMech), as.character(rxnMechChunk$r))])
-rxnFit_frac_melt$xpos <- NA
-
-for(i in 1:nchunks){
-  for(rxtype in unique(rxnFit_frac_melt$variable)){
-    rxnFit_frac_melt$xpos[rxnFit_frac_melt$chunk == i & rxnFit_frac_melt$variable == rxtype] <- 1:length(rxnFit_frac_melt$xpos[rxnFit_frac_melt$chunk == i & rxnFit_frac_melt$variable == rxtype])
-    }
-  }
-
-rxnFit_frac_plot <- ggplot(data = rxnFit_frac_melt, aes(x = xpos, y = value, fill = variable)) + barplot_theme + facet_grid(variable + chunk ~ .)
-rxnFit_frac_plot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-  scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set2")
-
-
-#### plot correlation of flux and prediction ####
-
-
-under_determined_rxnFits = rxn_fits[rxn_fits$residDF > 10,]
-rownames(under_determined_rxnFits) <- under_determined_rxnFits$rxn
-under_determined_rxnFits <- under_determined_rxnFits[!(substr(under_determined_rxnFits$rxn, 1, 6) %in% substr(under_determined_rxnFits$rxn[is.na(under_determined_rxnFits$parPearson)], 1, 6)),] #remove reactions with an undefined correlation - no flux variabilty
-under_determined_rxnFits <- under_determined_rxnFits[,-c(1:2)]
-rxnFits_correlation <- under_determined_rxnFits[,colnames(under_determined_rxnFits) %in% c("parPearson", "parSpearman", "nnlsPearson", "nnlsSpearman")]
-
-
-rxnFits_correlation$rxn <- substr(rownames(rxnFits_correlation), 1, 6)
-rxnFits_correlation$rxnMech <- rownames(rxnFits_correlation)
-
-rxOrder <- data.frame(rx = unique(rxnFits_correlation$rxn), order = rank(sapply(unique(rxnFits_correlation$rxn), function(x){max(rxnFits_correlation$parSpearman[rxnFits_correlation$rxn == x])})))
-rxnFits_correlation$rxnOrder <- sapply(rxnFits_correlation$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
-rxnFits_correlation <- rxnFits_correlation[order(rxnFits_correlation$rxnOrder, rxnFits_correlation$parSpearman),]
-rxnFits_correlation$rxnMech <- factor(rxnFits_correlation$rxnMech, levels = rxnFits_correlation$rxnMech)
-
-rxnFits_correlation <- rxnFits_correlation[,!(colnames(rxnFits_correlation) %in% c("parPearson", "nnlsPearson"))]
-colnames(rxnFits_correlation)[1:2] <- c("NNLS", "Parametric-Fit")
-
-rxnFit_corr_melt <- melt(rxnFits_correlation, id.vars = c("rxn", "rxnMech", "rxnOrder"))
-rxnFit_corr_melt$variable <- factor(rxnFit_corr_melt$variable, levels = c("Parametric-Fit", "NNLS"))
-
-rxnFit_frac_plot <- ggplot(data = rxnFit_corr_melt, aes(x = rxnMech, y = value, fill = variable)) + barplot_theme + facet_grid(variable ~ .)
-rxnFit_frac_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-  scale_y_continuous(name = "Spearman Correlation", expand = c(0,0), limits = c(-1,1)) + scale_fill_brewer("Prediction Method", palette = "Set2") +
-  ggtitle("Correlation between flux predicted from FBA and from metabolites & enzymes")
-ggsave("parFitSpearman.pdf", height = 20, width = 20)
-
-
-####### To deal with the mean flux not being the best reference (in the sense of variance), an alternative comparisoin would be the fractional flux departure: sum of deviations divided by the total flux.
-
-rownames(fraction_flux_deviation) <- fraction_flux_deviation$rxn
-fraction_flux_deviation$rxn <- substr(rownames(fraction_flux_deviation), 1, 6)
-fraction_flux_deviation$rxnMech <- rownames(fraction_flux_deviation)
-dotProduct_df <- fraction_flux_deviation[,!(colnames(fraction_flux_deviation) %in% "FFD")]
-fraction_flux_deviation <- fraction_flux_deviation[,!(colnames(fraction_flux_deviation) %in% "dotProduct")]
-
-fraction_flux_deviation <- fraction_flux_deviation[!(fraction_flux_deviation$rxn %in% unique(fraction_flux_deviation$rxn[fraction_flux_deviation$FFD <= 0])),]
-
-rxOrder <- data.frame(rx = unique(fraction_flux_deviation$rxn), order = rank(sapply(unique(fraction_flux_deviation$rxn), function(x){max(fraction_flux_deviation$FFD[fraction_flux_deviation$rxn == x])})))
-fraction_flux_deviation$rxnOrder <- sapply(fraction_flux_deviation$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
-fraction_flux_deviation <- fraction_flux_deviation[order(fraction_flux_deviation$rxnOrder, fraction_flux_deviation$FFD),]
-fraction_flux_deviation$rxnMech <- factor(fraction_flux_deviation$rxnMech, levels = fraction_flux_deviation$rxnMech)
-
-
-FFD_melt <- melt(fraction_flux_deviation, id.vars = c("rxn", "rxnMech", "rxnOrder"))
-FFD_melt$rxnType <- "reversible Michaelis-Menten"
-FFD_melt$rxnType[grep('act', FFD_melt$rxnMech)] <- "+ Activator"
-FFD_melt$rxnType[grep('inh', FFD_melt$rxnMech)] <- "+ Inhibitor"
-FFD_melt$rxnType <- factor(FFD_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator", "+ Inhibitor"))
-
-FFD_plot <- ggplot(data = FFD_melt, aes(x = rxnMech, y = value, fill = rxnType)) + barplot_theme
-FFD_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-  scale_y_continuous(name = "Fractional flux similarity", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") +
-  ggtitle(expression("Fractional flux similarity:" ~ frac(sum(symbol("|")~V^FBA - V^PAR~symbol("|")), sum(symbol("|")~V^FBA~symbol("|")))))
-ggsave("FFD.pdf", height = 14, width = 20)
-
-###### Dot Product between v-FBA and V-PAR #######
-
-dotProduct_df <- dotProduct_df[!(dotProduct_df$rxn %in% dotProduct_df$rxn[is.nan(dotProduct_df$dotProduct)]),]
-
-rxOrder <- data.frame(rx = unique(dotProduct_df$rxn), order = rank(sapply(unique(dotProduct_df$rxn), function(x){max(dotProduct_df$dotProduct[dotProduct_df$rxn == x])})))
-dotProduct_df$rxnOrder <- sapply(dotProduct_df$rxn, function(x){rxOrder$order[rxOrder$rx == x]})
-dotProduct_df <- dotProduct_df[order(dotProduct_df$rxnOrder, dotProduct_df$dotProduct),]
-dotProduct_df$rxnMech <- factor(dotProduct_df$rxnMech, levels = dotProduct_df$rxnMech)
-
-
-DP_melt <- melt(dotProduct_df, id.vars = c("rxn", "rxnMech", "rxnOrder"))
-DP_melt$rxnType <- "reversible Michaelis-Menten"
-DP_melt$rxnType[grep('act', DP_melt$rxnMech)] <- "+ Activator"
-DP_melt$rxnType[grep('inh', DP_melt$rxnMech)] <- "+ Inhibitor"
-DP_melt$rxnType <- factor(DP_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator", "+ Inhibitor"))
-DP_melt$angle <- acos(DP_melt$value) * 180/pi
-
-DP_plot <- ggplot(data = DP_melt, aes(x = rxnMech, y = value, fill = rxnType)) + barplot_theme
-DP_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-  scale_y_continuous(name = "Unit dot product", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") +
-  ggtitle(expression("Unit dot product:" ~ sum(frac(V^FBA, symbol("|")~V^FBA~symbol("|"))~"*"~frac(V^PAR, symbol("|")~V^PAR~symbol("|")))))
-  ggsave("dotProduct.pdf", height = 14, width = 20)
-
-DP_plot <- ggplot(data = DP_melt, aes(x = rxnMech, y = 90 - angle, fill = rxnType)) + barplot_theme
-DP_plot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-  scale_y_continuous(name = "Angle", expand = c(0,0), limits = c(0,90), breaks = seq(0,90, by = 10), labels = rev(seq(0,90, by = 10))) + scale_fill_brewer("Prediction Method", palette = "Set1") +
-  ggtitle(expression("Angle between "~ V^FBA ~ "&" ~ V^PAR))
-  ggsave("VecAngle.pdf", height = 14, width = 24)
-
-
-# make another histogram that shows the explained variance with parametric vs nnls
-rxn_fits$shareNNLS <- rxn_fits$NNLS / rxn_fits$TSS
-rxn_fits$shareNNLS[rxn_fits$shareNNLS <0] <- 0
-rxn_fits$shareParam <- rxn_fits$parametricFit/ rxn_fits$TSS
-rxn_fits$shareParam [rxn_fits$shareParam <0] <- 0
-hist(rxn_fits$shareNNLS,100)
-hist(rxn_fits$shareParam,100)
-
-rxn_fits$rxn[rxn_fits$shareParam >0.6]
-rxn_fits <- rxn_fits[order(rxn_fits$shareParam),]
-fil <- rxn_fits$shareParam > rxn_fits$shareNNLS
-rxn_fits$rxn[fil]
-hist(rxn_fits$shareParam[fil])
-
-plotRxn <- melt(rxn_fits[fil,c('rxn','shareParam','shareNNLS')])
-colnames(plotRxn) <- c('reaction','fit','ESS')
-plotRxn$fit <- as.character(plotRxn$fit)
-plotRxn$reaction <- factor(plotRxn$reaction ,levels=unique(plotRxn$reaction))
-plotRxn$fit[plotRxn$fit == 'shareParam'] <- 'parametric'
-plotRxn$fit[plotRxn$fit == 'shareNNLS'] <- 'NNLS'
-
-ggplot(data=plotRxn,aes(x=reaction,y=ESS))+
-  geom_bar(stat="identity",alpha=1,aes(fill=fit), position = 'dodge')+
-  theme(axis.text.x = element_text(angle=90,vjust=.50))
-
-
-ggsave('ESShist.png',width=9,height=5)
-
-## plot convinience kinetics vs reversible menten with comp inhibition
-unmodFil <- reactionInfo$modification == ''
-ccfil <- reactionInfo$form == 'cc' & unmodFil
-rmfil <- reactionInfo$form == 'rm' & unmodFil
-
-plot(reactionInfo$ML[ccfil],reactionInfo$ML[rmfil])
-sum(reactionInfo$ML[rmfil] > reactionInfo$ML[ccfil])
-
-hist(reactionInfo$ML[rmfil]-reactionInfo$ML[ccfil],40)
 
 
 ######### Compare Km values found through optimization to those from literature ################
