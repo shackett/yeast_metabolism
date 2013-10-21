@@ -546,6 +546,7 @@ function(){
   
   require(data.table)
   require(ggplot2)
+  require(scales) # for converting fractions to percent
   
   boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "top", 
   panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
@@ -613,11 +614,11 @@ function(){
     scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ group("[",frac("[M]", "M" + K[M]),"]")^"h"))
   
   
+  ### Calculate flux elasticity over all parameter sets, conditions and non-constant species ###
   
-  
-  
-  apply(dist_pars, 1, function(pars){
+  flux_elasticity <- sapply(1:nrow(dist_pars), function(x){
     
+    pars <- dist_pars[x,]
     dist_par_stack <- rep(1, n_c) %*% t(2^(pars))
     
     occupancy_vals <- data.frame(met_abund, dist_par_stack)
@@ -641,43 +642,41 @@ function(){
     for(j in 1:ncol(comp_partials)){
       comp_partials[,j] <- with(all_components ,eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
     }
-    
-    measured_spec <- all_components[,colnames(all_components) %in% colnames(comp_partials)]
-    measured_spec <- measured_spec[,chmatch(colnames(measured_spec), colnames(comp_partials))]
-    
-    
-    
-    met_abund
-    
-    
-    
-    }
+    comp_partials
+  }, simplify = "array")
+  
+  flux_names <- names(run_rxn$occupancyEq$kinetic_form_partials)
+  flux_names[flux_names %in% run_rxn$kineticPars$rel_spec] <-  run_rxn$kineticPars$formatted[chmatch(flux_names[flux_names %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
+  
+  dimnames(flux_elasticity) <- list(condition = rownames(measured_mets), specie = flux_names, markovSample = c(1:nrow(dist_pars)))
   
   
+  ### Plot elasticity of log-abundances ###
   
+  flux_elasticity_melt <- melt(flux_elasticity)
   
+  output_plots$"Flux Elasticity" <- ggplot(flux_elasticity_melt, aes(x = condition, y = value, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ specie, scales = "free_y", ncol = 2) + geom_boxplot(outlier.colour = "darkgoldenrod", outlier.size = 1) + boxplot_theme +
+    scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
+    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Fold-change Elasticity: "~ frac(rho~"F", rho~2^S)))
   
+  ### Physiological leverage: absolute partial correlation weighted by across-condition SD
   
-  # point estimate of flux(M, E, par)
+  all_exp_species <- data.frame(enzyme_abund, measured_mets[, colnames(measured_mets) %in% run_rxn$kineticPars$rel_spec[run_rxn$kineticPars$formatted %in% flux_names], drop = F])
+  colnames(all_exp_species)[colnames(all_exp_species) %in% run_rxn$kineticPars$rel_spec] <- run_rxn$kineticPars$formatted[chmatch(colnames(all_exp_species)[colnames(all_exp_species) %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
   
-  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
+  all_exp_species <- all_exp_species[,chmatch(colnames(flux_elasticity), colnames(all_exp_species))]
   
-  # determine the sd of the fitted measures
+  SDweightedElasticity <- abs(flux_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(flux_elasticity))
   
-  nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+  we_melt <- data.table(melt(SDweightedElasticity))
   
-  all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
+  we_melt[,total_we := sum(value), by = c("condition", "markovSample")]
+  we_melt[,physiological_leverage := value/total_we,]
   
-  # partial derivatives of each measured specie in a condition
+  output_plots
   
-  comp_partials <- matrix(NA, nrow = n_c, ncol = length(run_rxn$occupancyEq$kinetic_form_partials))
-  colnames(comp_partials) <- names(run_rxn$occupancyEq$kinetic_form_partials)
-  
-  for(j in 1:ncol(comp_partials)){
-    comp_partials[,j] <- with(all_components ,eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
-  }
-  
-  
+  ggplot(we_melt, aes(x = condition, y = physiological_leverage, fill = factor(specie))) + geom_boxplot(outlier.size = 0) + expand_limits(y=0) + coord_flip() +
+    boxplot_theme + scale_y_continuous("Physiological Leverage", labels = percent_format()) + scale_x_discrete("Experimental Condition")
   
   
   
