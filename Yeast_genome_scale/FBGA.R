@@ -304,6 +304,7 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
+
 ######## Import cluster parameter results #########
 ##@##@ Start here if loading parameter sets ##@##@#
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
@@ -522,9 +523,6 @@ for(arxn in reactionInfo$rMech){
   
   ### Generate plots which show reaction information, species variation, flux fitting ... ###
   
-  #pdf(file = paste(c("FBGA_files/outputPlots/", arxn, ".pdf"), collapse = ""), width = 20, height = 20)
-  
-  
   shiny_flux_data[[arxn]]$reactionInfo <- reaction_info_FBGA(rxnName) # Reaction information
   
   shiny_flux_data[[arxn]]$plotChoices$Likelihood <- likViolin(par_likelihood, run_summary$markov_pars) # Log-likelihoods of each markov chain
@@ -538,15 +536,160 @@ for(arxn in reactionInfo$rMech){
     shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, hypoMetTrend(run_rxn, metSVD, tab_boer))
   }
   
-  #print(param_compare(run_rxn, par_markov_chain, par_likelihood))
-  
-  #elastPlots <- calcElast(run_rxn, par_markov_chain, par_likelihood)
-  #print(elastPlots$elast)
-  #print(elastPlots$occ) 
-
-  #dev.off()
   
 }
+
+
+function(){
+  
+  ### Generate plots which combine both MCMC parameter estimates and experimental data ###
+  
+  require(data.table)
+  require(ggplot2)
+  
+  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "top", 
+  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
+  axis.text = element_text(color = "black"), strip.background = element_rect(fill = "cornsilk1"), strip.text = element_text(color = "darkblue"))
+  
+  
+  
+  output_plots <- list()
+  
+  ### Define and align experimental data ###
+  
+  n_c <- nrow(run_rxn$metabolites)
+  
+  flux <- run_rxn$flux
+  met_abund <- run_rxn$metabolites
+  enzyme_abund <- run_rxn$enzymes
+  
+  mle_pars <- par_markov_chain[which.max(par_likelihood$likelihood),]
+  
+  if('t_metX' %in% run_rxn$kineticPars$modelName){
+  
+    ### hypothetical metabolite overwriten with value from PCs ###
+    releventPCs <- metSVD$v[rownames(metSVD$v) %in% rownames(met_abund),]
+    npc <- ncol(releventPCs)
+  
+    if(npc != sum(run_rxn$kineticParPrior$SpeciesType == "PCL")){
+      print(paste("Inconsistent number of principal components for rx", arxn, "likely version problem -> rerun parameter sets"))
+      return(NA)
+      }
+    
+    met_abund$t_metX <- t(mle_pars[run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs))
+    
+  }
+  
+  dist_pars <- par_markov_chain[,run_rxn$kineticPars$SpeciesType != "PCL"]
+  colnames(dist_pars) <- run_rxn$kineticPars$formulaName[run_rxn$kineticPars$SpeciesType != "PCL"]
+  
+  ### Calculate occupancy ###
+  
+  measured_mets <- met_abund[,colSums(met_abund == 0) != n_c]
+  
+  if("t_metX" %in% colnames(measured_species)){
+    hill_species = matrix(1, ncol = ncol(measured_mets), nrow = nrow(dist_pars))
+    hill_species[,colnames(measured_mets) == "t_metX"] <- 2^dist_pars[,colnames(dist_pars) == "h_allo"]
+    }else{hill_species = 1}
+  
+  measured_met_affinity <- dist_pars[,chmatch(colnames(measured_mets), run_rxn$kineticPars$rel_spec)]
+  
+  names(affinity_dim) <- c("markovSample", "metabolite", "condition")
+  
+  affinity_array <- array(data = NA, dim = c(nrow(dist_pars), n_c, ncol(measured_met_affinity)))
+  dimnames(affinity_array) <- list(markovSample = c(1:nrow(dist_pars)), condition = rownames(measured_mets), metabolite = run_rxn$kineticPars$formatted[chmatch(colnames(measured_met_affinity), run_rxn$kineticPars$formulaName)])
+  
+  for(cond in 1:n_c){
+    
+    # ([S]/(km + [S])^h
+    affinity_array[,cond,] <- ((rep(1, nrow(measured_met_affinity)) %*% 2^measured_mets[cond,])/((rep(1, nrow(measured_met_affinity)) %*% 2^measured_mets[cond,]) + 2^measured_met_affinity))^hill_species
+    
+    }
+  
+  affinity_array_melt <- melt(affinity_array)
+  
+  output_plots$"Metabolite Occupancy" <- ggplot(affinity_array_melt, aes(x = condition, y = value, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ metabolite, scales = "free_y") + geom_boxplot(outlier.colour = "darkgoldenrod", outlier.size = 1) + boxplot_theme +
+    scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
+    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ group("[",frac("[M]", "M" + K[M]),"]")^"h"))
+  
+  
+  
+  
+  
+  apply(dist_pars, 1, function(pars){
+    
+    dist_par_stack <- rep(1, n_c) %*% t(2^(pars))
+    
+    occupancy_vals <- data.frame(met_abund, dist_par_stack)
+    
+    predOcc <- model.matrix(run_rxn$occupancyEq[["l_occupancyEq"]], data = occupancy_vals)[,1]
+    enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund
+    
+    flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
+    
+    # determine the sd of the fitted measures
+    
+    nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+    
+    all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
+    
+    # partial derivatives of each measured specie in a condition
+    
+    comp_partials <- matrix(NA, nrow = n_c, ncol = length(run_rxn$occupancyEq$kinetic_form_partials))
+    colnames(comp_partials) <- names(run_rxn$occupancyEq$kinetic_form_partials)
+    
+    for(j in 1:ncol(comp_partials)){
+      comp_partials[,j] <- with(all_components ,eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
+    }
+    
+    measured_spec <- all_components[,colnames(all_components) %in% colnames(comp_partials)]
+    measured_spec <- measured_spec[,chmatch(colnames(measured_spec), colnames(comp_partials))]
+    
+    
+    
+    met_abund
+    
+    
+    
+    }
+  
+  
+  
+  
+  
+  
+  # point estimate of flux(M, E, par)
+  
+  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
+  
+  # determine the sd of the fitted measures
+  
+  nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+  
+  all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
+  
+  # partial derivatives of each measured specie in a condition
+  
+  comp_partials <- matrix(NA, nrow = n_c, ncol = length(run_rxn$occupancyEq$kinetic_form_partials))
+  colnames(comp_partials) <- names(run_rxn$occupancyEq$kinetic_form_partials)
+  
+  for(j in 1:ncol(comp_partials)){
+    comp_partials[,j] <- with(all_components ,eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
+  }
+  
+  
+  
+  
+  
+}
+
+
+
+
+
+
+
+
 
 
 # significant or default reaction forms
@@ -559,24 +702,6 @@ for(pw in pathwaySet$display){
 
 # order reactions according to the fit of the best reaction form (currently using DotProduct)
 
-
-lls <- function (pos = 1, pat = "") {
-    dimx <- function(dd) if (is.null(dim(dd)))
-        length(dd)
-    else dim(dd)
-    lll <- ls(pos = pos, pat = pat)
-    cat(formatC("mode", 1, 15), formatC("class", 1, 18), formatC("name",
-        1, max(nchar(lll)) + 1), "size\n-----------------------------------------------------------------\n")
-    if (length(lll) > 0) {
-        for (i in 1:length(lll)) {
-            cat(formatC(eval(parse(t = paste("mode(", lll[i],
-                ")"))), 1, 15), formatC(paste(eval(parse(t = paste("class(",
-                lll[i], ")"))), collapse = " "), 1, 18), formatC(lll[i],
-                1, max(nchar(lll)) + 1), " ", eval(parse(t = paste("dimx(",
-                lll[i], ")"))), "\n")
-        }
-    }
-} 
 
 
 
