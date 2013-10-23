@@ -96,11 +96,12 @@ comp_by_cond$CV_table <- CV_table
 n_c <- length(chemostatInfo[,1])
 
 sampleInfo <- read.table("BulkComposition/sampleInfo.txt", sep = "\t", header = TRUE) ## dry weight from culture
-sampleInfo <- sampleInfo[sapply(sampleInfo$Sample, function(x){c(1:length(sampleInfo[,1]))[conditions$condition %in% x]}),]
+sampleInfo <- sampleInfo[sampleInfo$Sample %in% chemostatInfo$condition,]
 
 chemostatInfo$DWperML = sampleInfo$DryWeight[chmatch(sampleInfo$Sample, chemostatInfo$condition)]/sampleInfo$cultureV[chmatch(sampleInfo$Sample, chemostatInfo$condition)] #mg dry weight per mL of culture
 
 chemostatInfo$DWperCell = chemostatInfo$DWperML * (1/1000) / chemostatInfo$VolFrac_mean * (chemostatInfo$medcellVol * 10^-9) #g dry weight per cell
+
 
 
 ##### For protein and RNA fraction, combine high-quality external experimental data with condition-specific #####
@@ -178,9 +179,8 @@ ggplot(fitted_species, aes(x = DR)) + facet_grid(Specie ~ Limitation, scale = "f
 
 ggsave("LiteratureConsensusComp.pdf", height = 12, width = 12)
 
+
 ## Consensus composition measurements added to condition-specific composition ##
-
-
 ## Protein ##
 
 protein_subset <- fitted_species[fitted_species$Specie == "Protein" & fitted_species$Article == "Hackett",]
@@ -197,7 +197,6 @@ aaRelAbunds <- compositionFile[compositionFile$Class == "Amino Acid",]
 aaWeightFrac <- (aaRelAbunds$weightPerUn*-1)/sum(aaRelAbunds$weightPerUn*-1)
 
 comp_by_cond$moles_per_cell[compositionFile$Class == "Amino Acid",] <- t(t(t((protein_subset$Fitted_Fraction/100 * chemostatInfo$DWperCell))) %*% t(aaWeightFrac/aaRelAbunds$MW))
-
 
 ## RNA ##
 
@@ -251,8 +250,7 @@ CV_table[,"polyphosphate flux" := sqrt(polyphosphateFrac$assayVariance)/polyphos
 comp_by_cond$moles_per_cell[compositionFile$MetName == "polyphosphate",] <- t(t(t((polyphosphateFrac$fraction * chemostatInfo$DWperCell))) %*% t(1/compositionFile$MW[compositionFile$MetName == "polyphosphate"]))
 
 
-##### Total DNA #####
-
+## Total DNA ##
 ## genome size + genome size * fraction of cells not in G1 # from Brauer
 
 buddingFrac = 0.936 - 1.971*chemostatInfo$actualDR #brauer 2008 relationship between unbudded fraction and growth rate
@@ -262,6 +260,23 @@ avogadros = 6.02214e23
  
 comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dATP", "dTTP"),] <- rbind((genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac)), (genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac)))
 comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dGTP", "dCTP"),] <- rbind((genomeLength * GContent / avogadros)*(1+(1-buddingFrac)), (genomeLength * GContent / avogadros)*(1+(1-buddingFrac)))
+
+
+## Fatty acid content ##
+## Absolute quantification for each of 4 fatty acids C16:0,1 & C18:0,1 ##
+
+FAFrac <- read.table('Lipids/FAabsoluteQuant.tsv', sep = "\t", header = T)
+
+for(FA in compositionFile[compositionFile$Class == "Fatty Acids",]$MetName){
+  
+  a_FA <- FAFrac[FAFrac$variable == FA,]
+  a_FA <- a_FA[chmatch(chemostatInfo$condition, a_FA$condition),]
+  
+  comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) == FA,] <- t(t(t((a_FA$mean * chemostatInfo$DWperCell))) %*% t(1/compositionFile$MW[compositionFile$MetName == FA]))
+
+  CV_table[,eval(FA) := a_FA$CV]
+  
+  }
 
 
 
@@ -279,7 +294,8 @@ cond_dryweight <- sapply(unique(dry_weight_perCell_DFmelt$Condition), function(x
 weightSummary <- comp_by_cond$grams_per_cell[rowSums(!is.na(comp_by_cond$grams_per_cell)) != 0,]; weightSummary[is.nan(weightSummary)] <- NA
 weightSummary <- weightSummary * 10^12 #convert from moles to pmoles
 summaryInfo <- compositionFile[rowSums(!is.na(comp_by_cond$grams_per_cell)) != 0,]
-weightSummary <- rbind(weightSummary, cond_dryweight - colSums(weightSummary, na.rm = TRUE))
+
+weightSummary <- rbind(weightSummary, sapply(cond_dryweight - colSums(weightSummary, na.rm = TRUE), function(x){max(x, 0)})) # determine residual dry weight by subtracting measured components
 rownames(weightSummary)[length(weightSummary[,1])] <- "Residual"
 summaryInfo <- summaryInfo[,colnames(summaryInfo) %in% c("MetName", "Class", "Abbreviated")]
 summaryInfo <- rbind(summaryInfo, c("Residual", "Residual dry weight", "Residual"))
@@ -297,10 +313,6 @@ for(i in unique(weightAndSum$Class)){
 weightStackDF <- melt(weightAndSum)
 colnames(weightStackDF)[4:5] <- c("Condition", "Abundance")
 
-
-barplot_theme <- theme(text = element_text(size = 60, face = "bold"), title = element_text(size = 50, face = "bold"), panel.background = element_blank(), legend.position = "top", 
-  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text = element_text(size = 30, color = "black"), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line"),
-  strip.background = element_rect(fill = "darkgoldenrod1"), panel.margin = unit(2, "lines")) 
 
 weightStackDF$fraction <- sapply(1:length(weightStackDF[,1]), function(x){
   weightStackDF$Abundance[x]/sum(weightStackDF$Abundance[weightStackDF$Condition == weightStackDF$Condition[x]], na.rm = TRUE)
@@ -325,6 +337,8 @@ class_sum_melt$SE[class_sum_melt$Class == "Carbohydrates"] <- CV_table$"sugar po
 class_sum_melt$SE[class_sum_melt$Class == "Glycerol"] <- CV_table$"glycerol washout"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_melt$SE[class_sum_melt$Class == "Nucleic Acid"] <- CV_table$"NTP flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_melt$SE[class_sum_melt$Class == "Polyphosphates"] <- CV_table$"polyphosphate flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_melt$SE[class_sum_melt$Class == "Fatty Acids"] <- apply(CV_table[,compositionFile[compositionFile$Class == "Fatty Acids",]$MetName,with = F], 1, mean)[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Fatty Acids"]), CV_table$condition)]
+
 class_sum_melt <- class_sum_melt[!is.na(class_sum_melt$SE),]
 class_sum_melt$lb <- class_sum_melt$cumsum - class_sum_melt$SE*class_sum_melt$Abundance
 class_sum_melt$ub <- class_sum_melt$cumsum + class_sum_melt$SE*class_sum_melt$Abundance
@@ -345,6 +359,8 @@ class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Carbohydrates"] <- 
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Glycerol"] <- CV_table$"glycerol washout"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Nucleic Acid"] <- CV_table$"NTP flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Polyphosphates"] <- CV_table$"polyphosphate flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
+class_sum_melt$SE[class_sum_melt$Class == "Fatty Acids"] <- apply(CV_table[,compositionFile[compositionFile$Class == "Fatty Acids",]$MetName,with = F], 1, mean)[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Fatty Acids"]), CV_table$condition)]
+
 class_sum_fraction_melt <- class_sum_fraction_melt[!is.na(class_sum_fraction_melt$SE),]
 class_sum_fraction_melt$lb <- class_sum_fraction_melt$cumsum - class_sum_fraction_melt$SE*class_sum_fraction_melt$Abundance
 class_sum_fraction_melt$ub <- class_sum_fraction_melt$cumsum + class_sum_fraction_melt$SE*class_sum_fraction_melt$Abundance
@@ -354,26 +370,28 @@ class_sum_fraction_melt$ubnonstack <- class_sum_fraction_melt$Abundance + class_
 class_sum_fraction_melt$Limitation <- toupper(sapply(as.character(class_sum_fraction_melt$Condition), function(x){strsplit(x, split = '')[[1]][1]}))
 class_sum_fraction_melt$DR <- sapply(as.character(class_sum_fraction_melt$Condition), function(x){paste(strsplit(x, split = '')[[1]][-1], collapse = "")})
 
-#levels(class_sum_fraction_melt$Class)[levels(class_sum_fraction_melt$Class) == "Lipid-related"] <- "Glycerol"
-#levels(class_sum_melt$Class)[levels(class_sum_melt$Class) == "Lipid-related"] <- "Glycerol"
-#levels(weightStackDF$Class)[levels(weightStackDF$Class) == "Lipid-related"] <- "Glycerol"
 
 
 #plot condition specific composition from experimental measurements
 
+barplot_theme <- theme(text = element_text(size = 40, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_blank(), legend.position = "top", 
+                       panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text = element_text(size = 30, color = "black"), 
+                       axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line"),
+                       strip.background = element_rect(fill = "darkgoldenrod1"), panel.margin = unit(2, "lines")) 
+
 cbPalette <- c("#56B4E9", "#D55E00", "#E69F00", "#009E73", "#F0E442", "#999999", "#CC79A7")
 
-ggplot() + geom_bar(data = weightStackDF, aes(y = Abundance, x = DR, fill = factor(Class)), colour = "black", stat = "identity") + scale_y_continuous("pg per cell +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette) +
+ggplot() + geom_bar(data = weightStackDF, aes(y = Abundance, x = DR, fill = factor(Class)), colour = "black", stat = "identity") + scale_y_continuous("pg per cell +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette, guide = guide_legend(nrow = 2)) +
   geom_errorbar(data = class_sum_melt, aes(x = DR, ymin = lb, ymax = ub), color = "WHITE") + barplot_theme + facet_grid(~ Limitation) + ggtitle("Total macromolecules and composition greatly varies across growth conditions")
 ggsave(file = "condition_composition.pdf", height = 12, width = 20)
 
 
-ggplot() + geom_bar(data = weightStackDF, aes(y = fraction, x = DR, fill = factor(Class)), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette) +
+ggplot() + geom_bar(data = weightStackDF, aes(y = fraction, x = DR, fill = factor(Class)), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette, guide = guide_legend(nrow = 2)) +
   geom_errorbar(data = class_sum_fraction_melt, aes(x = DR, ymin = lbnonstack, ymax = ubnonstack), color = "black") + barplot_theme + facet_grid(Class ~ Limitation, scale = "free") + ggtitle("Relative abundance of macromolecules varies across growth conditions")
 ggsave(file = "facet_composition.pdf", height = 32, width = 20)
 
 
-ggplot() + geom_bar(data = weightStackDF[!is.na(weightStackDF$Abundance),], aes(y = fraction, x = DR, fill = factor(Class), position = "fill"), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette) +
+ggplot() + geom_bar(data = weightStackDF[!is.na(weightStackDF$Abundance),], aes(y = fraction, x = DR, fill = factor(Class), position = "fill"), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette, guide = guide_legend(nrow = 2)) +
   geom_errorbar(data = class_sum_fraction_melt, aes(x = DR, ymin = lb, ymax = ub), color = "white") + barplot_theme + facet_grid( ~ Limitation, scale = "free") + ggtitle("Fractional composition of macromolecules varies across growth conditions")
 ggsave(file = "fractional_composition.pdf", height = 12, width = 20)
 
@@ -550,7 +568,7 @@ barplot_theme <- theme(text = element_text(size = 23, face = "bold"), title = el
   panel.grid.minor = element_blank(), panel.grid.major = element_blank(), legend.key.width = unit(3, "line"), axis.text.x = element_text(angle = 90), strip.background = element_rect(fill = "darkgoldenrod1"))
 
 
-class_comp_plot <- ggplot(jointCompSummary, aes(y = density, x = type, fill = factor(specie))) + barplot_theme + facet_grid(Limitation ~ DR, scales = "free_y") + scale_fill_discrete(name = "Class", guide = guide_legend(nrow = 3))
+class_comp_plot <- ggplot(jointCompSummary, aes(y = density, x = type, fill = factor(specie))) + barplot_theme + facet_grid(Limitation ~ DR, scales = "free_y") + scale_fill_discrete(name = "Class", guide = guide_legend(nrow = 4))
 class_comp_plot + geom_bar(colour = "black", stat = "identity") + scale_y_continuous("Density (g/L)", expand = c(0.1, 0.1)) + scale_x_discrete("Type")
 ggsave("speciesUtilization.pdf", height = 20, width = 14)
 
@@ -569,6 +587,9 @@ compositionFile_Extended$varCategory[grep('Sulfate', compositionFile_Extended$Me
 compositionFile_Extended$varCategory[grep('Maintenance ATP hydrolysis', compositionFile_Extended$Class)] <- "Maintenance ATP hydrolysis"
 compositionFile_Extended$varCategory[compositionFile_Extended$MetName == "glycerol"] <- "glycerol washout"
 compositionFile_Extended$varCategory[compositionFile_Extended$MetName == "polyphosphate"] <- "polyphosphate flux"
+compositionFile_Extended$varCategory[compositionFile_Extended$Class == "Fatty Acids"] <- compositionFile_Extended$MetName[compositionFile_Extended$Class == "Fatty Acids"]
+
+compositionFile_Extended$FluxType <- ifelse(compositionFile_Extended$Class == "Fatty Acids", "Internal", "Boundary")
 
 ### Final output -> FBA_run ####
 
