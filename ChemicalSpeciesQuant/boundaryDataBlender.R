@@ -8,6 +8,9 @@ library(gplots)
 library(reshape2)
 library(data.table)
 
+scatter_facet_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), 
+      legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 0.5), axis.text.x = element_text(angle = 90),
+      strip.background = element_rect(fill = "cadetblue2")) 
 
 ### Default composition function ####
 
@@ -99,16 +102,19 @@ chemostatInfo$DWperML = sampleInfo$DryWeight[chmatch(sampleInfo$Sample, chemosta
 
 chemostatInfo$DWperCell = chemostatInfo$DWperML * (1/1000) / chemostatInfo$VolFrac_mean * (chemostatInfo$medcellVol * 10^-9) #g dry weight per cell
 
-##### External experimental composition data #####
+
+##### For protein and RNA fraction, combine high-quality external experimental data with condition-specific #####
+##### measurements (with some under-estimation) #######
 
 # Reference
-external_data <- read.delim("BulkComposition/LiteratureComp.csv", sep = ",")
+external_data <- read.delim("Sample_information/LiteratureComp.csv", sep = ",")
+
 
 # Condition-specific protein fraction
 proteinFrac <- read.table('BulkComposition/Protein_data.txt',sep='\t', header = T)
 proteinFrac <- proteinFrac[chmatch(proteinFrac$condition, comp_by_cond$CV_table$condition),]
 
-protein_summary <- cbind(chemostatInfo[chmatch(proteinFrac$condition, chemostatInfo$condition),c("limitation", "actualDR")], Specie = "Protein", Fraction = proteinFrac$fraction, Article = "Hackett")
+protein_summary <- cbind(chemostatInfo[chmatch(proteinFrac$condition, chemostatInfo$condition),c("condition", "limitation", "actualDR")], Specie = "Protein", Fraction = proteinFrac$fraction, Article = "Hackett")
 colnames(protein_summary) <- colnames(external_data)
 protein_summary$Limitation <- toupper(protein_summary$Limitation)
 protein_summary$Fraction <- protein_summary$Fraction * 100
@@ -119,14 +125,14 @@ RNAFrac = RNA_file[,list(mean = mean(RNAconc/1000), SD = sd(RNAconc/1000, na.rm 
 RNAFrac$mg_per_mL_DRY <- chemostatInfo$DWperML[chmatch(RNAFrac$condition, chemostatInfo$condition)] #mg dry per mL culture
 RNAFrac[,fraction := mean/mg_per_mL_DRY,]
 
-RNA_summary <- cbind(chemostatInfo[chmatch(RNAFrac$condition, chemostatInfo$condition),c("limitation", "actualDR")], Specie = "RNA", Fraction = RNAFrac$fraction, Article = "Hackett")
+RNA_summary <- cbind(chemostatInfo[chmatch(RNAFrac$condition, chemostatInfo$condition),c("condition", "limitation", "actualDR")], Specie = "RNA", Fraction = RNAFrac$fraction, Article = "Hackett")
 colnames(RNA_summary) <- colnames(external_data)
 RNA_summary$Limitation <- toupper(RNA_summary$Limitation)
 RNA_summary$Fraction <- RNA_summary$Fraction * 100
 
 all_prot_RNA_data <- rbind(external_data, protein_summary, RNA_summary)
 
-ggplot(all_prot_RNA_data, aes(x = DR, y = Fraction, color = factor(Article))) + facet_grid(Specie ~ Limitation, scale = "free_y") + geom_point() + expand_limits(y = 0)
+## Use regression to find a consistent estimate of % composition treating Lange et al. data as best reference ##
 
 fitted_species <- NULL
 
@@ -162,9 +168,7 @@ for(spec in unique(all_prot_RNA_data$Specie)){
   
 }
 
-scatter_facet_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), 
-      legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 0.5), axis.text.x = element_text(angle = 90),
-      strip.background = element_rect(fill = "cadetblue2")) 
+
 
 ggplot(fitted_species, aes(x = DR)) + facet_grid(Specie ~ Limitation, scale = "free_y") + 
   geom_errorbar(aes(ymax = Fitted_Fraction + 2*Fitted_SE, ymin = Fitted_Fraction - 2*Fitted_SE, color = factor(Article)), size = 1) +
@@ -174,25 +178,50 @@ ggplot(fitted_species, aes(x = DR)) + facet_grid(Specie ~ Limitation, scale = "f
 
 ggsave("LiteratureConsensusComp.pdf", height = 12, width = 12)
 
+## Consensus composition measurements added to condition-specific composition ##
 
 
+## Protein ##
 
+protein_subset <- fitted_species[fitted_species$Specie == "Protein" & fitted_species$Article == "Hackett",]
+protein_subset <- protein_subset[chmatch(chemostatInfo$condition, protein_subset$Condition),]
+protein_subset$DWperCell <- chemostatInfo$DWperCell
 
+if(!(all(protein_subset$Condition == chemostatInfo$condition))){
+ print("Species mismatch") 
+}
 
-##### Protein, carbohydrate and glycerol ######
-## expressed as fraction of dry weight
-
-## protein
-
-proteinFrac <- read.table('BulkComposition/Protein_data.txt',sep='\t', header = T)
-proteinFrac <- proteinFrac[chmatch(proteinFrac$condition, comp_by_cond$CV_table$condition),]
-
-CV_table[,"AA flux" := sqrt(proteinFrac$assayVariance)/proteinFrac$fraction,]
+CV_table[,"AA flux" := protein_subset$Fitted_SE/protein_subset$Fitted_Fraction,]
 
 aaRelAbunds <- compositionFile[compositionFile$Class == "Amino Acid",]
 aaWeightFrac <- (aaRelAbunds$weightPerUn*-1)/sum(aaRelAbunds$weightPerUn*-1)
 
-comp_by_cond$moles_per_cell[compositionFile$Class == "Amino Acid",] <- t(t(t((proteinFrac$fraction * chemostatInfo$DWperCell))) %*% t(aaWeightFrac/aaRelAbunds$MW))
+comp_by_cond$moles_per_cell[compositionFile$Class == "Amino Acid",] <- t(t(t((protein_subset$Fitted_Fraction/100 * chemostatInfo$DWperCell))) %*% t(aaWeightFrac/aaRelAbunds$MW))
+
+
+## RNA ##
+
+RNA_subset <- fitted_species[fitted_species$Specie == "RNA" & fitted_species$Article == "Hackett",]
+chemostatInfo_subset <- chemostatInfo[chemostatInfo$condition %in% RNA_subset$Condition,]
+
+RNA_subset <- RNA_subset[chmatch(chemostatInfo_subset$condition, RNA_subset$Condition),]
+RNA_subset$DWperCell <- chemostatInfo_subset$DWperCell
+
+if(!(all(RNA_subset$Condition == chemostatInfo_subset$condition))){
+ print("Species mismatch") 
+}
+
+CV_table[chmatch(RNA_subset$Condition, CV_table$condition), "NTP flux" := RNA_subset$Fitted_SE/RNA_subset$Fitted_Fraction]
+
+rnaRelAbunds <- compositionFile[compositionFile$MetName %in% c("ATP", "UTP", "CTP", "GTP"),]
+rnaWeightFrac <- (rnaRelAbunds$weightPerUn*-1)/sum(rnaRelAbunds$weightPerUn*-1)
+
+comp_by_cond$moles_per_cell[compositionFile$MetName %in% c("ATP", "UTP", "CTP", "GTP"), chmatch(RNA_subset$Condition, CV_table$condition)] <-
+  t(t(t((RNA_subset$Fitted_Fraction/100 * chemostatInfo_subset$DWperCell))) %*% t(rnaWeightFrac/rnaRelAbunds$MW))
+
+##### Stand-alone abundance of fatty-acids, carbohydrate and glycerol ######
+## expressed as fraction of dry weight
+
 
 ## carbohydrate
 
@@ -222,24 +251,6 @@ CV_table[,"polyphosphate flux" := sqrt(polyphosphateFrac$assayVariance)/polyphos
 comp_by_cond$moles_per_cell[compositionFile$MetName == "polyphosphate",] <- t(t(t((polyphosphateFrac$fraction * chemostatInfo$DWperCell))) %*% t(1/compositionFile$MW[compositionFile$MetName == "polyphosphate"]))
 
 
-
-##### Total RNA ######
-
-RNA_file <- data.table(read.delim("BulkComposition/RNA_abundance/RNAabund.csv", sep = ",", header = TRUE))
-
-RNAFrac = RNA_file[,list(mean = mean(RNAconc), SD = sd(RNAconc, na.rm = T)/sqrt(length(RNAconc))), by = "condition"]
-RNAFrac$Frac = RNAFrac$mean / chemostatInfo$VolFrac_mean[chmatch(RNAFrac$condition, chemostatInfo$condition)]
-
-RNAconc <- sapply(chemostatInfo$condition, function(x){mean(RNA_file$RNAconc[RNA_file$condition == x])})
-
-RNAcv <- sapply(chemostatInfo$condition, function(x){sd(RNA_file$RNAconc[RNA_file$condition == x])/mean(RNA_file$RNAconc[RNA_file$condition == x])})
-CV_table[,"NTP flux" := median(RNAcv[!is.na(RNAcv)]),]
-
-RNA_peruLcellVol <- RNAconc/chemostatInfo$VolFrac_mean #numerator is ug of RNA per mL of culture, denominator is uL of cells per mL of culture
-totalRNApercell <- RNA_peruLcellVol * (chemostatInfo$medcellVol * 10^-15) # moles per cell
-RNAdefaultcomp <- compositionFile[compositionFile$MetName %in% c("ATP", "UTP", "CTP", "GTP"),]
-comp_by_cond$moles_per_cell[compositionFile$MetName %in% c("ATP", "UTP", "CTP", "GTP"),] <- t(t(RNAdefaultcomp$weightPerUn/sum(RNAdefaultcomp$weightPerUn)/RNAdefaultcomp$MW)) %*% t(totalRNApercell)
-
 ##### Total DNA #####
 
 ## genome size + genome size * fraction of cells not in G1 # from Brauer
@@ -251,6 +262,8 @@ avogadros = 6.02214e23
  
 comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dATP", "dTTP"),] <- rbind((genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac)), (genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac)))
 comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dGTP", "dCTP"),] <- rbind((genomeLength * GContent / avogadros)*(1+(1-buddingFrac)), (genomeLength * GContent / avogadros)*(1+(1-buddingFrac)))
+
+
 
 ##### Combining observed abundances with total dry weight per cell and inferring contributions of non-measured elements based upon the assumption that they remain in constant proportions ####
 # scaling energy usage by cell weight relative to default weight.
