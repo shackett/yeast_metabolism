@@ -11,9 +11,9 @@ library(data.table)
 
 ### Default composition function ####
 
-compositionFile <- read.csv2("../Yeast_comp.csv", sep = ",", stringsAsFactors = FALSE)
+compositionFile <- read.csv2("../Yeast_comp.csv", sep  = ",", stringsAsFactors = FALSE)
 
-modelMetComp <- read.table("stoiMetsComp.tsv", header = TRUE)
+modelMetComp <- read.delim("../Yeast_genome_scale/flux_cache/stoiMetsComp.tsv", header = TRUE) # This file needs to be generated in FBA_run_full_reco as it includes additional metabolites which supplement the SBML model
 
 compComp <- data.frame(t(sapply(compositionFile$AltName, function(x){
   incorporated <- sub('TP', 'MP', x)
@@ -23,15 +23,17 @@ compComp <- data.frame(t(sapply(compositionFile$AltName, function(x){
   }))) #elemental composition each macromolecule in biomass function
   # for NTPs and dNTPs the relevent stoichiometry for determining the fractional contribution to dry-weight is (d)NMPs
 
-compComp[compComp$name == "(1->3)-beta-D-glucan", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5) #one oxygen shared bc of condensation
-compComp[compComp$name == "glycogen", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5)
-compComp[compComp$name == "mannan", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5)
-compComp[compComp$name == "polyphosphate", colnames(compComp) %in% c("O", "P")] <- c(4, 1)
+compComp[compComp$name == "(1->3)-beta-D-glucan [cytoplasm]", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5) #one oxygen shared bc of condensation
+compComp[compComp$name == "glycogen [cytoplasm]", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5)
+compComp[compComp$name == "mannan [cytoplasm]", colnames(compComp) %in% c("C", "H", "O")] <- c(6, 10, 5)
+compComp[compComp$name == "polyphosphate [cytoplasm]", colnames(compComp) %in% c("O", "P")] <- c(4, 1)
+compComp[compComp$name == "complex sphingolipid [cytoplasm]", colnames(compComp) %in% c("C", "H", "N", "O")] <- c(16, 35, 1, 2)  # this is primarily a begnign standin so the MW is not zero resulting in conversion problems
+
 compComp[is.na(compComp)] <- 0
 compComp[,-c(1:2)] <- apply(compComp[,-c(1:2)], c(1,2), as.numeric)
 compComp <- compComp[,c(TRUE, TRUE, colSums(compComp[,-c(1:2)]) != 0)]
 
-atomicMasses <- data.frame(element = c("C", "H", "N", "O", "P", "S"), mass = c(12.0107, 1.00794, 14.00674, 15.9994, 30.973761, 32.066))
+atomicMasses <- data.frame(element = c("C", "H", "N", "O", "P", "R", "S"), mass = c(12.0107, 1.00794, 14.00674, 15.9994, 30.973761, 0, 32.066))
 
 compositionFile$MW <- t(t(compComp[,-c(1,2)])) %*% t(t(c(atomicMasses[,2])))
 compositionFile$weightPerUn <- as.numeric(compositionFile$StoiCoef) * compositionFile$MW
@@ -97,6 +99,85 @@ chemostatInfo$DWperML = sampleInfo$DryWeight[chmatch(sampleInfo$Sample, chemosta
 
 chemostatInfo$DWperCell = chemostatInfo$DWperML * (1/1000) / chemostatInfo$VolFrac_mean * (chemostatInfo$medcellVol * 10^-9) #g dry weight per cell
 
+##### External experimental composition data #####
+
+# Reference
+external_data <- read.delim("BulkComposition/LiteratureComp.csv", sep = ",")
+
+# Condition-specific protein fraction
+proteinFrac <- read.table('BulkComposition/Protein_data.txt',sep='\t', header = T)
+proteinFrac <- proteinFrac[chmatch(proteinFrac$condition, comp_by_cond$CV_table$condition),]
+
+protein_summary <- cbind(chemostatInfo[chmatch(proteinFrac$condition, chemostatInfo$condition),c("limitation", "actualDR")], Specie = "Protein", Fraction = proteinFrac$fraction, Article = "Hackett")
+colnames(protein_summary) <- colnames(external_data)
+protein_summary$Limitation <- toupper(protein_summary$Limitation)
+protein_summary$Fraction <- protein_summary$Fraction * 100
+
+# Condition-specific RNA fraction
+RNA_file <- data.table(read.delim("BulkComposition/RNA_abundance/RNAabund.csv", sep = ",", header = TRUE))
+RNAFrac = RNA_file[,list(mean = mean(RNAconc/1000), SD = sd(RNAconc/1000, na.rm = T)/sqrt(length(RNAconc))), by = "condition"] #ug of RNA per mL of culture
+RNAFrac$mg_per_mL_DRY <- chemostatInfo$DWperML[chmatch(RNAFrac$condition, chemostatInfo$condition)] #mg dry per mL culture
+RNAFrac[,fraction := mean/mg_per_mL_DRY,]
+
+RNA_summary <- cbind(chemostatInfo[chmatch(RNAFrac$condition, chemostatInfo$condition),c("limitation", "actualDR")], Specie = "RNA", Fraction = RNAFrac$fraction, Article = "Hackett")
+colnames(RNA_summary) <- colnames(external_data)
+RNA_summary$Limitation <- toupper(RNA_summary$Limitation)
+RNA_summary$Fraction <- RNA_summary$Fraction * 100
+
+all_prot_RNA_data <- rbind(external_data, protein_summary, RNA_summary)
+
+ggplot(all_prot_RNA_data, aes(x = DR, y = Fraction, color = factor(Article))) + facet_grid(Specie ~ Limitation, scale = "free_y") + geom_point() + expand_limits(y = 0)
+
+fitted_species <- NULL
+
+for(spec in unique(all_prot_RNA_data$Specie)){
+  
+  # Contrasts used are:
+  # Limitation (5 levels) + DR (continuous) + Reference (2 - offsets relative to Lange)
+  
+  spec_subset <- all_prot_RNA_data[all_prot_RNA_data$Specie == spec,]
+  
+  limDesign <- cbind(ifelse(spec_subset$Limitation == "C", 1, 0), ifelse(spec_subset$Limitation == "N", 1, 0),
+  ifelse(spec_subset$Limitation == "P", 1, 0), ifelse(spec_subset$Limitation == "L", 1, 0), ifelse(spec_subset$Limitation == "U", 1, 0))
+  colnames(limDesign) <- c("C", "N", "P", "L", "U")
+  
+  studyDesign <- cbind(ifelse(spec_subset$Article == "Schulze 1995", 1, 0), ifelse(spec_subset$Article == "Hackett", 1, 0))
+  colnames(studyDesign) <- c("Schulze offset", "Hackett offset")
+  
+  speciesDesignMat <- as.matrix(cbind(limDesign, DR = spec_subset$DR, studyDesign))
+  
+  speciesRegression <- lm(spec_subset$Fraction ~ speciesDesignMat + 0)
+  
+  # prediction of chemostat abundance, se
+  
+  speciesPredict <- predict.lm(speciesRegression, newdata = as.data.frame(speciesDesignMat), se.fit = T)
+  speciesPredict$fit[spec_subset$Article == "Schulze 1995"] <- speciesPredict$fit[spec_subset$Article == "Schulze 1995"] - speciesRegression$coef[names(speciesRegression$coef) == "speciesDesignMatSchulze offset"]
+  speciesPredict$fit[spec_subset$Article == "Hackett"] <- speciesPredict$fit[spec_subset$Article == "Hackett"] - speciesRegression$coef[names(speciesRegression$coef) == "speciesDesignMatHackett offset"]
+  
+  spec_subset$Fitted_Fraction <- speciesPredict$fit
+  spec_subset$Fitted_SE <- speciesPredict$se
+  
+  fitted_species <- rbind(fitted_species, spec_subset)
+  
+  
+}
+
+scatter_facet_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), 
+      legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 0.5), axis.text.x = element_text(angle = 90),
+      strip.background = element_rect(fill = "cadetblue2")) 
+
+ggplot(fitted_species, aes(x = DR)) + facet_grid(Specie ~ Limitation, scale = "free_y") + 
+  geom_errorbar(aes(ymax = Fitted_Fraction + 2*Fitted_SE, ymin = Fitted_Fraction - 2*Fitted_SE, color = factor(Article)), size = 1) +
+  geom_point(aes(y = Fraction), size = 4, color = "black", shape = 16 ) +
+  geom_point(aes(y = Fraction, color = factor(Article)), size = 3, shape = 16 ) + expand_limits(y = 0) + scatter_facet_theme +
+  ggtitle('RNA and Protein Dry-weight data \n from 3 sources and concensus trends')
+
+ggsave("LiteratureConsensusComp.pdf", height = 12, width = 12)
+
+
+
+
+
 
 ##### Protein, carbohydrate and glycerol ######
 ## expressed as fraction of dry weight
@@ -144,9 +225,13 @@ comp_by_cond$moles_per_cell[compositionFile$MetName == "polyphosphate",] <- t(t(
 
 ##### Total RNA ######
 
-RNA_file <- read.delim("BulkComposition/RNA_abundance/RNAabund.csv", sep = ",", header = TRUE)
+RNA_file <- data.table(read.delim("BulkComposition/RNA_abundance/RNAabund.csv", sep = ",", header = TRUE))
+
+RNAFrac = RNA_file[,list(mean = mean(RNAconc), SD = sd(RNAconc, na.rm = T)/sqrt(length(RNAconc))), by = "condition"]
+RNAFrac$Frac = RNAFrac$mean / chemostatInfo$VolFrac_mean[chmatch(RNAFrac$condition, chemostatInfo$condition)]
 
 RNAconc <- sapply(chemostatInfo$condition, function(x){mean(RNA_file$RNAconc[RNA_file$condition == x])})
+
 RNAcv <- sapply(chemostatInfo$condition, function(x){sd(RNA_file$RNAconc[RNA_file$condition == x])/mean(RNA_file$RNAconc[RNA_file$condition == x])})
 CV_table[,"NTP flux" := median(RNAcv[!is.na(RNAcv)]),]
 
@@ -167,9 +252,8 @@ avogadros = 6.02214e23
 comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dATP", "dTTP"),] <- rbind((genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac)), (genomeLength * (1-GContent) / avogadros)*(1+(1-buddingFrac)))
 comp_by_cond$moles_per_cell[rownames(comp_by_cond$grams_per_cell) %in% c("dGTP", "dCTP"),] <- rbind((genomeLength * GContent / avogadros)*(1+(1-buddingFrac)), (genomeLength * GContent / avogadros)*(1+(1-buddingFrac)))
 
-##### Combining observed abundances with total dry weight per cell and inferring contributions of non-measured elements based upon the assumption that they remain in constant proportions, filling the rest of the dry weight ####
-
-#scaling energy usage by cell weight relative to default weight.
+##### Combining observed abundances with total dry weight per cell and inferring contributions of non-measured elements based upon the assumption that they remain in constant proportions ####
+# scaling energy usage by cell weight relative to default weight.
 
 load('BulkComposition/protSpecQuantOut.Rdata')
 
@@ -200,9 +284,10 @@ for(i in unique(weightAndSum$Class)){
 weightStackDF <- melt(weightAndSum)
 colnames(weightStackDF)[4:5] <- c("Condition", "Abundance")
 
-barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), legend.position = "top", 
-  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line"),
-  strip.background = element_rect(fill = "darkgoldenrod1")) 
+
+barplot_theme <- theme(text = element_text(size = 60, face = "bold"), title = element_text(size = 50, face = "bold"), panel.background = element_blank(), legend.position = "top", 
+  panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text = element_text(size = 30, color = "black"), axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line"),
+  strip.background = element_rect(fill = "darkgoldenrod1"), panel.margin = unit(2, "lines")) 
 
 weightStackDF$fraction <- sapply(1:length(weightStackDF[,1]), function(x){
   weightStackDF$Abundance[x]/sum(weightStackDF$Abundance[weightStackDF$Condition == weightStackDF$Condition[x]], na.rm = TRUE)
@@ -272,7 +357,7 @@ ggsave(file = "condition_composition.pdf", height = 12, width = 20)
 
 ggplot() + geom_bar(data = weightStackDF, aes(y = fraction, x = DR, fill = factor(Class)), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette) +
   geom_errorbar(data = class_sum_fraction_melt, aes(x = DR, ymin = lbnonstack, ymax = ubnonstack), color = "black") + barplot_theme + facet_grid(Class ~ Limitation, scale = "free") + ggtitle("Relative abundance of macromolecules varies across growth conditions")
-ggsave(file = "facet_composition.pdf", height = 18, width = 20)
+ggsave(file = "facet_composition.pdf", height = 32, width = 20)
 
 
 ggplot() + geom_bar(data = weightStackDF[!is.na(weightStackDF$Abundance),], aes(y = fraction, x = DR, fill = factor(Class), position = "fill"), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette) +
@@ -289,8 +374,8 @@ comp_by_cond$moles_per_cell[compositionFile$Class != "Energy Balance",] <- comp_
 # calculate the maintenance flux from dry weight and polymerization costs from molarity
 
 # maintenance flux - relative to DW
-maintFlux <- 0.0001 * colSums(comp_by_cond$grams_per_cell) #1 mmole per gDW/hr
-maintVec <- c(1, -1, -1); names(maintVec) <- c("ATP", "ADP", "phosphate")
+maintFlux <- 0.001 * colSums(comp_by_cond$grams_per_cell) #1 mmole per gDW/hr
+maintVec <- c(1, -1, -1); names(maintVec) <- c("ATP [cytoplasm]", "ADP [cytoplasm]", "phosphate [cytoplasm]")
 
 maintMatrix <- maintVec %*% t(maintFlux/chemostatInfo$actualDR) #divide out the dilution rate so that when culture concentration is multiplied by DR in FBA_run_full_reco.R, this adjustment is canceled leaving flux per hr
 rownames(maintMatrix) <- names(maintVec)
@@ -386,22 +471,22 @@ SPM$maxSD <- mapply(function(x,y){max(x, y)}, x = SPM$phosphateSD, y = SPM$SDcon
 
 # take a consensus SD for p-lim and !p-lim
 
-SPM_out <- data.frame(condition = SPM$condition, specie = "phosphate", change = SPM$phosphateUptake, sd = SPM$maxSD, lb = 0, ub = SPM$ceiling, type = "uptake")
+SPM_out <- data.frame(condition = SPM$condition, specie = "phosphate [extracellular]", change = SPM$phosphateUptake, sd = SPM$maxSD, lb = 0, ub = SPM$ceiling, type = "uptake")
 mediaSummary <- rbind(mediaSummary, SPM_out)
 
 ### NMR data - glucose -> EtOH, Ac, glycerol 
-speciesOfInterest <- data.frame(NMRname = c("Glucose", "Ethanol", "Acetate", "Glycerol"), modelName = c("D-glucose", "ethanol", "acetate", "glycerol"), type = c("uptake", rep("excretion", 3)))
+speciesOfInterest <- data.frame(NMRname = c("Glucose", "Ethanol", "Acetate", "Glycerol"), mediaName = c("D-glucose", NA, NA, NA), modelName = c("D-glucose [extracellular]", "ethanol [extracellular]", "acetate [extracellular]", "glycerol [extracellular]"), type = c("uptake", rep("excretion", 3)))
 
-for(a_specie_n in 1:length(speciesOfInterest[,1])){
+for(a_specie_n in 1:nrow(speciesOfInterest)){
   NMR_data_subset <- NMR[(NMR$peak == speciesOfInterest$NMRname[a_specie_n]) & NMR$condition %in% chemostatInfo$condition,]
   NMR_data_subset$condition <- factor(NMR_data_subset$condition, levels = chemostatInfo$condition)
   NMR_data_subset <- NMR_data_subset[order(NMR_data_subset$condition),]
-  NMR_data_subset$consensusSD <- NMR_data_subset$estimate * median(NMR_data_subset$se/NMR_data_subset$estimate) #take a consensus SD using a fixed CV
-  NMR_data_subset$maxSD <-  mapply(function(x,y){max(x, y)}, x = NMR_data_subset$se, y = NMR_data_subset$consensusSD)
+  NMR_data_subset$consensusSD <- NMR_data_subset$estimate * median(NMR_data_subset$se/NMR_data_subset$estimate, na.rm = T) #take a consensus SD using a fixed CV
+  NMR_data_subset$maxSD <-  mapply(function(x,y){max(x, y, na.rm = T)}, x = NMR_data_subset$se, y = NMR_data_subset$consensusSD)
   
   if(speciesOfInterest$type[a_specie_n] == "uptake"){
     
-    mediaComp <- nutrientFile[nutrientFile$X == speciesOfInterest$modelName[a_specie_n],-1]
+    mediaComp <- nutrientFile[nutrientFile$X == speciesOfInterest$mediaName[a_specie_n],-1]
     upper_bound <- unname(unlist(sapply(as.character(NMR_data_subset$condition), function(x){mediaComp[names(mediaComp) == nutrientFileConv$mediaName[nutrientFileConv$shortName == strsplit(x, '')[[1]][1]]]})))
     NMR_out <- data.frame(condition = NMR_data_subset$condition, specie = speciesOfInterest$modelName[a_specie_n], change = (upper_bound - NMR_data_subset$estimate/1000), sd = NMR_data_subset$maxSD/1000, lb = 0, ub = upper_bound, type = "uptake")
     
@@ -414,9 +499,8 @@ for(a_specie_n in 1:length(speciesOfInterest[,1])){
 mediaSummary <- data.table(mediaSummary)
 
 boundary_ele_comp <- mediaSummary[,modelMetComp[modelMetComp$name == specie,][1,],by = specie]
-boundary_ele_comp[boundary_ele_comp$specie == "D-glucose",]$C <- 6; boundary_ele_comp[boundary_ele_comp$specie == "D-glucose",]$H <- 12; boundary_ele_comp[boundary_ele_comp$specie == "D-glucose",]$O <- 6
 boundary_ele_comp[is.na(boundary_ele_comp)] <- 0
-boundary_ele_comp <- boundary_ele_comp[,-grep('Fe|K|Na|R', colnames(boundary_ele_comp)),with = F]
+boundary_ele_comp <- boundary_ele_comp[,-grep('Fe|K|Na', colnames(boundary_ele_comp)),with = F]
 
 boundary_ele_comp$MW <- rowSums(boundary_ele_comp[,atomicMasses$element,with = F] * rep(1, nrow(boundary_ele_comp)) %*% t(atomicMasses$mass))
 
@@ -467,7 +551,7 @@ compositionFile_Extended$varCategory[compositionFile_Extended$Class == "Amino Ac
 compositionFile_Extended$varCategory[grep('Carbohydrates', compositionFile_Extended$Class)] <- "sugar polymer flux"
 compositionFile_Extended$varCategory[grep('^d[A-Z]TP', compositionFile_Extended$MetName)] <- "dNTP flux"
 compositionFile_Extended$varCategory[grep('^[A-Z]TP', compositionFile_Extended$MetName)] <- "NTP flux"
-compositionFile_Extended$varCategory[grep('Cell Wall Steroids', compositionFile_Extended$Class)] <- "steroid flux"
+compositionFile_Extended$varCategory[grep('Lipids and Steroids', compositionFile_Extended$Class)] <- "lipid and steroid flux"
 compositionFile_Extended$varCategory[grep('Sulfate', compositionFile_Extended$MetName)] <- "sulfate flux"
 compositionFile_Extended$varCategory[grep('Maintenance ATP hydrolysis', compositionFile_Extended$Class)] <- "Maintenance ATP hydrolysis"
 compositionFile_Extended$varCategory[compositionFile_Extended$MetName == "glycerol"] <- "glycerol washout"
