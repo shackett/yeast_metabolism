@@ -1,5 +1,4 @@
-#source("http://bioconductor.org/biocLite.R")
-#biocLite("sva")
+### Absolute and relative quantification of fatty acids across 25 chemostat conditions ####
 
 library(gplots)
 library(ggplot2)
@@ -71,6 +70,8 @@ FAheader[FAheader$sampleClass == "sample",c('Limitation', 'DR', 'mgDry')] <- wel
 
 FAheader$condition <- FAheader$sampleClass
 FAheader$condition[FAheader$sampleClass == "sample"] <- mapply(function(x, y){paste(x, y, sep = "")}, x = FAheader$Limitation[FAheader$sampleClass == "sample"], y = sprintf("%.2f", FAheader$DR[FAheader$sampleClass == "sample"]))
+FAheader$condition[FAheader$condition == "p0.05H1.00"] <- "p0.05H1"
+FAheader$condition[FAheader$condition == "p0.05H2.00"] <- "p0.05H2"
 FAheader$condition <- factor(FAheader$condition, levels = c("blank", "mock", sort(unique(FAheader$condition[FAheader$sampleClass == "sample"]))))
 
 
