@@ -17,7 +17,7 @@ options(stringsAsFactors = FALSE)
 
 # Specify whether growth optimization should be through linear programming (LP) - maximizing biomass given nutrients or 
 # through quadratic programming (QP) - optimally matching experimental boundary fluxes to optimized ones.
-QPorLP <- "QP" # LP and PhPP no longer supported
+QPorLP <- "checkfeas" # LP and PhPP no longer supported
 if(QPorLP == "QP"){
   #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so
   library(gurobi) # QP solver interface
@@ -341,6 +341,22 @@ for(x in 1:length(free_flux)){
   }
 
 
+##  a list of reactions corresponding to a measured fluxes is formed ## 
+
+interalFluxes <- read.delim("companionFiles/internalFluxMatches.csv", sep = ",")
+interal_flux_list <- list()
+
+for(i in c(1:nrow(interalFluxes))[!is.na(interalFluxes$Consumed_species)]){
+  
+  specSubset <- stoiMat[rownames(stoiMat) %in% corrFile$SpeciesID[grep(paste('^', interalFluxes$Consumed_species[i], sep = ""), corrFile$SpeciesName)],]
+  specSubset <- specSubset[,colSums(specSubset < 0) != 0] # all reactions consuming the specie
+  specSubset <- specSubset[,colSums(specSubset > 0) == 0] # remove transport reactions
+  
+  interal_flux_list[[interalFluxes$Measured_specie[i]]] <- data.frame(reactions = colnames(specSubset), coef = colSums(abs(specSubset)), positive = interalFluxes$is_positive[i])
+  }
+for(i in c(1:nrow(interalFluxes))[!is.na(interalFluxes$Measured_reactions)]){
+  interal_flux_list[[interalFluxes$Measured_specie[i]]] <- data.frame(reactions = strsplit(interalFluxes$Measured_reactions[i], split = ",")[[1]], coef = 1, positive = interalFluxes$is_positive[i])
+  }
 
 
 #### Remove reactions which are incompatable with our method - e.g. an invariant biomass function ####
@@ -369,26 +385,22 @@ lipase_reactions <- colnames(HLsubset)[colSums(HLsubset) != 0]
 
 
 
-
-if(QPorLP == "QP"){
-  growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], L1 = NA, L2 = NA)
-  }
-
-flux_vectors <- list()
-
 ######################## Set up the equality and inequality constriants for FBA ################
 
 # remove reactions which are defective 
 S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(aggregate_rxns, lipase_reactions))]
+
 # remove reactions which cannot carry flux - see "Identify reactions that are infeasible"
-if(!file.exists("flux_cache/infeasibleRxnMet.txt")){
+if(file.exists("flux_cache/infeasibleRxnMet.txt") & QPorLP != 'checkfeas'){
   infRxMet <- read.table("flux_cache/infeasibleRxnMet.txt"); colnames(infRxMet) <- "ID"
   infRxMet <- rbind(infRxMet, 'r_0163') # remove several reactions which wont be used and cycle (ADH reverse)
   
   infRxMet$type <- substr(infRxMet$ID, 1, 1)
   
   reversibleRx <- reversibleRx[!(reversibleRx$rx %in% infRxMet$ID[infRxMet$type == "r"]),]
+  metabolites <- metabolites[!(rownames(S_rxns) %in% infRxMet$ID[infRxMet$type == "s"])]
   S_rxns <- S_rxns[!(rownames(S_rxns) %in% infRxMet$ID[infRxMet$type == "s"]), !(colnames(S_rxns) %in% infRxMet$ID[infRxMet$type == "r"])]
+  
   }
 
 
@@ -461,42 +473,12 @@ effluxRxSplit <- data.frame(rxDesignation = c(paste(c(excreted_met$SpeciesName),
 effluxS_split <- cbind(effluxS, effluxS, effluxS)
 colnames(effluxS_split) <- effluxRxSplit$rxDesignation
 
-## Internal fluxes ##
-## Align a measured flux corresponding to the sum of multiple rIDs to an empirical measure ##
-## rIDs are either identified by being pre-specified (Measured_reactions) or involve consumption of a specific specie (Consumed_species)
-
-interalFluxes <- read.delim("companionFiles/internalFluxMatches.csv", sep = ",")
-
-## reactions of interest push flux into pseuo/bookkeeping reactions
-internal_S_pseudomets <- matrix(0, nrow = nrow(interalFluxes), ncol = ncol(stoiMat))
-colnames(internal_S_pseudomets) <- colnames(stoiMat)
-rownames(internal_S_pseudomets) <- paste(interalFluxes$Measured_specie, "usage")
-
-for(i in c(1:nrow(interalFluxes))[!is.na(interalFluxes$Consumed_species)]){
-  
-  #corrFile[grep(paste('^', interalFluxes$Consumed_species[i], sep = ""), corrFile$SpeciesName),]
-  
-  specSubset <- stoiMat[rownames(stoiMat) %in% corrFile$SpeciesID[grep(paste('^', interalFluxes$Consumed_species[i], sep = ""), corrFile$SpeciesName)],]
-  specSubset <- specSubset[,colSums(specSubset < 0) != 0] # all reactions consuming the specie
-  specSubset <- specSubset[,colSums(specSubset > 0) == 0] # remove transport reactions
-  
-  internal_S_pseudomets[i, chmatch(colnames(specSubset), colnames(stoiMat))] <- abs(colSums(specSubset))
-  
-  }
-
-## For reacitons specified by Consumed species
-
-comp_by_cond$compositionFile[comp_by_cond$compositionFile$FluxType == "Internal",]
-
-
-
-
-
 
 
 ## Composition fxn ##
 
 ## generate a conversion matrix between each variance categories components and their indecies ##
+## the stoichiometery will be populated on a by-condition basis ##
 
 biomassS <- matrix(0, ncol = length(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Boundary"])), nrow = length(metabolites))
 
@@ -562,23 +544,76 @@ for(arxn in unique(nutrientRxSplit$reaction)){
 Sinfo <- rbind(Sinfo, bookkeepingRx)
 S <- cbind(S, bookkeepingS)
 
+
+## Add pseudoreactions which track some combination of fluxes ##
+## rIDs are either identified by being pre-specified (Measured_reactions) or involve consumption of a specific specie (Consumed_species)
+
+
+internal_trackingS <- matrix(0, nrow = length(interal_flux_list), ncol = ncol(S))
+colnames(internal_trackingS) <- colnames(S)
+rownames(internal_trackingS) <- paste(names(interal_flux_list), "usage_bookkeeping")
+
+for(i in 1:length(interal_flux_list)){
+  Frxns <- interal_flux_list[[i]]$reactions[interal_flux_list[[i]]$positive]
+  Revrxns <- interal_flux_list[[i]]$reactions[!interal_flux_list[[i]]$positive]
+  matched_reactions <- c(1:nrow(Sinfo))[(Sinfo$reaction %in% Frxns & Sinfo$direction == "F") | Sinfo$reaction %in% Revrxns]
+  
+  internal_trackingS[i,matched_reactions] <- interal_flux_list[[i]]$coef[chmatch(Sinfo$reaction[matched_reactions], interal_flux_list[[i]]$reactions)]
+  
+  }
+
+S <- rbind(S, internal_trackingS)
+
+
+internalRxSplit <- data.frame(rxDesignation = c(paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_offset"), 
+                                                 paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_match_F"),
+                                                 paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_match_R")), 
+                               reaction = rep(paste((unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])),"composition"), times = 3), 
+                               direction = c(rep("F", length(interal_flux_list)*2), rep("R", length(interal_flux_list))))
+
+
+internal_bookkeeping <- matrix(0, nrow = nrow(S), ncol = nrow(internalRxSplit))
+colnames(internal_bookkeeping) <- internalRxSplit$rxDesignation
+
+for(j in 1:ncol(internal_bookkeeping)){
+  internal_bookkeeping[rownames(S) %in% paste(strsplit(internalRxSplit$reaction[j], ' composition')[[1]], "usage_bookkeeping"), j] <- -1
+  }
+
+Sinfo <- rbind(Sinfo, internalRxSplit)
+S <- cbind(S, internal_bookkeeping)
+
+
 ################ F : flux balance ############
 
 Fzero <- rep(0, times = length(S[,1]))
 
+
 ############### Identify reactions that are infeasible by the structure of the S matrix ##########
-if(!file.exists("flux_cache/infeasibleRxnMet.txt")){
+if(!file.exists("flux_cache/infeasibleRxnMet.txt") | QPorLP == 'checkfeas'){
   ## There are compounds that are only formed and never consumed or only consumed but never produced
-  cpdfil_old = rep(T,nrow(S))
-  cpdfil = rep(F,nrow(S))
+  
+  S_tmp <- S # S_tmp needs to have temporary consumption rates filled in
+  S_tmp_blank <- S_tmp[,colnames(S_tmp) %in% names(biomassConv)]
+  for(j in 1:ncol(S_tmp_blank)){
+    biomass_fill <- biomassConv[[colnames(S_tmp_blank)[j]]]$conversion
+    biomass_fill$coef <- treatment_par[[1]]$boundaryFlux[[strsplit(colnames(S_tmp_blank)[j], split = ' comp')[[1]][1]]]$exchange$change
+    S_tmp_blank[biomass_fill$index,j] <- biomass_fill$coef  
+  }
+  
+  S_tmp_blank <- S_tmp_blank *  rep(1, nrow(S_tmp)) %*% t(ifelse(Sinfo$direction[colnames(S_tmp) %in% names(biomassConv)] == "F", 1, -1))
+  
+  S_tmp[,colnames(S_tmp) %in% names(biomassConv)] <- S_tmp_blank
+  
+  cpdfil_old = rep(T,nrow(S_tmp))
+  cpdfil = rep(F,nrow(S_tmp))
   while (any(cpdfil != cpdfil_old)){
     cpdfil_old = cpdfil
-    cpdfil = apply(S,1,function(x){all(x>=0)||all(x<=0)})
-    rxnfil = apply(S[cpdfil,],2,function(x){any(x!=0)})
-    S[,rxnfil]=0
+    cpdfil = apply(S_tmp,1,function(x){all(x>=0)||all(x<=0)}) #metabolites which are only consumed or produced
+    rxnfil = apply(S_tmp[cpdfil,],2,function(x){any(x!=0)}) #reactions involving these metabolites are flagged
+    S_tmp[,rxnfil]=0 #flagged reactions are zeroed
   }
-  rxnfil = apply(S,2,function(x){all(x==0)})
-  infRxnMet = c(rownames(S)[cpdfil],unique(substr(colnames(S)[rxnfil & grepl('^r_',colnames(S))],1,6)))
+  rxnfil = apply(S_tmp,2,function(x){all(x==0)})
+  infRxnMet = c(rownames(S_tmp)[cpdfil],unique(substr(colnames(S_tmp)[rxnfil & grepl('^r_',colnames(S_tmp))],1,6)))
   
   write(infRxnMet,file='flux_cache/infeasibleRxnMet.txt')
 }
@@ -593,6 +628,11 @@ if(!file.exists("flux_cache/infeasibleRxnMet.txt")){
 ####### Quadratic programming to match nutrient uptake/excretion rates and produce biomass #####
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 
+if(QPorLP == "QP"){
+  growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], L1 = NA, L2 = NA)
+  }
+
+flux_vectors <- list()
 
 if(QPorLP == "QP"){
 
