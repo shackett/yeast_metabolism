@@ -1,3 +1,5 @@
+setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
+
 #### Libraries ####
 library(gplots)
 library(ggplot2)
@@ -6,12 +8,12 @@ library(reshape2)
 library(RColorBrewer)
 library(stringr)
 
-#### Options ####
-
-setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
+source("FBA_lib.R")
 
 options(stringsAsFactors = FALSE)
 
+
+#### Options ####
 
 # Specify whether growth optimization should be through linear programming (LP) - maximizing biomass given nutrients or 
 # through quadratic programming (QP) - optimally matching experimental boundary fluxes to optimized ones.
@@ -113,7 +115,6 @@ reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.
 ### add the component contribution dG predictions # used in thermodynamic flux analysis - not for polarizing reaction direction
 ccPred <- read.delim("companionFiles/cc_dG_python.tsv") # generated from votti/vzcode/gen_input_comp_cont.R on github
 reversibleRx[chmatch(ccPred$reaction, reversibleRx$rx), colnames(reversibleRx) %in% c("CCdG", "CCdGsd")] = ccPred[,-1]
-
 
 
 #### Associate rxns with enzyme ascertainment in proteomics s.t. flux can favor measured pathways ####
@@ -317,8 +318,7 @@ for(x in 1:length(excreted)){
 
 ## extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass ##
 
-sinks <- unique(c(comp_by_cond$compositionFile$AltName, colnames(comp_by_cond$biomassExtensionE)[-1]))
-
+sinks <- unique(c(comp_by_cond$compositionFile$AltName[comp_by_cond$compositionFile$FluxType == "Boundary"], colnames(comp_by_cond$biomassExtensionE)[-1]))
 
 resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile, reduceByLength = T)
 
@@ -345,12 +345,22 @@ for(x in 1:length(free_flux)){
 
 #### Remove reactions which are incompatable with our method - e.g. an invariant biomass function ####
 
-#labelz <- c("isa", "protein production", "biomass production", "growth", "lipid production", "IPC synthase")
 labelz <- c("biomass")
 aggregate_rxns <- NULL
 for(l in length(labelz)){
   aggregate_rxns <- union(aggregate_rxns, rxn_search(labelz[l], named_stoi, is_rxn = TRUE, index = TRUE))
 	}
+
+## Remove lipid breakdown reactions ##
+# 1) reactions are annotated as a hydrolase or lipase.  2) reactions produce a fatty acid annotated with the isa fatty acid tag
+
+fatty_acids <- data.frame(name = c("myristate", "palmitate", "palmitoleate", "stearate", "oleate"), tID = NA)
+fatty_acids$tID <- sapply(fatty_acids$name, function(x){unique(corrFile$SpeciesType[grep(paste('^', x, sep = ""), corrFile$SpeciesName)])})
+all_FA <- corrFile$SpeciesID[corrFile$SpeciesType %in% fatty_acids$tID]
+
+HLsubset <- stoiMat[metabolites %in% all_FA, grep('hydrolase|lipase', colnames(named_stoi))]
+lipase_reactions <- colnames(HLsubset)[colSums(HLsubset) != 0]
+
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -365,12 +375,11 @@ if(QPorLP == "QP"){
   }
 
 flux_vectors <- list()
-#save(stoiMat, rxnFile, rxnparFile, corrFile, compFile, metComp, reversibleRx, comp_by_cond, nutrientFile, chemostatInfo, file = "condition_model_setup.Rdata") #save a .Rdata file to generate reaction formulae
 
 ######################## Set up the equality and inequality constriants for FBA ################
 
 # remove reactions which are defective 
-S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(aggregate_rxns))]
+S_rxns = stoiMat[,!(colnames(stoiMat) %in% c(aggregate_rxns, lipase_reactions))]
 # remove reactions which cannot carry flux - see "Identify reactions that are infeasible"
 if(!file.exists("flux_cache/infeasibleRxnMet.txt")){
   infRxMet <- read.table("flux_cache/infeasibleRxnMet.txt"); colnames(infRxMet) <- "ID"
@@ -452,15 +461,50 @@ effluxRxSplit <- data.frame(rxDesignation = c(paste(c(excreted_met$SpeciesName),
 effluxS_split <- cbind(effluxS, effluxS, effluxS)
 colnames(effluxS_split) <- effluxRxSplit$rxDesignation
 
+## Internal fluxes ##
+## Align a measured flux corresponding to the sum of multiple rIDs to an empirical measure ##
+## rIDs are either identified by being pre-specified (Measured_reactions) or involve consumption of a specific specie (Consumed_species)
+
+interalFluxes <- read.delim("companionFiles/internalFluxMatches.csv", sep = ",")
+
+## reactions of interest push flux into pseuo/bookkeeping reactions
+internal_S_pseudomets <- matrix(0, nrow = nrow(interalFluxes), ncol = ncol(stoiMat))
+colnames(internal_S_pseudomets) <- colnames(stoiMat)
+rownames(internal_S_pseudomets) <- paste(interalFluxes$Measured_specie, "usage")
+
+for(i in c(1:nrow(interalFluxes))[!is.na(interalFluxes$Consumed_species)]){
+  
+  #corrFile[grep(paste('^', interalFluxes$Consumed_species[i], sep = ""), corrFile$SpeciesName),]
+  
+  specSubset <- stoiMat[rownames(stoiMat) %in% corrFile$SpeciesID[grep(paste('^', interalFluxes$Consumed_species[i], sep = ""), corrFile$SpeciesName)],]
+  specSubset <- specSubset[,colSums(specSubset < 0) != 0] # all reactions consuming the specie
+  specSubset <- specSubset[,colSums(specSubset > 0) == 0] # remove transport reactions
+  
+  internal_S_pseudomets[i, chmatch(colnames(specSubset), colnames(stoiMat))] <- abs(colSums(specSubset))
+  
+  }
+
+## For reacitons specified by Consumed species
+
+comp_by_cond$compositionFile[comp_by_cond$compositionFile$FluxType == "Internal",]
+
+
+
+
+
+
 
 ## Composition fxn ##
 
 ## generate a conversion matrix between each variance categories components and their indecies ##
 
-biomassS <- matrix(0, ncol = length(unique(comp_by_cond$compositionFile$varCategory)), nrow = length(metabolites))
+biomassS <- matrix(0, ncol = length(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Boundary"])), nrow = length(metabolites))
 
-biomassRxSplit <- data.frame(rxDesignation = c(paste(c(unique(comp_by_cond$compositionFile$varCategory)), "comp_offset"), paste(c(unique(comp_by_cond$compositionFile$varCategory)), "comp_match_F"), paste(c(unique(comp_by_cond$compositionFile$varCategory)), "comp_match_R")), 
-      reaction = rep(paste((unique(comp_by_cond$compositionFile$varCategory)), "composition"), times = 3), direction = c(rep("F", length(biomassS[1,])*2), rep("R", length(biomassS[1,]))))
+biomassRxSplit <- data.frame(rxDesignation = c(paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Boundary"])), "comp_offset"), 
+                                               paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Boundary"])), "comp_match_F"),
+                                               paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Boundary"])), "comp_match_R")), 
+                             reaction = rep(paste((unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Boundary"])),"composition"), times = 3), 
+                             direction = c(rep("F", length(biomassS[1,])*2), rep("R", length(biomassS[1,]))))
 
 biomassConv <- list()
 for(a_rxn in biomassRxSplit$rxDesignation){
