@@ -1,14 +1,8 @@
 ## Current objectives ##
 
-2013-03-13 posted:  
-[x] Determine correspondence between metabolite binding sites for each enzyme with largely measured species  
-[x] Use Jun's C script to generate reaction forms for each enzyme  
-[-] Predict fluxes across experimental conditions  
-[ ] Associate relative metabolite/enzyme abundance with flux using unconstrained affinity parameters  
-[ ] Determine the absolute concentration of metabolites across our 25 chemostat conditions  
-[ ] Associate BRENDA metabolite IDs with metabolic model species ID (t IDs)  
-[ ] Balance organism-specific and organism-independent Km values to determine how strongly to weight organism-independent Km prior  
-[ ] Determine approximate substrate occupancy using Km values plus absolute metabolite abundance - balance likelihood-based fit of predicted flux with prior restraint on kinetic constants  
+2013-10-28 posted:  
+[ ] Finalize flux distribution & FVA
+[ ] Compare optimized affinities to literature.  Compare keq to free energy
 
 ---
 
@@ -19,12 +13,20 @@ Relative or absolute quantification of various crucial species:
 * brauer-microarray: RNA abundance across 36 chemostat conditions
 * FTIR: attempt to measure composition using FTIR
 * BulkComposition: measuring the dry weight and absolute amounts of abundant macromolecules which go into making more yeast
+    * Protein
+    * RNA
+    * Carbohydrates
+    * Polyphosphate
 * Metabolites: Boer relative abundances of metabolites.  Yeast absolute concentration yifan absolute measures of metabolite abundance which need to be associated with Boer data using a paired comparison.
 * Proteomics: Relative abundance of abundant proteins across 25 chemostat conditions. 
 
+**boundaryDataBlender.R**
+
+Integrate composition data
+
 ---
 
-## EcoliYeastMatch ##
+## EcoliYeastMatch (Replaced by direct annotation using component-contribution)##
 
 In order to incorporate thermodynamic information into the yeast flux-balance model, the gibbs free energy's available for ecoli rxns and species must be associated with the corresponding yeast ids.
 This involves converting yeast ChEBI IDs to KEGG ids and then associating these yeast KEGG ids with ecoli KEGG ids
@@ -67,7 +69,7 @@ SBML reconstructions of several organisms from bioModels
 
 ---
 
-## Thermo ##
+## Thermo (No longer used) ##
 
 Prepare the absolute concentrations of metabolites, so that these can be used to modify the reaction free energy
 
@@ -84,7 +86,7 @@ This directory includes files for predicting flux using experimental data (FBA) 
       1. Maximum nutrient uptake rates: Boer_nutrients
       2. Currently using an invariant composition: comp_yeat.tsv
     * Reconstruction:
-      1. What direction do reactions proceed based on thermodynamics.
+      1. What direction do reactions proceed based on reconstruction annotation.
       2. which reactions can carry flux based on auxotrophy information
 * FBA_lib.R: functions which provide more information about a reaction or metabolite and other misc.
 * cytoGrapher.R: This program has two somewhat disparate tasks:
