@@ -10,17 +10,17 @@
 
 ## Standard Workflow ##
 
-* Use boundaryDataBlender.R to construct FBA-boundary fluxes - boundaryFluxes.Rdata
-* Use FBA_run_full_reco.R to run QP-FBA and generate files for FVA
-* Run FVA using the gurobi python interace (qp_fba_clust.py) on a cluster
-* Use FBA_run_full_reco.R to combine QP-estimates and FVA flux bounds for each reaction
+* Use boundaryDataBlender.R to construct FBA-boundary fluxes - boundaryFluxes.Rdata.
+* Use FBA_run_full_reco.R to run QP-FBA and generate files for FVA.
+* Run FVA using the gurobi python interace (qp_fba_clust.py) on a cluster.
+* Use FBA_run_full_reco.R to combine QP-estimates and FVA flux bounds for each reaction.
 
-* run reactionStructures.r to generate reaction-oriented relational information - creating lists of reaction forms and all relevent experimental and bioinformation information
-* match_brenda.R - use scraped brenda files to determine supported regulators and their kinetic properties
+* run reactionStructures.r to generate reaction-oriented relational information - creating lists of reaction forms and all relevent experimental and bioinformation information.
+* match_brenda.R - use scraped brenda files to determine supported regulators and their kinetic properties.
 
-* Run part of FBGA.R to pare lists of reaction forms down to relevant reactions and pass to cluster
-* Determine a posterior distribution of parameter values for each reaction form on the cluster using FluxOptimClus.R - computationally intensive, but highly parallelizable
-* Use FBGA.R to assess the significance of proposed parameteric form alterations, and generate summaries of each reaction's kinetic properties, species and control
+* Run part of FBGA.R to pare lists of reaction forms down to relevant reactions and pass to cluster.
+* Determine a posterior distribution of parameter values for each reaction form on the cluster using FluxOptimClus.R - computationally intensive, but highly parallelizable.
+* Use FBGA.R to assess the significance of proposed parameteric form alterations, and generate summaries of each reaction's kinetic properties, species and control.
 * Interactively comb through reaction summary information laid out in shinyapp in order to search for control principals.
 
 
@@ -127,7 +127,7 @@ This directory includes files for predicting flux using experimental data (FBA) 
     * generated files with km, ki, and activators from S. cerevisiae BRENDA data, as well as an expanded set (all) from all organisms.
 
 
-** companionFiles: Necessary files which are generated using companion scripts **
+**companionFiles: Necessary files which are generated using companion scripts**
 
 * all_activators.tsv, all_ki.tsv, all_km.tsv - activators, inhibitors and substrates/products for reactions - E.C. number to compound name
 * Boer_nutrients.txt - chemostat media formulation
@@ -142,7 +142,7 @@ This directory includes files for predicting flux using experimental data (FBA) 
 * thermoAnnotate.txt - Manual specification of reaction directionality (in a few choice cases)
 * yeast_absolute_concentration_chemo.txt - conversion between relative and absolute concentrations for some metabolites
 
-** flux_cache: These files are generated during the standard analysis pipeline **
+**flux_cache: These files are generated during the standard analysis pipeline**
 
 
 
