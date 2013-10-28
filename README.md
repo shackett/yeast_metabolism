@@ -10,18 +10,21 @@
 
 ## Standard Workflow ##
 
-* Use boundaryDataBlender.R to construct FBA-boundary fluxes - boundaryFluxes.Rdata.
-* Use FBA_run_full_reco.R to run QP-FBA and generate files for FVA.
-* Run FVA using the gurobi python interace (qp_fba_clust.py) on a cluster.
-* Use FBA_run_full_reco.R to combine QP-estimates and FVA flux bounds for each reaction.
+1. Infer fluxes through metabolism
+    * Use boundaryDataBlender.R to construct FBA-boundary fluxes - boundaryFluxes.Rdata.
+    * Use FBA_run_full_reco.R to run QP-FBA and generate files for FVA.
+    * Run FVA using the gurobi python interace (qp_fba_clust.py) on a cluster.
+    * Use FBA_run_full_reco.R to combine QP-estimates and FVA flux bounds for each reaction.
 
-* run reactionStructures.r to generate reaction-oriented relational information - creating lists of reaction forms and all relevent experimental and bioinformation information.
-* match_brenda.R - use scraped brenda files to determine supported regulators and their kinetic properties.
+2. Infer parametric forms for reactions
+    * run reactionStructures.r to generate reaction-oriented relational information - creating lists of reaction forms and all relevent experimental and bioinformation information.
+    * match_brenda.R - use scraped brenda files to determine supported regulators and their kinetic properties.
 
-* Run part of FBGA.R to pare lists of reaction forms down to relevant reactions and pass to cluster.
-* Determine a posterior distribution of parameter values for each reaction form on the cluster using FluxOptimClus.R - computationally intensive, but highly parallelizable.
-* Use FBGA.R to assess the significance of proposed parameteric form alterations, and generate summaries of each reaction's kinetic properties, species and control.
-* Interactively comb through reaction summary information laid out in shinyapp in order to search for control principals.
+3. Evaluate parametric forms using MCMC and visualize results
+    * Run part of FBGA.R to pare lists of reaction forms down to relevant reactions and pass to cluster.
+    * Determine a posterior distribution of parameter values for each reaction form on the cluster using FluxOptimClus.R - computationally intensive, but highly parallelizable.
+    * Use FBGA.R to assess the significance of proposed parameteric form alterations, and generate summaries of each reaction's kinetic properties, species and control.
+    * Interactively comb through reaction summary information laid out in shinyapp in order to search for control principals.
 
 
 ---
