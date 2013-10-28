@@ -1,10 +1,28 @@
 ## Current objectives ##
 
 2013-10-28 posted:
-[x] Establish boundary constraints
-[ ] Finalize flux distribution & FVA
-[ ] Determine posterior distributions
-[ ] Compare optimized affinities to literature.  Compare keq to free energy
+* Establish boundary constraints
+* Finalize flux distribution & FVA
+* Determine posterior distributions
+* Compare optimized affinities to literature.  Compare keq to free energy
+
+---
+
+## Standard Workflow ##
+
+* Use boundaryDataBlender.R to construct FBA-boundary fluxes - boundaryFluxes.Rdata
+* Use FBA_run_full_reco.R to run QP-FBA and generate files for FVA
+* Run FVA using the gurobi python interace (qp_fba_clust.py) on a cluster
+* Use FBA_run_full_reco.R to combine QP-estimates and FVA flux bounds for each reaction
+
+* run reactionStructures.r to generate reaction-oriented relational information - creating lists of reaction forms and all relevent experimental and bioinformation information
+* match_brenda.R - use scraped brenda files to determine supported regulators and their kinetic properties
+
+* Run part of FBGA.R to pare lists of reaction forms down to relevant reactions and pass to cluster
+* Determine a posterior distribution of parameter values for each reaction form on the cluster using FluxOptimClus.R - computationally intensive, but highly parallelizable
+* Use FBGA.R to assess the significance of proposed parameteric form alterations, and generate summaries of each reaction's kinetic properties, species and control
+* Interactively comb through reaction summary information laid out in shinyapp in order to search for control principals.
+
 
 ---
 
@@ -28,6 +46,7 @@ Relative or absolute quantification of various crucial species:
 **boundaryDataBlender.R**
 
 Integrate composition data to establish uptake, excretion and biomass assimilation fluxes (moles/h) per mL intracellular volume.  Establish which species correspond to individual experimental measurements, so that their departures will covary to an extent constrained by the empirical coefficient of variation.
+Generates boundaryFluxes.Rdata
 
 
 ---
@@ -114,7 +133,7 @@ This directory includes files for predicting flux using experimental data (FBA) 
 * Boer_nutrients.txt - chemostat media formulation
 * BoerMetabolites.txt - raw supplemental file from Boer et al. 2010
 * boerMean.tsv, boerSD.tsv, boerCorr.tsv - processed from boer data to yield by-condition point estimates, SD and correlation of residuals.
-* cc_dG_python.tsv - free energies of reaction IDs from [https://github.com/eladnoor/component-contribution][Elad Noor's component-contribution]
+* cc_dG_python.tsv - free energies of reaction IDs from [https://github.com/eladnoor/component-contribution](Elad Noor's component-contribution)
 * Yeast consensus reconstruction information - sbml-generated reaction/metabolite information ...
 * customRxns.txt - custom reactions and metabolites which are not in reconstruction
 * internalFluxMatches.csv - allows the specification of non-boundary fluxes (not currently used)
@@ -123,7 +142,8 @@ This directory includes files for predicting flux using experimental data (FBA) 
 * thermoAnnotate.txt - Manual specification of reaction directionality (in a few choice cases)
 * yeast_absolute_concentration_chemo.txt - conversion between relative and absolute concentrations for some metabolites
 
-**flux_cache**
+** flux_cache: These files are generated during the standard analysis pipeline **
+
 
 
 ---
