@@ -304,7 +304,6 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
-
 ######## Import cluster parameter results #########
 ##@##@ Start here if loading parameter sets ##@##@#
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
@@ -518,8 +517,16 @@ for(arxn in reactionInfo$rMech){
                              dotProduct = sum(flux_fit$fitted_flux$fitted/sqrt(sum((flux_fit$fitted_flux$fitted)^2)) * (run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2/sqrt(sum(((run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2)^2))))
   vector_match$angle <- acos(vector_match$dotProduct) * 180/pi
   
-  fraction_flux_deviation <- rbind(fraction_flux_deviation, vector_match)
+  # Preformance based on fraction of FVA intervals captured by parameteric 95% CI #
+  fluxIntervals <- data.frame(VLB = run_rxn$flux$FVAmin, VUB = run_rxn$flux$FVAmax, PLB = flux_fit$fitted_flux$fitted - 2*flux_fit$fitted_flux$SD, PUB = flux_fit$fitted_flux$fitted + 2*flux_fit$fitted_flux$SD)
+  fluxOverlap <- (mapply(function(VUB, PUB){min(VUB, PUB)}, VUB = fluxIntervals$VUB, PUB = fluxIntervals$PUB) - mapply(function(VLB, PLB){max(VLB, PLB)}, VLB = fluxIntervals$VLB, PLB = fluxIntervals$PLB))/
+    mapply(function(VI, PI){min(VI, PI)}, VI = fluxIntervals$VUB - fluxIntervals$VLB, PI = fluxIntervals$PUB - fluxIntervals$PLB)
+  fluxOverlap[fluxOverlap < 0] <- 0
+  vector_match$"Interval Overlap" <- mean(fluxOverlap)
+  vector_match$"weighted-Intefval Overlap" <- mean(fluxOverlap * var((fluxIntervals$VLB + fluxIntervals$VUB)/2)/(flux_fit$fitted_flux$SD)^2) # Overlap measure weighted by Var across conditions / Var within condition
   
+  
+  fraction_flux_deviation <- rbind(fraction_flux_deviation, vector_match)
   
   ### Generate plots which show reaction information, species variation, flux fitting ... ###
   
@@ -531,9 +538,9 @@ for(arxn in reactionInfo$rMech){
   
   shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, shiny_flux_data[[arxn]]$plotChoices)
   
-  reaction_plots <- reactionProperties()
-  PLdata <- rbind(PLdata, reaction_plots$PL_summary)
-  shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, reaction_plots[!(names(reaction_plots) %in% c("PL_summary"))])
+  #reaction_plots <- reactionProperties()
+  #PLdata <- rbind(PLdata, reaction_plots$PL_summary)
+  #shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, reaction_plots[!(names(reaction_plots) %in% c("PL_summary"))])
   
   
   if("t_metX" %in% run_rxn$kineticPars$modelName){
@@ -573,7 +580,9 @@ print(object.size((shiny_flux_data)), units = "auto")
 
 save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinyData.Rdata")
 
+#### Save parameter estimates for further global analyses ####
 
+save(rxn_fit_params, reactionInfo, file = "flux_cache/paramCI.Rdata")
 
 
 
@@ -593,6 +602,7 @@ rxn_fits
 ######### Compare Km values found through optimization to those from literature ################
 
 all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
+load("flux_cache/paramCI.Rdata")
 
 ### Using 95% confidence intervals for reaction parameters
 rxn_fit_params
@@ -600,4 +610,10 @@ rxn_fit_params
 
 
 ### Use literature mean & SD of Km as a comparison
+
+
+
+
+######## Compare Keq to Gibbs free energy ########
+
 

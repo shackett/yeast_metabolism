@@ -15,12 +15,12 @@ chunkNum = as.numeric(unlist(strsplit(args[grep("chunk", args)], "="))[2])
 
 print(paste("CHUNK NUMBER: ", chunkNum, ", RUN NUMBER: ", runNum, sep = ""))
 
-rurun_summary <- list() #### MCMC run output and formatted inputs
+run_summary <- list() #### MCMC run output and formatted inputs
 
 #markov_pars <- list()
-#markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-#markov_pars$n_samples <- 10000 #how many total markov samples are desired
-#markov_pars$burn_in <- 500 #how many initial samples should be skipped
+#markov_pars$sample_freq <- 50 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+#markov_pars$n_samples <- 200 #how many total markov samples are desired
+#markov_pars$burn_in <- 1000 #how many initial samples should be skipped
 
 markov_pars <- list()
 markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
@@ -240,6 +240,7 @@ for(rxN in 1:length(rxnList_form)){
   
   met_abund[,!kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)]] <- 0 # set missing data (unascertained) to invariant across conditions
   
+  
   # expression combining the log-occupancy equation and scaling of enzyme abundance by activity
   
   KcatEs <- mapply(function(E, Kcat){paste(Kcat, E, sep = " * ")}, E = sapply(all_species$rel_spec[all_species$SpeciesType == "Enzyme"], function(x){paste("2^", x, sep = "")}), Kcat = all_species$formulaName[all_species$SpeciesType == "Enzyme"])
@@ -250,16 +251,29 @@ for(rxN in 1:length(rxnList_form)){
   rxnEquations[["full_kinetic_form_list"]] <- gsub('(I\\()', Kcatpaste, rxnEquations[["full_kinetic_form_list"]])
   rxnEquations[["full_kinetic_form_list"]] <- sub('I\\(', '\\(', rxnEquations[["full_kinetic_form_list"]])
   
+  
+  # save the same expression in linear space, so that it can be used later on to look at elasticitity
+  
+  KcatEs <- mapply(function(E, Kcat){paste(Kcat, E, sep = " * ")}, E = all_species$rel_spec[all_species$SpeciesType == "Enzyme"], Kcat = all_species$formulaName[all_species$SpeciesType == "Enzyme"])
+  KcatExpression <- paste('(', paste(KcatEs, collapse = " + "), ')', sep = "")
+  Kcatpaste <- paste('I(', KcatExpression, ' * ', sep = "")
+  
+  rxnEquations[["elasticity_calc"]] <- rxnEquations[["occupancyEq_list"]]
+  rxnEquations[["elasticity_calc"]] <- gsub('(I\\()', Kcatpaste, rxnEquations[["elasticity_calc"]])
+  rxnEquations[["elasticity_calc"]] <- sub('I\\(', '\\(', rxnEquations[["elasticity_calc"]])
+  
+  
   # find the partial derivatives of the kinetic form for each reaction specie
   eq <- eval(parse(text = paste('expression(',rxnEquations[["full_kinetic_form_list"]],')')))
   
   D_full_kinetic_form <- list()
-  for(spec in c(kineticPars$rel_spec[kineticPars$measured & !is.na(kineticPars$measured)], all_species$rel_spec[all_species$SpeciesType == "Enzyme"])){
+  for(spec in c(kineticPars$rel_spec[(kineticPars$measured & !is.na(kineticPars$measured)) | kineticPars$modelName == "t_metX" & !is.na(kineticPars$modelName)], all_species$rel_spec[all_species$SpeciesType == "Enzyme"])){
     D_full_kinetic_form[[spec]] <- D(eq, spec)
   }
   rxnEquations[["kinetic_form_partials"]] <- D_full_kinetic_form
+  D_full_kinetic_form <- D_full_kinetic_form[names(D_full_kinetic_form) %in% c(kineticPars$rel_spec[(kineticPars$measured & !is.na(kineticPars$measured))], all_species$rel_spec[all_species$SpeciesType == "Enzyme"])] # remove un-measured species, as these will have no variance
   
-  
+ 
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0])) #flux, scaled to a prettier range
   
   # If FVA min flux is greater than max flux, switch them (and print a warning).
