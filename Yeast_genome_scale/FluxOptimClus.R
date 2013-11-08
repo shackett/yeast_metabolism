@@ -257,7 +257,7 @@ for(rxN in 1:length(rxnList_form)){
   for(spec in c(kineticPars$rel_spec[kineticPars$measured & !is.na(kineticPars$measured)], all_species$rel_spec[all_species$SpeciesType == "Enzyme"])){
     D_full_kinetic_form[[spec]] <- D(eq, spec)
   }
-  
+  rxnEquations[["kinetic_form_partials"]] <- D_full_kinetic_form
   
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0])) #flux, scaled to a prettier range
