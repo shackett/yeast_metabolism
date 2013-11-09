@@ -318,6 +318,7 @@ convert_to_elemental <- function(redStoi, modelMetComp){
   specieEle <- specieEle[,c(TRUE, TRUE, colSums(specieEle[,-c(1:2)]) != 0)]
   
   atomicMasses <- data.frame(element = c("C", "H", "N", "O", "P", "R", "S"), mass = c(12.0107, 1.00794, 14.00674, 15.9994, 30.973761, 0, 32.066))
+  atomicMasses <- atomicMasses[atomicMasses$element %in% colnames(specieEle[,-c(1,2)]),]
   
   if(all(atomicMasses$element == colnames(specieEle[,-c(1,2)]))){
     specieEle$MW <- t(t(specieEle[,-c(1,2)])) %*% t(t(c(atomicMasses[,2])))
@@ -953,13 +954,13 @@ cond_order_check <- function(query){
   # determine how to align a vector query sequence to match the standard naming in the reference -> first capitalize all letters and match numbers
   
   reference <- data.frame(standard = c("P", "C", "N", "L", "U"), boer = c("PO4", "GLU", "NH4", "LEU", "URA"))
-  reference$standard <- factor(met_cond_match$standard)
+  reference$standard <- factor(reference$standard)
 
   condSummary <- data.frame(name = query, index = 1:length(query), limitation = regmatches(query, regexpr('^[A-Za-z]', query)), DR = regmatches(query, regexpr('[0-9.]{3,4}', query)))
   condSummary$limitation <- factor(toupper(condSummary$limitation), levels = reference$standard)
   condSummary$DR <- sprintf("%.2f", as.numeric(condSummary$DR))
   
-  if(!all(met_cond_match$limitation %in% met_cond_match$standard)){
+  if(!all(reference$limitation %in% reference$standard)){
     return(print("limtation names are invalid"))
   }else{
     resort <- arrange(condSummary, limitation, DR)
@@ -1221,8 +1222,18 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   n_c <- nrow(run_rxn$metabolites )
   
   # predict flux based upon parameter sets to determine how much variance in flux can be accounted for using the prediction
+  param_summary <- list()
+  
   param_interval <- 2^(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
   param_interval <- data.frame(cbind(t(param_interval), median = 2^(apply(par_markov_chain, 2, median)), MLE = 2^(par_markov_chain[which.max(par_likelihood$likelihood),])))
+  param_interval$absoluteQuant <- ifelse(rownames(param_interval) %in% names(run_rxn$rxnSummary$originMet)[run_rxn$rxnSummary$originMet == "abs"], T, F)
+  # store logQ in the keq absolute quant position - meaningful in relation to keq
+  param_interval$absoluteQuant[rownames(param_interval) == "keq"] <- as.character((run_rxn$kineticParPrior$par_2[run_rxn$kineticParPrior$SpeciesType == "keq"] + run_rxn$kineticParPrior$par_1[run_rxn$kineticParPrior$SpeciesType == "keq"])/2)
+  param_summary$param_interval <- param_interval
+  
+  param_summary$param_species <- run_rxn$rxnSummary$rxnFormData
+  median_species_abund <- apply(run_rxn$metabolites, 2, median)
+  param_summary$param_species$medianAbund <- median_species_abund[chmatch(param_summary$param_species$SubstrateID, names(median_species_abund))]
   
   ### Reproduce the flux and sd(flux) of the most likely parameter set ###
   
@@ -1344,7 +1355,7 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   output <- list()
   output$fit_summary <- fit_summary
-  output$param_interval <- param_interval
+  output$param_interval <- param_summary
   output$fitted_flux <- data.frame(fitted = flux_fit$fitted, SD = flux_SD)
   output
 }

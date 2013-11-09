@@ -501,16 +501,12 @@ for(arxn in reactionInfo$rMech){
   } #skip underparameterized reactions - those with essentially no variation
   
   
-  
-  
   ### Determine how closely fluxes predicted from a parametric form match fluxes determined via constraint based modeling ###
   
   flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
   rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
   rxn_fit_params[[arxn]] <- flux_fit$param_interval
-  rxn_fit_params[[arxn]]$absoluteQuant <- ifelse(rownames(rxn_fit_params[[arxn]]) %in% names(run_rxn$rxnSummary$originMet)[run_rxn$rxnSummary$originMet == "abs"], T, F)
     
-  
   ### Take the fractional flux departure and dot-product between FBA and parametric vector
   
   vector_match <- data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux$fitted - (run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2))/sum(abs(run_rxn$flux)),
@@ -523,7 +519,7 @@ for(arxn in reactionInfo$rMech){
     mapply(function(VI, PI){min(VI, PI)}, VI = fluxIntervals$VUB - fluxIntervals$VLB, PI = fluxIntervals$PUB - fluxIntervals$PLB)
   fluxOverlap[fluxOverlap < 0] <- 0
   vector_match$"Interval Overlap" <- mean(fluxOverlap)
-  vector_match$"weighted-Intefval Overlap" <- mean(fluxOverlap * var((fluxIntervals$VLB + fluxIntervals$VUB)/2)/(flux_fit$fitted_flux$SD)^2) # Overlap measure weighted by Var across conditions / Var within condition
+  vector_match$"weighted-Interval Overlap" <- mean(fluxOverlap * var((fluxIntervals$VLB + fluxIntervals$VUB)/2)/(flux_fit$fitted_flux$SD)^2) # Overlap measure weighted by Var across conditions / Var within condition
   
   
   fraction_flux_deviation <- rbind(fraction_flux_deviation, vector_match)
@@ -546,18 +542,8 @@ for(arxn in reactionInfo$rMech){
   if("t_metX" %in% run_rxn$kineticPars$modelName){
     shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, hypoMetTrend(run_rxn, metSVD, tab_boer))
   }
-  
-  
+   
 }
-
-
-
-
-
-
-
-
-
 
 
 
@@ -582,7 +568,7 @@ save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, reactionInfo, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, file = "flux_cache/paramCI.Rdata")
 
 
 
@@ -597,23 +583,191 @@ fraction_flux_deviation
 rxn_fits
 
 
+##### Systems level comparison of optimized and external parameter values #####
 
+load("flux_cache/paramCI.Rdata")
+load("flux_cache/reconstructionWithCustom.Rdata")
 
 ######### Compare Km values found through optimization to those from literature ################
 
 all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
-load("flux_cache/paramCI.Rdata")
+all_affinities <- all_affinities[!is.na(all_affinities$log10mean),]
+
+all_affinities <- all_affinities[unname(unique(unlist(sapply(unique(reactionInfo$reaction), function(x){grep(x, all_affinities$reactions)})))),] #only looking at reactions of interest
+
 
 ### Using 95% confidence intervals for reaction parameters
-rxn_fit_params
+yeast_only <- F
 
+affinity_comparisons <- NULL
+
+for(rxn in names(rxn_fit_params)){
+  
+  rxData <- data.frame(rxn = reactionInfo$reaction[reactionInfo$rMech == rxn], rxnForm = rxn, 
+                       specie = rownames(rxn_fit_params[[rxn]]$param_interval[rownames(rxn_fit_params[[rxn]]$param_interval) != "keq",]), rxn_fit_params[[rxn]]$param_interval[rownames(rxn_fit_params[[rxn]]$param_interval) != "keq",], 
+                       lit_mean = NA, lit_SD = NA)
+  rxData <- rxData[grep('^t_', rownames(rxData)),]
+  rxData$absoluteQuant <- as.logical(rxData$absoluteQuant)
+  
+  rxData <- rxData[chmatch(rxn_fit_params[[rxn]]$param_species$SubstrateID, rxData$specie),]
+  rxData$speciesType <- rxn_fit_params[[rxn]]$param_species$Type
+  rxData$speciesSubtype <- rxn_fit_params[[rxn]]$param_species$Subtype
+  rxData$medianAbund <- rxn_fit_params[[rxn]]$param_species$medianAbund
+  
+  # Pass BRENDA data to reaction-from-specific parameter estimates
+  
+  rxAffinities <- all_affinities[grep(reactionInfo$reaction[reactionInfo$rMech == rxn], all_affinities$reactions),]
+  
+  for(a_spec_n in c(1:nrow(rxData))[rxData$absoluteQuant]){
+    modSubset <- rxAffinities[rxAffinities$tID == rxData$specie[a_spec_n],]
+    
+    if(rxData$speciesType[a_spec_n] == "rct"){
+      output <- modSubset[modSubset$speciesType == "substrate" & modSubset$isYeast == yeast_only,]
+    }
+    
+    if(rxData$speciesType[a_spec_n] == "inh"){
+      output <- modSubset[modSubset$speciesType == "regulator" & modSubset$modtype == "inh" & modSubset$isYeast == yeast_only,]
+    }
+    
+    if(rxData$speciesType[a_spec_n] == "act"){
+      output <- modSubset[modSubset$speciesType == "regulator" & modSubset$modtype == "act" & modSubset$isYeast == yeast_only,]
+    }
+    
+    if(nrow(output) > 1){
+      # if multiple E.C. IDs collide when matched to reactions with the same modifiers, choose the better supported
+      output <- output[which.max(output$nQuant),]
+    }
+    
+    if(nrow(output) == 1){
+      rxData[a_spec_n, c("lit_mean", "lit_SD")] <- output[,c("log10mean", "sdOflog10")]
+    } 
+  }
+  affinity_comparisons <- rbind(affinity_comparisons, rxData)
+}
 
 
 ### Use literature mean & SD of Km as a comparison
+
+### Looking at species with absolue quantification ###
+
+absolute_quant <- affinity_comparisons[!is.na(affinity_comparisons$lit_mean),]
+absolute_quant$lit_mean <- absolute_quant$lit_mean - 3 # convert from log mM to log M
+
+
+ggplot(absolute_quant, aes(x = lit_mean, y = log10(MLE), color = speciesType)) + geom_point(size = 1.3) + stat_abline(size = 2, alpha = 0.5) +
+  boxplot_theme + scale_color_brewer(palette = "Set1") + 
+  scale_x_continuous(expression("Literature" ~ log[10] ~ "Affinity (M)")) +
+  scale_y_continuous(expression("Optimized" ~ log[10] ~ "Affinity (M)"))
+
+
+lm(absolute_quant, formula = "MLE ~ lit_mean")
+
+summary(lm(absolute_quant, formula = "MLE ~ lit_mean"))$coef[2,4]
+
+
+### Look at metabolism-wide occupancy ###
+
+mw_occupancy <- data.table(affinity_comparisons)[,list(specie = specie, log10S_km = log10(2^medianAbund/MLE), log10occ = (2^medianAbund/(2^medianAbund + MLE)), type = speciesSubtype)]
+
+common_mets <- sort(table(mw_occupancy$specie), decreasing = T)[1:6]
+
+mw_occupancy$chosenSpecies <- "The Rest"
+mw_occupancy$chosenSpecies[mw_occupancy$specie %in% names(common_mets)] <- mw_occupancy$specie[mw_occupancy$specie %in% names(common_mets)]
+
+mw_occupancy$chosenSpecies[mw_occupancy$chosenSpecies != "The Rest"] <- 
+  sapply(corrFile$SpeciesName[chmatch(mw_occupancy$chosenSpecies[mw_occupancy$chosenSpecies != "The Rest"], corrFile$SpeciesType)], function(x){
+  strsplit(x, split = ' \\[')[[1]][1]
+})
+
+mw_occupancy$type[mw_occupancy$type %in% c("competitive", "noncompetitive")] <- "non(competitive)"
+mw_occupancy$type <- factor(mw_occupancy$type)
+
+mw_occupancy <- mw_occupancy[!mw_occupancy$chosenSpecies %in% "H+",]
+
+mw_occupancy$chosenSpecies <- factor(mw_occupancy$chosenSpecies, levels = names(sort(table(mw_occupancy$chosenSpecies), decreasing = T)))
+
+
+
+
+table(mw_occupancy$type, mw_occupancy$chosenSpecies)
+spec_counts <- melt(table(mw_occupancy$type, mw_occupancy$chosenSpecies))
+colnames(spec_counts) <- c("type", "chosenSpecies", "Counts")
+
+# S / Km
+ggplot() + geom_violin(data = mw_occupancy, aes(x = chosenSpecies, y = log10S_km), fill = "firebrick2", scale = "width") +
+  facet_grid(type ~ .) + geom_text(data = spec_counts, aes(x = chosenSpecies, y = 0, label = Counts), color = "BLUE", size = 6) +
+  scale_y_continuous(expression(frac(S, K[M])), breaks = seq(-3, 3, by = 1), labels = 10^seq(-3, 3, by = 1)) +
+  boxplot_theme
+
+# S / S + Km
+ggplot() + geom_violin(data = mw_occupancy, aes(x = chosenSpecies, y = log10occ), fill = "firebrick2", scale = "width") +
+  facet_grid(type ~ .) + geom_text(data = spec_counts, aes(x = chosenSpecies, y = 0.5, label = Counts), color = "BLUE", size = 6) +
+  scale_y_continuous(expression(frac(S, S + K[M])), breaks = seq(0, 1, by = 0.2), label = sapply(seq(0, 1, by = 0.2) * 100, function(x){paste(x, "%", sep = "")})) +
+  boxplot_theme
 
 
 
 
 ######## Compare Keq to Gibbs free energy ########
 
+# rxForm defined keq: prod[S] - prod[P]/keq
+# calculate median absolute concentration or bounds based upon reasonable concentrations of small molecules
+# relate optimized keq to these values
+# Q = prod[P]/prod[S]
+# Q/keq
+
+
+
+reaction_free_energy <- read.delim("companionFiles/cc_dG_python.tsv")
+
+free_energy_table <- data.frame(RXform = names(rxn_fit_params), reaction = substr(names(rxn_fit_params), 1, 6), cc_dGr = NA, cc_dGrSD = NA, log_keq_LB = NA, 
+                                log_keq_UB = NA, log_keq_MLE = NA, logQmedian = NA, spearmanCorr = NA)
+
+free_energy_table <- free_energy_table[free_energy_table$reaction %in% reaction_free_energy$reaction,]
+
+free_energy_table$formType = ifelse(free_energy_table$RXform %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""], "MM", "modification")
+
+free_energy_table$cc_dGr = reaction_free_energy$dGr[chmatch(free_energy_table$reaction, reaction_free_energy$reaction)]
+free_energy_table$cc_dGrSD = reaction_free_energy$dGrSD[chmatch(free_energy_table$reaction, reaction_free_energy$reaction)]
+
+free_energy_table[,c("log_keq_LB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]][rownames(rxn_fit_params[[x]]) == "keq", 1]}))
+free_energy_table[,c("log_keq_UB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]][rownames(rxn_fit_params[[x]]) == "keq", 2]}))
+free_energy_table[,c("log_keq_MLE")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$MLE[rownames(rxn_fit_params[[x]]) == "keq"]}))
+free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$absoluteQuant[rownames(rxn_fit_params[[x]]) == "keq"])})
+free_energy_table[,c("spearmanCorr")] <- sapply(free_energy_table$RXform, function(x){rxn_fits$parSpearman[rxn_fits$rxn == x]})
+
+free_energy_table <- free_energy_table[free_energy_table$cc_dGrSD < 10,] #remove reactions with highly uncertain CC predictions
+
+# Find the best fitting form (which doesn't have a hypothetical regulator) #
+core_form_bool <- c(1:nrow(reactionInfo)) %in% grep('t_metX|rmCond', reactionInfo$modification, invert = T)
+for(rxn in unique(free_energy_table$reaction)){
+  free_energy_table$formType[free_energy_table$RXform == reactionInfo$rMech[reactionInfo$reaction == rxn & core_form_bool][which.max(reactionInfo$ML[reactionInfo$reaction == rxn & core_form_bool])]] <- "Best Fit"
+  }
+
+
+
+
+boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
+                       legend.position = "right", panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1), 
+                       axis.line = element_blank(), axis.text = element_text(color = "black"))
+
+
+energy_fit <- free_energy_table#[free_energy_table$formType == "Best Fit",]
+energy_weight <- energy_fit$spearmanCorr; energy_weight[energy_weight < 0] <- 0
+
+freeEfit <- lm((energy_fit$log_keq_MLE - energy_fit$logQmedian)*(8.315 * (273 + 25) / 1000) ~ 
+     energy_fit$cc_dGr, weights = energy_weight)
+
+weight_fit <- coef(freeEfit)
+summary(freeEfit)$coef[2,4]
+
+ggplot(free_energy_table[free_energy_table$formType == "Best Fit",], aes(x = cc_dGr, xmin = cc_dGr - 2*cc_dGrSD, xmax = cc_dGr + 2*cc_dGrSD,
+                              y = (log_keq_MLE - logQmedian)*(8.315 * (273 + 25) / 1000),
+                              ymin = (log_keq_LB - logQmedian)*(8.315 * (273 + 25) / 1000),
+                              ymax = (log_keq_UB - logQmedian)*(8.315 * (273 + 25) / 1000))) +
+  geom_errorbar(aes(color = spearmanCorr), size = 1) + geom_errorbarh(aes(color = spearmanCorr), size = 1) + boxplot_theme +
+  geom_abline(intercept = weight_fit[1], slope = weight_fit[2], size = 2, color = "BLUE") +
+  scale_x_continuous(expression("Component Contribution" ~ Delta[G]^o)) + 
+  scale_y_continuous(expression("Parameter Inference" ~ Delta[G])) +
+  scale_color_gradient2("Par ~ FBA spearman", low = "green", mid = "black", high = "red", limits = c(-1,1))
 
