@@ -80,14 +80,6 @@ lik_calc <- function(proposed_params){
   par_stack <- 2^par_stack
   occupancy_vals <- data.frame(met_abund, par_stack)
   
-  tmp <- as.formula("~I(1/(K_r_0250_t_0243 * K_r_0250_t_0239^2 * K_r_0250_t_0399 * K_r_0250_t_0482)) + 0")
-  model.matrix(tmp, data = occupancy_vals)
-  
-  tmp1 <- as.formula("~I((2^t_0243 * 2^t_0239^2 * 2^t_0399 * 2^t_0482 - 2^t_0480 * 2^t_0248 * 2^t_0398^2 * 2^t_0219^2 * 2^t_0608/Keqr_0250)) + 0")
-  model.matrix(tmp1, data = occupancy_vals)
-  
-  
-  
   predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
   enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
   
@@ -339,7 +331,6 @@ for(rxN in 1:length(rxnList_form)){
   
   
   ### Initialize parameters & setup tracking of likelihood and parameters ###
-  
   
   lik_track <- NULL
   markov_par_vals <- matrix(NA, ncol = nrow(kineticParPrior), nrow = markov_pars$n_samples)

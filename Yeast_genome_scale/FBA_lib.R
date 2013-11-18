@@ -1074,7 +1074,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
       legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"))
  
   species_df <- melt(cbind(all_species, data.frame(condition = Chemoconds$Limitation, DR = Chemoconds$actualDR, FLB = flux$FVAmin, FUB = flux$FVAmax)), id.vars = c("condition", "DR", "FLB", "FUB"), value.name = "RA")
-  species_df$SD <- melt(all_species_SD, value.name = "SD")$SD
+  species_df$SD <- melt(all_species_SD, value.name = "SD", measure.vars = colnames(all_species_SD))$SD
   species_df$LB <- species_df$RA - 2*species_df$SD
   species_df$UB <- species_df$RA + 2*species_df$SD
   
@@ -1278,8 +1278,10 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   # partial derivatives of each measured specie in a condition
   
-  comp_partials <- matrix(NA, nrow = n_c, ncol = length(run_rxn$occupancyEq$kinetic_form_partials))
-  colnames(comp_partials) <- names(run_rxn$occupancyEq$kinetic_form_partials)
+  measured_partials <- run_rxn$occupancyEq$kinetic_form_partials[names(run_rxn$occupancyEq$kinetic_form_partials) %in% c(run_rxn$kineticPars$modelName[run_rxn$kineticPars$measured & !is.na(run_rxn$kineticPars$measured)], colnames(run_rxn$enzymes))]
+  
+  comp_partials <- matrix(NA, nrow = n_c, ncol = length(measured_partials))
+  colnames(comp_partials) <- names(measured_partials)
   
   for(j in 1:ncol(comp_partials)){
     comp_partials[,j] <- with(all_components ,eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
@@ -1499,6 +1501,8 @@ reactionProperties <-  function(){
   
   ### Generate plots which combine both MCMC parameter estimates and experimental data ###
   
+  output_plots <- list() # the output
+  
   require(data.table)
   require(ggplot2)
   require(scales) # for converting fractions to percent
@@ -1507,9 +1511,6 @@ reactionProperties <-  function(){
   panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
   axis.text = element_text(color = "black"), strip.background = element_rect(fill = "cornsilk1"), strip.text = element_text(color = "darkblue"))
   
-  
-  
-  output_plots <- list()
   
   ### Define and align experimental data ###
   
@@ -1541,16 +1542,14 @@ reactionProperties <-  function(){
   
   ### Calculate occupancy ###
   
-  measured_mets <- met_abund[,colSums(met_abund == 0) != n_c]
+  measured_mets <- met_abund[,colSums(met_abund == 0) != n_c, drop = F]
   
-  if("t_metX" %in% colnames(measured_species)){
+  if("t_metX" %in% colnames(measured_mets)){
     hill_species = matrix(1, ncol = ncol(measured_mets), nrow = nrow(dist_pars))
     hill_species[,colnames(measured_mets) == "t_metX"] <- 2^dist_pars[,colnames(dist_pars) == "h_allo"]
     }else{hill_species = 1}
   
-  measured_met_affinity <- dist_pars[,chmatch(colnames(measured_mets), run_rxn$kineticPars$rel_spec)]
-  
-  names(affinity_dim) <- c("markovSample", "metabolite", "condition")
+  measured_met_affinity <- dist_pars[,chmatch(colnames(measured_mets), run_rxn$kineticPars$rel_spec), drop = F]
   
   affinity_array <- array(data = NA, dim = c(nrow(dist_pars), n_c, ncol(measured_met_affinity)))
   dimnames(affinity_array) <- list(markovSample = c(1:nrow(dist_pars)), condition = rownames(measured_mets), metabolite = run_rxn$kineticPars$formatted[chmatch(colnames(measured_met_affinity), run_rxn$kineticPars$formulaName)])
@@ -1558,7 +1557,7 @@ reactionProperties <-  function(){
   for(cond in 1:n_c){
     
     # ([S]/(km + [S])^h
-    affinity_array[,cond,] <- ((rep(1, nrow(measured_met_affinity)) %*% 2^measured_mets[cond,])/((rep(1, nrow(measured_met_affinity)) %*% 2^measured_mets[cond,]) + 2^measured_met_affinity))^hill_species
+    affinity_array[,cond,] <- ((rep(1, nrow(measured_met_affinity)) %*% t(2^measured_mets[cond,]))/((rep(1, nrow(measured_met_affinity)) %*% t(2^measured_mets[cond,])) + 2^measured_met_affinity))^hill_species
     
     }
   
@@ -1566,12 +1565,21 @@ reactionProperties <-  function(){
   
   output_plots$"Metabolite Occupancy" <- ggplot(affinity_array_melt, aes(x = condition, y = value, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ metabolite, scales = "free_y") + geom_boxplot(outlier.colour = "darkgoldenrod", outlier.size = 1) + boxplot_theme +
     scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
-    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ group("[",frac("[M]", "M" + K[M]),"]")^"h"))
+    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ group("(",frac("[M]", "[M]" + K[M]),")")^"h"), expand = c(0,0))
   
   
   ### Calculate flux elasticity over all parameter sets, conditions and non-constant species ###
   
-  flux_elasticity <- sapply(1:nrow(dist_pars), function(x){
+  # take partial derivatives of elasticity_calc
+  elast_equation <- eval(parse(text = paste('expression(', run_rxn$occupancyEq$elasticity_calc, ')')))
+  
+  elast_partials <- list()
+  for(spec in names(run_rxn$occupancyEq$kinetic_form_partials)){
+    elast_partials[[spec]] <- D(elast_equation, spec)
+  }
+  
+  
+  mcmc_partials <- sapply(1:nrow(dist_pars), function(x){
     
     pars <- dist_pars[x,]
     dist_par_stack <- rep(1, n_c) %*% t(2^(pars))
@@ -1581,54 +1589,66 @@ reactionProperties <-  function(){
     predOcc <- model.matrix(run_rxn$occupancyEq[["l_occupancyEq"]], data = occupancy_vals)[,1]
     enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund
     
+    # Calculate Vmax as during standard fitting
+    
     flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
-    
-    # determine the sd of the fitted measures
-    
     nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
     
-    all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
+    # Setup all species in linear-space
+    
+    occupancy_vals <- data.frame(2^met_abund, dist_par_stack)
+    all_components <- data.frame(occupancy_vals, 2^enzyme_abund, nnlsCoef)
     
     # partial derivatives of each measured specie in a condition
     
-    comp_partials <- matrix(NA, nrow = n_c, ncol = length(run_rxn$occupancyEq$kinetic_form_partials))
-    colnames(comp_partials) <- names(run_rxn$occupancyEq$kinetic_form_partials)
+    comp_partials <- matrix(NA, nrow = n_c, ncol = length(elast_partials))
+    colnames(comp_partials) <- names(elast_partials)
     
     for(j in 1:ncol(comp_partials)){
-      comp_partials[,j] <- with(all_components ,eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
+      comp_partials[,j] <- with(all_components ,eval(elast_partials[[j]]))
     }
     comp_partials
   }, simplify = "array")
   
-  flux_names <- names(run_rxn$occupancyEq$kinetic_form_partials)
+  # partial F / partial S * [S]/F
+  
+  flux_expanded <- array(flux_fit$fitted$fitted, dim = dim(mcmc_partials))
+
+  all_species <- data.frame(2^met_abund, 2^enzyme_abund)
+  all_species_expanded <- array(unlist(all_species[,chmatch(colnames(mcmc_partials), colnames(all_species))]), dim = dim(mcmc_partials))
+  
+  mcmc_elasticity <- mcmc_partials * (all_species_expanded/flux_expanded)
+  
+  
+  flux_names <- names(elast_partials)
   flux_names[flux_names %in% run_rxn$kineticPars$rel_spec] <-  run_rxn$kineticPars$formatted[chmatch(flux_names[flux_names %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
   
-  dimnames(flux_elasticity) <- list(condition = rownames(measured_mets), specie = flux_names, markovSample = c(1:nrow(dist_pars)))
+  dimnames(mcmc_elasticity) <- list(condition = rownames(measured_mets), specie = flux_names, markovSample = c(1:nrow(dist_pars)))
   
   
   ### Plot elasticity of log-abundances ###
   
-  flux_elasticity_melt <- melt(flux_elasticity)
+  flux_elasticity_melt <- melt(mcmc_elasticity)
   
   output_plots$"Flux Elasticity" <- ggplot(flux_elasticity_melt, aes(x = condition, y = value, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ specie, scales = "free_y", ncol = 2) + geom_boxplot(outlier.colour = "darkgoldenrod", outlier.size = 1) + boxplot_theme +
     scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
-    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Fold-change Elasticity: "~ frac(rho~"F", rho~2^S)))
+    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Elasticity: "~ frac(rho~"F", rho~S)~frac("[S]","F")))
   
   ### Physiological leverage: absolute partial correlation weighted by across-condition SD
   
   all_exp_species <- data.frame(enzyme_abund, measured_mets[, colnames(measured_mets) %in% run_rxn$kineticPars$rel_spec[run_rxn$kineticPars$formatted %in% flux_names], drop = F])
   colnames(all_exp_species)[colnames(all_exp_species) %in% run_rxn$kineticPars$rel_spec] <- run_rxn$kineticPars$formatted[chmatch(colnames(all_exp_species)[colnames(all_exp_species) %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
   
-  all_exp_species <- all_exp_species[,chmatch(colnames(flux_elasticity), colnames(all_exp_species))]
+  all_exp_species <- all_exp_species[,chmatch(colnames(mcmc_elasticity), colnames(all_exp_species))]
   
-  SDweightedElasticity <- abs(flux_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(flux_elasticity))
+  SDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(mcmc_elasticity))
   
   we_melt <- data.table(melt(SDweightedElasticity))
   
   we_melt[,total_we := sum(value), by = c("condition", "markovSample")]
   we_melt[,physiological_leverage := value/total_we,]
   
-  output_plots$"Physiological Leverage" <- ggplot(we_melt, aes(x = condition, y = physiological_leverage, fill = factor(specie))) + geom_boxplot(outlier.size = 0) + expand_limits(y=0) + coord_flip() +
+  output_plots$"Physiological Leverage" <- ggplot(we_melt, aes(x = condition, y = physiological_leverage, fill = factor(specie))) + geom_boxplot(outlier.size = 0) + expand_limits(y=0) +
     boxplot_theme + scale_y_continuous("Physiological Leverage", labels = percent_format()) + scale_x_discrete("Experimental Condition") +
     scale_fill_discrete("Specie")
   
@@ -1845,6 +1865,11 @@ param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
   named_par_markov_chain <- par_markov_chain
   colnames(named_par_markov_chain) <- rename_table$commonPrint
   
+  # adjust parameters which are bounded by log-uniform distributions into equal bounds
+  
+  named_par_markov_chain[,run_rxn$kineticParPrior$distribution == "unif"] <- named_par_markov_chain[,run_rxn$kineticParPrior$distribution == "unif"] -
+  t(t(rep(1, nrow(named_par_markov_chain)))) %*% (run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_1'] + run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_2'])/2
+  
   # visualize the joint and marginal distribution of parameter values from the markov chain
   
   par_combinations <- expand.grid(1:length(run_rxn$kineticPars[,1]), 1:length(run_rxn$kineticPars[,1]))
@@ -1873,7 +1898,7 @@ param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
   
   #### determine the maximum bin from the histogram so that values can be scaled to the bivariate histogram values ###
 
-  par_hist_binwidth = 0.2
+  par_hist_binwidth = 0.4
   
   max_density <- max(apply(named_par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
   
@@ -1888,10 +1913,11 @@ param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
       legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
       panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line"), axis.title = element_blank()) 
 
-  ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
-    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black")) +
+  ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
+    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), trans = "log10") +
     scale_x_continuous(NULL, expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5))) +
-    geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) + geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 2, col = "cornflowerblue")
+    geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 2, col = "cornflowerblue") +
+    geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) +  geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black")
 
   }
 

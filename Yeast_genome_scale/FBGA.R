@@ -356,7 +356,11 @@ reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(
 
 reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])})
 
-reactionInfo$changeP <- NA
+reactionInfo$changeP <- NA # model comparison based upon AIC and LRT
+reactionInfo$AIC <- 2*reactionInfo$npar - 2*reactionInfo$ML + 2*reactionInfo$npar*(reactionInfo$npar - 1)/(n_c - reactionInfo$npar - 1)
+reactionInfo$AICp <- NA
+reactionInfo$BIC <- -2*reactionInfo$ML + reactionInfo$npar * log(n_c)
+reactionInfo$BICdiff <- NA
 
 for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$modification %in% c("", "rmCond"))]){
   rxn_eval <- reactionInfo[rx,]
@@ -368,6 +372,9 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
   
   likDiff <- rxn_eval$ML - rxn_ref$ML
   
+  reactionInfo$AICp[rx] <- min(exp((rxn_eval$AIC - rxn_ref$AIC)/2), 1)
+  reactionInfo$BICdiff[rx] <- rxn_eval$BIC - rxn_ref$BIC
+  
   if(rxn_eval$npar == rxn_ref$npar){
     
     reactionInfo$changeP[rx] <- 1/(exp(likDiff) + 1)
@@ -378,6 +385,10 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
     
   }
 }
+
+#hist(reactionInfo$BICdiff[abs(reactionInfo$BICdiff) < 1000], breaks = 50)
+#par_diff <- 8
+#plot(dchisq(2*seq(0, 50, by = 0.1), par_diff) ~ seq(0, 50, by = 0.1), type = "l")
 
 ### Identify reaction form modification which significantly improve the likelihood function ###
 ### comparisons are relative to reversible michaelis-menten kinetics ###
@@ -484,7 +495,7 @@ for(arxn in reactionInfo$rMech){
   for(i in 1:length(parSubset)){
     
     par_likelihood <- rbind(par_likelihood, data.frame(sample = 1:param_run_info$n_samples[parSubset[[i]]$name$index], likelihood = parSubset[[i]]$lik, index = parSubset[[i]]$name$index))
-    par_markov_chain <- rbind(par_markov_chain, parSubset[[1]]$MC)
+    par_markov_chain <- rbind(par_markov_chain, parSubset[[i]]$MC)
   }
   
   load(paste(c("FBGA_files/paramSets/", param_run_info$file[param_run_info$index == par_likelihood$index[1]]), collapse = ""))
@@ -534,7 +545,7 @@ for(arxn in reactionInfo$rMech){
   
   shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, shiny_flux_data[[arxn]]$plotChoices)
   
-  #reaction_plots <- reactionProperties()
+  reaction_plots <- reactionProperties()
   #PLdata <- rbind(PLdata, reaction_plots$PL_summary)
   #shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, reaction_plots[!(names(reaction_plots) %in% c("PL_summary"))])
   
