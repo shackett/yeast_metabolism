@@ -1,9 +1,10 @@
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 
-library(shiny)
-library(ggplot2)
-library(gridExtra)
+library(shiny) # HTML interface
+library(gplots) # textPlot
+library(ggplot2) # ggplotting
+library(gridExtra) # grid of ggplot plots
 
 
 # find all pathways
@@ -28,7 +29,11 @@ load("shinyapp/shinyData.Rdata")
 
 
 shinyServer(function(input, output) {
-
+  
+  if(!file.exists("rOCAplots")){
+    dir.create("rOCAplots")
+  }
+  
   # pathway selected
   pathways_selected <- reactive({input$pathway})
   
@@ -50,11 +55,18 @@ shinyServer(function(input, output) {
     if(length(chosenPWplots) != 0){
       pwsubList <- chosenPWplots()
       do.call(grid.arrange,  pwsubList)
+      
+      if(input$pw_save){
+        name <- paste0("rOCAplots/", input$pw_filename, ".pdf")
+        pdf(file = name, height = 15, width = 15)
+        do.call(grid.arrange,  pwsubList)
+        dev.off()
+        }
+      
     }else{
       return(NULL) 
     }
   })
-  
   
   
   ### If a reaction is chosen ###
@@ -73,38 +85,30 @@ shinyServer(function(input, output) {
   
   column_number <- reactive({as.numeric(input$col_num)})
   
+  output$RXinfo <- renderPlot({
+    textplot(shiny_flux_data[[currentRx()]]$reactionInfo, cex = 3, valign = "top", halign = "left")
+    })
+  
   output$RX <- renderPlot({
     if(length(RXplots) != 0){
       rxsubList <- chosenRXplots()
       rxsubList$ncol = column_number()
       
       do.call(grid.arrange,  rxsubList)
+      
+      if(input$rxn_save){
+        
+        name <- paste0("rOCAplots/", input$rxn_filename, ".pdf")
+        pdf(file = name, height = 15, width = 15)
+        do.call(grid.arrange,  rxsubList)
+        dev.off()
+        }
+      
     }else{
       return(NULL) 
     }
   })
   
-  
-  
-  
-  ### Choose which plots to display ###
-  
-  
-  
-  #plots <- reactive({input$plots_chosen})
-  
-  #plot_subset <- reactive({ggplotList[names(ggplotList) %in% plots()]})
-  
-  # specify which reaction form is desired
-    
-  #output$indicator <- renderText(namez())
-
-  #output$test <- renderText(PWplots())
-  
-  # Generate a plot of the requested variable against mpg and only 
-  # include outliers if requested
-  
-  #grid.arrange(plot1, plot2, ncol=2)
   
   
 })

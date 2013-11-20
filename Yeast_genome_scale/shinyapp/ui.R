@@ -14,6 +14,11 @@ shinyUI(pageWithSidebar(
     
     uiOutput("pw_check"),
     
+    # Allow for saving pathway plots and reaction plots
+    textInput('pw_filename', "Pathway Filename"),
+    checkboxInput('pw_save', "Save pathway plot"),
+    
+    
     # Select the reaction within this pathway which is to be considered
     uiOutput("reactions_available"),
     
@@ -26,7 +31,11 @@ shinyUI(pageWithSidebar(
     #checkboxGroupInput("plots_chosen", "Plots to choose", choices = as.list(names(ggplotList))),
     
     # How many columns should ggplot figures be displayed in
-    selectInput("col_num", "Number of plot columns", c("1", "2", "3", "4"), selected = "2")
+    selectInput("col_num", "Number of plot columns", c("1", "2", "3", "4"), selected = "2"),
+    
+    # Allow for saving pathway plots and reaction plots
+    textInput('rxn_filename', "Reaction Filename"),
+    checkboxInput('rxn_save', "Save reaction plot")
     
     ),
     
@@ -36,6 +45,8 @@ shinyUI(pageWithSidebar(
     #h3(textOutput("test")),
     
     plotOutput("PW", height = 1000),
+    
+    plotOutput("RXinfo", height = 250),
     
     plotOutput("RX", height = 1000)
   )
