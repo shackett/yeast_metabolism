@@ -70,8 +70,39 @@ par_draw <- function(updates){
 }
 
 
+lik_calc_fittedSD <- function(proposed_params){
 
-lik_calc <- function(proposed_params){
+  #### determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ####
+  
+  par_stack <- rep(1, n_c) %*% t(proposed_params); colnames(par_stack) <- kineticPars$formulaName
+  par_stack <- par_stack[,!(kineticPars$SpeciesType %in% "PCL")]
+  
+  par_stack <- 2^par_stack
+  occupancy_vals <- data.frame(met_abund, par_stack)
+  
+  predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  
+  # fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  # flux objective is set as the average of the minimal and maximal allowable flux flowing through the reaction at the optimal solution
+  
+  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2) 
+  
+  # setting the variance from residual mean-squared error
+  
+  fit_resid_error <- sqrt(mean((flux_fit$resid - mean(flux_fit$resid))^2))*sqrt(n_c/(n_c-1))
+  
+  lik <- (pnorm(flux$FVAmax, flux_fit$fitted, fit_resid_error) - pnorm(flux$FVAmin, flux_fit$fitted, fit_resid_error))/(flux$FVAmax - flux$FVAmin)
+  
+  return(sum(log(lik)))
+  
+  }
+  
+  
+
+
+
+lik_calc_propagatedSD <- function(proposed_params){
   ### Determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ###
   
   par_stack <- rep(1, n_c) %*% t(proposed_params); colnames(par_stack) <- kineticPars$formulaName
@@ -340,7 +371,7 @@ for(rxN in 1:length(rxnList_form)){
   current_pars <- par_draw(1:nrow(kineticParPrior))
   if("t_metX" %in% all_species$rel_spec){met_abund$t_metX <- metX_calc(current_pars, kineticPars, treatmentPCs)}
   
-  current_lik <- lik_calc(current_pars)
+  current_lik <- lik_calc_fittedSD(current_pars)
   
   proposed_params <- current_pars
   
@@ -350,7 +381,7 @@ for(rxN in 1:length(rxnList_form)){
     for(j in 1:nrow(kineticPars)){#loop over parameters values
       proposed_par <- par_draw(j)
       if("t_metX" %in% all_species$rel_spec){met_abund$t_metX <- metX_calc(proposed_par, kineticPars, treatmentPCs)}
-      proposed_lik <- lik_calc(proposed_par)
+      proposed_lik <- lik_calc_fittedSD(proposed_par)
       if(runif(1, 0, 1) < exp(proposed_lik - current_lik) | (proposed_lik == current_lik & proposed_lik == -Inf)){
         current_pars <- proposed_par
         current_lik <- proposed_lik

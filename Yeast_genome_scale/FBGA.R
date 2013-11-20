@@ -484,6 +484,7 @@ rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
 PLdata <- NULL
 
+t_start = proc.time()[3]
 
 for(arxn in reactionInfo$rMech){
   
@@ -503,9 +504,10 @@ for(arxn in reactionInfo$rMech){
   
   ### A couple of catches for poorly defined reactions or if optimization grossly fails ### 
   
-  if(sum(is.finite(par_likelihood$likelihood)) == 0){
+  if(sum(is.finite(par_likelihood$likelihood)) == 0){# all parameter sets have a zero likelihood (e.g. SD = 0)
     print(paste(arxn, "has zero valid parameter sets")); next
-  } # all parameter sets have a zero likelihood (e.g. SD = 0)
+  }
+  
   
   if(var(par_likelihood$likelihood) < 10^-10 | all(run_rxn$metabolites == 1)){
     print(paste(arxn, "does not vary in likelihood, or has too many unmeasured species")); next
@@ -545,15 +547,20 @@ for(arxn in reactionInfo$rMech){
   
   shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, shiny_flux_data[[arxn]]$plotChoices)
   
-  reaction_plots <- reactionProperties()
-  #PLdata <- rbind(PLdata, reaction_plots$PL_summary)
-  #shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, reaction_plots[!(names(reaction_plots) %in% c("PL_summary"))])
-  
-  
   if("t_metX" %in% run_rxn$kineticPars$modelName){
     shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, hypoMetTrend(run_rxn, metSVD, tab_boer))
   }
-   
+  
+  reaction_plots <- reactionProperties()
+  PLdata <- rbind(PLdata, reaction_plots$PL_summary)
+  #shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reaction_plots[!(names(reaction_plots) %in% c("PL_summary"))])
+  
+  #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <- param_compare()
+  
+  if(which(reactionInfo$rMech == arxn) %% 10 == 0){
+    print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
+    }
+ 
 }
 
 
@@ -573,13 +580,11 @@ for(pw in pathwaySet$display){
 
 #### Save lists which will be processed by Shiny app ####
 
-print(object.size((shiny_flux_data)), units = "auto")
-
 save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinyData.Rdata")
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, PLdata, file = "flux_cache/paramCI.Rdata")
 
 
 
@@ -593,6 +598,61 @@ rxToPW
 fraction_flux_deviation
 rxn_fits
 
+
+##### Summary based on interval overlap #####
+
+interval_overlap_summary <- data.table(rxnForm = fraction_flux_deviation$rxn, intervalOverlap = fraction_flux_deviation$'Interval Overlap')
+interval_overlap_summary$reaction = substr(interval_overlap_summary$rxnForm, 1, 6)
+
+interval_overlap_summary$Type = NA
+interval_overlap_summary$Type[interval_overlap_summary$rxnForm %in% reactionInfo$rMech[reactionInfo$modification %in% c("", "rmCond")]] <- "Substrates and Enzymes"
+interval_overlap_summary$Type[grep('metX', interval_overlap_summary$rxnForm)] <- "+ hypothetical activator or inhibitor"
+interval_overlap_summary$Type[is.na(interval_overlap_summary$Type)] <- "+ literature activator or inhibitor"
+
+# Reduce to best overlapping basic reaction or regulations
+interval_overlap_summary <- interval_overlap_summary[,list(predictionOverlap = max(intervalOverlap)), by = c("reaction", "Type")]
+
+# Order each type seperately
+interval_overlap_summary$x <- NA
+for(a_type in unique(interval_overlap_summary$Type)){
+  interval_overlap_summary$x[interval_overlap_summary$Type == a_type][order(interval_overlap_summary$predictionOverlap[interval_overlap_summary$Type == a_type])] <- 1:sum(interval_overlap_summary$Type == a_type)
+  }
+
+interval_overlap_summary$Type <- factor(interval_overlap_summary$Type, levels = c("Substrates and Enzymes", "+ literature activator or inhibitor", "+ hypothetical activator or inhibitor"))
+interval_overlap_summary$x <- factor(interval_overlap_summary$x)
+
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank(),
+                         strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"), axis.text.y = element_text(size = 20, color = "black"))
+  
+ggplot(interval_overlap_summary, aes(x = x, y = predictionOverlap, fill = "firebrick1")) + facet_grid(Type~.) + geom_bar(stat = "identity", position = "dodge", width = 0.85) + barplot_theme +
+ scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Flux prediction ", expand = c(0,0)) + scale_fill_identity("Prediction Method")
+ggsave("Figures/intervalOverlapSummary.pdf", height = 14, width = 10)
+
+
+
+
+##### Summarize weighted-elasticities / physiological leverage #####
+
+PLsummary <- data.table(PLdata[PLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""] & PLdata$condition == "P0.05",])
+setnames(PLsummary, "0.5", "q0.5")
+PLsummary <- PLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
+PLsummary$Type <- factor(PLsummary$Type, levels = c("substrate", "product", "enzyme"))
+
+enz_leverage <- data.frame(reaction = PLsummary[Type == "enzyme",reaction], rank = NA)
+enz_leverage$rank[order(PLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
+
+PLsummary$rank <- factor(enz_leverage$rank[chmatch(PLsummary$reaction, enz_leverage$reaction)])
+setkeyv(PLsummary, c("Type", "rank"))
+setkey(PLsummary)
+
+ggplot(PLsummary, aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
+  barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+  scale_fill_brewer(palette = "Set1") + scale_x_discrete("Reactions")
+ggsave("Figures/metabolicLeverage.pdf", height = 6, width = 10)
+  
+
+  
 
 ##### Systems level comparison of optimized and external parameter values #####
 
@@ -664,12 +724,15 @@ for(rxn in names(rxn_fit_params)){
 absolute_quant <- affinity_comparisons[!is.na(affinity_comparisons$lit_mean),]
 absolute_quant$lit_mean <- absolute_quant$lit_mean - 3 # convert from log mM to log M
 
+boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
+                       legend.position = "right", panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1), 
+                       axis.line = element_blank(), axis.text = element_text(color = "black"))
 
 ggplot(absolute_quant, aes(x = lit_mean, y = log10(MLE), color = speciesType)) + geom_point(size = 1.3) + stat_abline(size = 2, alpha = 0.5) +
   boxplot_theme + scale_color_brewer(palette = "Set1") + 
   scale_x_continuous(expression("Literature" ~ log[10] ~ "Affinity (M)")) +
   scale_y_continuous(expression("Optimized" ~ log[10] ~ "Affinity (M)"))
-
+ggsave("Figures/affinity_match.pdf", height = 8, width = 8)
 
 lm(absolute_quant, formula = "MLE ~ lit_mean")
 

@@ -1198,7 +1198,7 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   specCorrQuantiles_m$yadj <- mapply(function(x,y){subsetRange[rownames(subsetRange) == x][2] - diff(subsetRange[rownames(subsetRange) == x])/10*y}, x = specCorrQuantiles_m$variable, y = specCorrQuantiles_m$y)
   
-  similarGeneMelt <- melt(cbind(PCconds, t(PCsimilaritySubset)))
+  similarGeneMelt <- melt(cbind(PCconds, t(PCsimilaritySubset)), id.vars = colnames(PCconds))
   
   hypoMetPlots$candidateMetabolites <- ggplot() + geom_path(data = similarGeneMelt, aes(x = DR, y = value, col = Limitation, size = 2, group = Limitation)) + facet_wrap(~ variable, scale = "free_y", ncol = 2) +
     geom_text(data = specCorrQuantiles_m, aes(x = 1, y = yadj, label = text), hjust = 0) +
@@ -1557,7 +1557,7 @@ reactionProperties <-  function(){
   for(cond in 1:n_c){
     
     # ([S]/(km + [S])^h
-    affinity_array[,cond,] <- ((rep(1, nrow(measured_met_affinity)) %*% t(2^measured_mets[cond,]))/((rep(1, nrow(measured_met_affinity)) %*% t(2^measured_mets[cond,])) + 2^measured_met_affinity))^hill_species
+    affinity_array[,cond,] <- ((rep(1, nrow(measured_met_affinity)) %*% t(t(2^measured_mets[cond,])))/((rep(1, nrow(measured_met_affinity)) %*% t(t(2^measured_mets[cond,]))) + 2^measured_met_affinity))^hill_species
     
     }
   
@@ -1612,7 +1612,7 @@ reactionProperties <-  function(){
   
   # partial F / partial S * [S]/F
   
-  flux_expanded <- array(flux_fit$fitted$fitted, dim = dim(mcmc_partials))
+  flux_expanded <- array(flux_fit$fitted_flux$fitted, dim = dim(mcmc_partials))
 
   all_species <- data.frame(2^met_abund, 2^enzyme_abund)
   all_species_expanded <- array(unlist(all_species[,chmatch(colnames(mcmc_partials), colnames(all_species))]), dim = dim(mcmc_partials))
@@ -1646,10 +1646,11 @@ reactionProperties <-  function(){
   we_melt <- data.table(melt(SDweightedElasticity))
   
   we_melt[,total_we := sum(value), by = c("condition", "markovSample")]
+  we_melt <- we_melt[total_we != 0,]
   we_melt[,physiological_leverage := value/total_we,]
   
   output_plots$"Physiological Leverage" <- ggplot(we_melt, aes(x = condition, y = physiological_leverage, fill = factor(specie))) + geom_boxplot(outlier.size = 0) + expand_limits(y=0) +
-    boxplot_theme + scale_y_continuous("Physiological Leverage", labels = percent_format()) + scale_x_discrete("Experimental Condition") +
+    boxplot_theme + scale_y_continuous("Physiological Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
     scale_fill_discrete("Specie")
   
   ### Summarize physiological leverage to look for general trends over reactions ###
@@ -1668,6 +1669,86 @@ reactionProperties <-  function(){
   return(output_plots)
   
 }
+
+
+
+
+
+param_compare <- function(){
+  
+  ### Generate bivariate histograms of mcmc parameter estimates and marginal histograms ###
+  
+  hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), 
+                     legend.position = "left", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
+                     panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.height = unit(4, "line"), axis.title = element_blank(), 
+                     axis.text = element_text(color = "black"), axis.text.x = element_text(angle = 90)) 
+  
+  
+  ### write common names ###
+  
+  rename_table <- data.frame(tID = colnames(par_markov_chain), commonName = NA, commonPrint = NA)
+  rename_table$commonName[rename_table$tID %in% names(run_rxn$rxnSummary$metNames)] <- unname(run_rxn$rxnSummary$metNames)[chmatch(rename_table$tID[rename_table$tID %in% names(run_rxn$rxnSummary$metNames)], names(run_rxn$rxnSummary$metNames))]
+  rename_table$commonName[rename_table$tID == "keq"] <- "Keq"
+  rename_table$commonPrint <- nameReformat(names = rename_table$commonName, totalChar = 120)
+  
+  named_par_markov_chain <- par_markov_chain
+  colnames(named_par_markov_chain) <- rename_table$commonPrint
+  
+  # adjust parameters which are bounded by log-uniform distributions into equal bounds
+  
+  named_par_markov_chain[,run_rxn$kineticParPrior$distribution == "unif"] <- named_par_markov_chain[,run_rxn$kineticParPrior$distribution == "unif"] -
+  t(t(rep(1, nrow(named_par_markov_chain)))) %*% (run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_1'] + run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_2'])/2
+  
+  named_par_markov_chain <- named_par_markov_chain[,!is.na(rename_table$commonName)] # remove parameters which aren't affinities/keq
+  
+  # visualize the joint and marginal distribution of parameter values from the markov chain
+  
+  par_combinations <- expand.grid(1:ncol(named_par_markov_chain), 1:ncol(named_par_markov_chain))
+  like_comparison <- ifelse(par_combinations[,1] == par_combinations[,2], TRUE, FALSE)
+  
+  max_likelihood <- named_par_markov_chain[which.max(par_likelihood$likelihood),]
+  
+  par_comp_like <- NULL
+  for(i in 1:sum(like_comparison)){
+    par_comp_like <- rbind(par_comp_like, data.frame(xval = named_par_markov_chain[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]],
+         parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]]))
+      }
+  
+  par_comp_dissimilar <- NULL
+  for(i in 1:sum(!like_comparison)){
+    par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = named_par_markov_chain[,par_combinations[!like_comparison,][i,1]], yval = named_par_markov_chain[,par_combinations[!like_comparison,][i,2]], 
+          parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,2]]))
+      }
+  
+  MLEbarplot <- data.frame(xval = max_likelihood[par_combinations[like_comparison,1]], parameter_1 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]],
+      parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]])
+  MLEpoints <- data.frame(xval = max_likelihood[par_combinations[!like_comparison,1]], yval = max_likelihood[par_combinations[!like_comparison,2]],
+      parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,2]])
+  
+  
+  
+  #### determine the maximum bin from the histogram so that values can be scaled to the bivariate histogram values ###
+
+  par_hist_binwidth = 0.4
+  
+  max_density <- max(apply(named_par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
+  
+  density_trans_inv <- function(x){x*(max_density/20) + max_density/2}
+  density_trans <- function(x){(x - max_density/2)/(max_density/20)}
+  
+  par_comp_dissimilar$yval <- density_trans_inv(par_comp_dissimilar$yval)
+  MLEpoints$yval <- density_trans_inv(MLEpoints$yval)
+  
+  
+  ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
+    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), trans = "log10") +
+    scale_x_continuous(expression(log[2]), expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5))) +
+    geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 2, col = "cornflowerblue") +
+    geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) +  geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") +
+    ggtitle('Optimized parameter values \n')
+
+  }
+
 
 
 
@@ -1850,77 +1931,6 @@ calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
   elPlots$occ <- p
   return(elPlots)
 } 
-
-
-
-param_compare <- function(run_rxn, par_markov_chain, par_likelihood){
-  
-  ### write common names ###
-  
-  rename_table <- data.frame(tID = colnames(par_markov_chain), commonName = NA, commonPrint = NA)
-  rename_table$commonName[rename_table$tID %in% names(run_rxn$rxnSummary$metNames)] <- unname(run_rxn$rxnSummary$metNames)[chmatch(rename_table$tID[rename_table$tID %in% names(run_rxn$rxnSummary$metNames)], names(run_rxn$rxnSummary$metNames))]
-  rename_table$commonName[rename_table$tID == "keq"] <- "Keq"
-  rename_table$commonPrint <- nameReformat(names = rename_table$commonName, totalChar = 120)
-  
-  named_par_markov_chain <- par_markov_chain
-  colnames(named_par_markov_chain) <- rename_table$commonPrint
-  
-  # adjust parameters which are bounded by log-uniform distributions into equal bounds
-  
-  named_par_markov_chain[,run_rxn$kineticParPrior$distribution == "unif"] <- named_par_markov_chain[,run_rxn$kineticParPrior$distribution == "unif"] -
-  t(t(rep(1, nrow(named_par_markov_chain)))) %*% (run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_1'] + run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_2'])/2
-  
-  # visualize the joint and marginal distribution of parameter values from the markov chain
-  
-  par_combinations <- expand.grid(1:length(run_rxn$kineticPars[,1]), 1:length(run_rxn$kineticPars[,1]))
-  like_comparison <- ifelse(par_combinations[,1] == par_combinations[,2], TRUE, FALSE)
-  
-  max_likelihood <- named_par_markov_chain[which.max(par_likelihood$likelihood),]
-  
-  par_comp_like <- NULL
-  for(i in 1:sum(like_comparison)){
-    par_comp_like <- rbind(par_comp_like, data.frame(xval = named_par_markov_chain[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]],
-         parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]]))
-      }
-  
-  par_comp_dissimilar <- NULL
-  for(i in 1:sum(!like_comparison)){
-    par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = named_par_markov_chain[,par_combinations[!like_comparison,][i,1]], yval = named_par_markov_chain[,par_combinations[!like_comparison,][i,2]], 
-          parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,2]]))
-      }
-  
-  MLEbarplot <- data.frame(xval = max_likelihood[par_combinations[like_comparison,1]], parameter_1 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]],
-      parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]])
-  MLEpoints <- data.frame(xval = max_likelihood[par_combinations[!like_comparison,1]], yval = max_likelihood[par_combinations[!like_comparison,2]],
-      parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,2]])
-  
-  
-  
-  #### determine the maximum bin from the histogram so that values can be scaled to the bivariate histogram values ###
-
-  par_hist_binwidth = 0.4
-  
-  max_density <- max(apply(named_par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
-  
-  density_trans_inv <- function(x){x*(max_density/20) + max_density/2}
-  density_trans <- function(x){(x - max_density/2)/(max_density/20)}
-  
-  par_comp_dissimilar$yval <- density_trans_inv(par_comp_dissimilar$yval)
-  MLEpoints$yval <- density_trans_inv(MLEpoints$yval)
-  
-  
-  hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), 
-      legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
-      panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line"), axis.title = element_blank()) 
-
-  ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
-    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), trans = "log10") +
-    scale_x_continuous(NULL, expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5))) +
-    geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 2, col = "cornflowerblue") +
-    geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) +  geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black")
-
-  }
-
 
 calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
   
