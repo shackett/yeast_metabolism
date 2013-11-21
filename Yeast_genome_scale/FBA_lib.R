@@ -1078,7 +1078,6 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   species_df$LB <- species_df$RA - 2*species_df$SD
   species_df$UB <- species_df$RA + 2*species_df$SD
   
-  
   output_plots$"Metabolite and enzyme abundance" <- ggplot(species_df, aes(x = DR, y = RA, col = condition)) + geom_path(size = 2, alpha = 0.7) + geom_errorbar(aes(ymin = LB, ymax = UB), size = 1, alpha = 0.7) +
     facet_wrap(~ variable, scale = "free_y") +
     scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative/ absolute concentration")) +
@@ -1086,7 +1085,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   
   output_plots$"Flux ~ species" <- ggplot(species_df, aes(y = (FLB + FUB)/2, x = 2^RA, ymin = FLB, ymax = FUB, xmin = 2^LB, xmax = 2^UB, col = condition)) + geom_path(size = 2, alpha = 0.7) +
-    facet_wrap( ~ variable, scale = "free_x") + geom_point(aes(size = sqrt(species_df$DR)*14), alpha = 0.7) +
+    facet_wrap( ~ variable, scale = "free_x") + geom_point(aes(size = sqrt(DR)*14), alpha = 0.7) +
     geom_errorbar(size = 1) + geom_errorbarh(size = 1) + 
     expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_x_continuous("Relative/absolute concentration") + 
     ggtitle("Relationship between metabolite/enzyme levels and flux carried") + scale_y_continuous("Relative flux carried")
@@ -1388,7 +1387,7 @@ pathwayPlots <- function(pathway){
   
   pathwayPlot_list <- list()
   
-  for(plotType in c("VarEx", "SpCorr", "DotProd", "Angle")){
+  for(plotType in c("VarEx", "SpCorr", "DotProduct", "Angle", "Capture", "wCapture")){
     
     #### Define plotting variables ####
     
@@ -1402,7 +1401,7 @@ pathwayPlots <- function(pathway){
       sortVar = "Parametric Spearman"
       good_dir = "+"
     }
-    if(plotType == "DotProd"){
+    if(plotType == "DotProduct"){
       plotDat <- FFD[,list(rxnMech = rxn, "Dot Product" = dotProduct),]
       sortVar = "Dot Product"
       good_dir = "+"
@@ -1412,6 +1411,18 @@ pathwayPlots <- function(pathway){
       sortVar = "Angle"
       good_dir = "-"
     }
+    if(plotType == "Capture"){
+      plotDat <- FFD[,c('rxn', 'Interval Overlap'), with = F]
+      setnames(plotDat, "rxn", "rxnMech")
+      sortVar = "Interval Overlap"
+      good_dir = "+"
+    }
+    if(plotType == "wCapture"){
+      plotDat <- FFD[,c('rxn', 'weighted-Interval Overlap'), with = F]
+      setnames(plotDat, "rxn", "rxnMech")
+      sortVar = "weighted-Interval Overlap"
+      good_dir = "+"
+      }
     
     #### Order reactions first by lowest/highest value for a rxn and then within a reaction ####
     
@@ -1466,14 +1477,14 @@ pathwayPlots <- function(pathway){
       
     }
     
-    if(plotType %in% c("DotProd", "Angle")){
+    if(plotType %in% c("DotProduct", "Angle", "Capture", "wCapture")){
       
       plotDat_melt$rxnType <- "reversible Michaelis-Menten"
       plotDat_melt$rxnType[grep('act', plotDat_melt$rxnMech)] <- "+ Activator"
       plotDat_melt$rxnType[grep('inh', plotDat_melt$rxnMech)] <- "+ Inhibitor"
       plotDat_melt$rxnType <- factor(plotDat_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator", "+ Inhibitor"))
       
-      if(plotType == "DotProd"){
+      if(plotType == "DotProduct"){
         
         compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) + barplot_theme
         compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
@@ -1490,6 +1501,25 @@ pathwayPlots <- function(pathway){
           ggtitle(expression("Angle between "~ V^FBA ~ "&" ~ V^PAR)) + coord_flip()
         
       }
+      
+      if(plotType == "Capture"){
+        
+        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) + barplot_theme
+        compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+          scale_y_continuous(name = "Confidence Interval Overlap", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") + coord_flip()
+        
+      }
+      
+      if(plotType == "wCapture"){
+        
+        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) + barplot_theme
+        compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+          scale_y_continuous(name = "Confidence Interval Overlap", expand = c(0,0)) + scale_fill_brewer("Prediction Method", palette = "Set1") + coord_flip() +
+          expand_limits(y = 0) + ggtitle(expression("Confidence Interval Overlap weighted by" ~ frac("Var(Between conditions", "Var(Within conditions")))
+        
+      }
+      
+      
     }
     pathwayPlot_list[[plotType]] <- compPlot
   }
@@ -1561,11 +1591,16 @@ reactionProperties <-  function(){
     
     }
   
-  affinity_array_melt <- melt(affinity_array)
+  affinity_array_melt <- data.table(melt(affinity_array))
   
-  output_plots$"Metabolite Occupancy" <- ggplot(affinity_array_melt, aes(x = condition, y = value, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ metabolite, scales = "free_y") + geom_boxplot(outlier.colour = "darkgoldenrod", outlier.size = 1) + boxplot_theme +
-    scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
+  affinity_summary <- affinity_array_melt[,list(LB = boxplot.stats(value)$stats[1], LH = boxplot.stats(value)$stats[2], median = boxplot.stats(value)$stats[3],
+                                                UH = boxplot.stats(value)$stats[4], UB = boxplot.stats(value)$stats[5]), by = c("metabolite", "condition")]
+  
+  output_plots$"Metabolite Occupancy" <- ggplot(affinity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ metabolite, scales = "free_y") + 
+    geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=c(0,1)) +
     scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ group("(",frac("[M]", "[M]" + K[M]),")")^"h"), expand = c(0,0))
+  
+  
   
   
   ### Calculate flux elasticity over all parameter sets, conditions and non-constant species ###
@@ -1628,10 +1663,13 @@ reactionProperties <-  function(){
   
   ### Plot elasticity of log-abundances ###
   
-  flux_elasticity_melt <- melt(mcmc_elasticity)
+  flux_elasticity_melt <- data.table(melt(mcmc_elasticity))
   
-  output_plots$"Flux Elasticity" <- ggplot(flux_elasticity_melt, aes(x = condition, y = value, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ specie, scales = "free_y", ncol = 2) + geom_boxplot(outlier.colour = "darkgoldenrod", outlier.size = 1) + boxplot_theme +
-    scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
+  elasticity_summary <- flux_elasticity_melt[,list(LB = boxplot.stats(value)$stats[1], LH = boxplot.stats(value)$stats[2], median = boxplot.stats(value)$stats[3],
+                                                   UH = boxplot.stats(value)$stats[4], UB = boxplot.stats(value)$stats[5]), by = c("specie", "condition")]
+  
+  output_plots$"Flux Elasticity" <- ggplot(elasticity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ specie, scales = "free_y", ncol = 2) + 
+    geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
     scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Elasticity: "~ frac(rho~"F", rho~S)~frac("[S]","F")))
   
   ### Physiological leverage: absolute partial correlation weighted by across-condition SD
@@ -1649,22 +1687,26 @@ reactionProperties <-  function(){
   we_melt <- we_melt[total_we != 0,]
   we_melt[,physiological_leverage := value/total_we,]
   
-  output_plots$"Physiological Leverage" <- ggplot(we_melt, aes(x = condition, y = physiological_leverage, fill = factor(specie))) + geom_boxplot(outlier.size = 0) + expand_limits(y=0) +
-    boxplot_theme + scale_y_continuous("Physiological Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
+  we_summary <- we_melt[,list(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
+                              UH = boxplot.stats(physiological_leverage)$stats[4], UB = boxplot.stats(physiological_leverage)$stats[5]), by = c("specie", "condition")]
+  
+  output_plots$"Metabolic Leverage" <- ggplot(we_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
+    geom_boxplot(stat = "identity") + expand_limits(y=c(0,1)) + boxplot_theme +
+    scale_y_continuous("Metabolic Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
     scale_fill_discrete("Specie")
   
   ### Summarize physiological leverage to look for general trends over reactions ###
   
-  PL_summary <- we_melt[,list("0.025" = quantile(physiological_leverage, probs = 0.025), "0.5" = quantile(physiological_leverage, probs = 0.5), 
+  ML_summary <- we_melt[,list("0.025" = quantile(physiological_leverage, probs = 0.025), "0.5" = quantile(physiological_leverage, probs = 0.5), 
                               "0.975" = quantile(physiological_leverage, probs = 0.975)), by = c("specie", "condition")]
   
-  PL_summary$Type <- NA
-  PL_summary$Type[PL_summary$specie %in% colnames(enzyme_abund)] <- "enzyme"
+  ML_summary$Type <- NA
+  ML_summary$Type[ML_summary$specie %in% colnames(enzyme_abund)] <- "enzyme"
   
-  PL_summary$Type[is.na(PL_summary$Type)] <- run_rxn$rxnSummary$rxnFormData$Subtype[chmatch(run_rxn$kineticPars$rel_spec[chmatch(as.character(PL_summary$specie[is.na(PL_summary$Type)]), run_rxn$kineticPars$formatted)], run_rxn$rxnSummary$rxnFormData$SubstrateID)]
-  PL_summary$reaction = arxn  
+  ML_summary$Type[is.na(ML_summary$Type)] <- run_rxn$rxnSummary$rxnFormData$Subtype[chmatch(run_rxn$kineticPars$rel_spec[chmatch(as.character(ML_summary$specie[is.na(ML_summary$Type)]), run_rxn$kineticPars$formatted)], run_rxn$rxnSummary$rxnFormData$SubstrateID)]
+  ML_summary$reaction = arxn  
     
-  output_plots$PL_summary = PL_summary
+  output_plots$ML_summary = ML_summary
   
   return(output_plots)
   
@@ -1740,12 +1782,12 @@ param_compare <- function(){
   MLEpoints$yval <- density_trans_inv(MLEpoints$yval)
   
   
-  ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
+  return(ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
     scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), trans = "log10") +
     scale_x_continuous(expression(log[2]), expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5))) +
     geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 2, col = "cornflowerblue") +
     geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) +  geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") +
-    ggtitle('Optimized parameter values \n')
+    ggtitle('Optimized parameter values \n'))
 
   }
 

@@ -359,8 +359,6 @@ reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parS
 reactionInfo$changeP <- NA # model comparison based upon AIC and LRT
 reactionInfo$AIC <- 2*reactionInfo$npar - 2*reactionInfo$ML + 2*reactionInfo$npar*(reactionInfo$npar - 1)/(n_c - reactionInfo$npar - 1)
 reactionInfo$AICp <- NA
-reactionInfo$BIC <- -2*reactionInfo$ML + reactionInfo$npar * log(n_c)
-reactionInfo$BICdiff <- NA
 
 for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$modification %in% c("", "rmCond"))]){
   rxn_eval <- reactionInfo[rx,]
@@ -373,7 +371,6 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
   likDiff <- rxn_eval$ML - rxn_ref$ML
   
   reactionInfo$AICp[rx] <- min(exp((rxn_eval$AIC - rxn_ref$AIC)/2), 1)
-  reactionInfo$BICdiff[rx] <- rxn_eval$BIC - rxn_ref$BIC
   
   if(rxn_eval$npar == rxn_ref$npar){
     
@@ -482,7 +479,7 @@ shiny_flux_data <- list()
 rxn_fits <- NULL
 rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
-PLdata <- NULL
+MLdata <- NULL
 
 t_start = proc.time()[3]
 
@@ -552,10 +549,10 @@ for(arxn in reactionInfo$rMech){
   }
   
   reaction_plots <- reactionProperties()
-  PLdata <- rbind(PLdata, reaction_plots$PL_summary)
-  #shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reaction_plots[!(names(reaction_plots) %in% c("PL_summary"))])
+  MLdata <- rbind(MLdata, reaction_plots$ML_summary)
+  shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reaction_plots[!(names(reaction_plots) %in% c("ML_summary"))])
   
-  #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <- param_compare()
+  shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <- param_compare()
   
   if(which(reactionInfo$rMech == arxn) %% 10 == 0){
     print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
@@ -584,7 +581,7 @@ save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, PLdata, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, file = "flux_cache/paramCI.Rdata")
 
 
 
@@ -634,19 +631,19 @@ ggsave("Figures/intervalOverlapSummary.pdf", height = 14, width = 10)
 
 ##### Summarize weighted-elasticities / physiological leverage #####
 
-PLsummary <- data.table(PLdata[PLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""] & PLdata$condition == "P0.05",])
-setnames(PLsummary, "0.5", "q0.5")
-PLsummary <- PLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-PLsummary$Type <- factor(PLsummary$Type, levels = c("substrate", "product", "enzyme"))
+MLsummary <- data.table(MLdata[MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""] & MLdata$condition == "P0.05",])
+setnames(MLsummary, "0.5", "q0.5")
+MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
+MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme"))
 
-enz_leverage <- data.frame(reaction = PLsummary[Type == "enzyme",reaction], rank = NA)
-enz_leverage$rank[order(PLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
+enz_leverage <- data.frame(reaction = MLsummary[Type == "enzyme",reaction], rank = NA)
+enz_leverage$rank[order(MLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
 
-PLsummary$rank <- factor(enz_leverage$rank[chmatch(PLsummary$reaction, enz_leverage$reaction)])
-setkeyv(PLsummary, c("Type", "rank"))
-setkey(PLsummary)
+MLsummary$rank <- factor(enz_leverage$rank[chmatch(MLsummary$reaction, enz_leverage$reaction)])
+setkeyv(MLsummary, c("Type", "rank"))
+setkey(MLsummary)
 
-ggplot(PLsummary, aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
+ggplot(MLsummary, aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
   barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
   scale_fill_brewer(palette = "Set1") + scale_x_discrete("Reactions")
 ggsave("Figures/metabolicLeverage.pdf", height = 6, width = 10)
