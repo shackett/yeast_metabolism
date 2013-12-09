@@ -550,9 +550,9 @@ for(arxn in reactionInfo$rMech){
   
   reaction_plots <- reactionProperties()
   MLdata <- rbind(MLdata, reaction_plots$ML_summary)
-  shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reaction_plots[!(names(reaction_plots) %in% c("ML_summary"))])
+  shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reactionPropertiesPlots(reaction_plots))
   
-  shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <- param_compare()
+ # shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <- param_compare()
   
   if(which(reactionInfo$rMech == arxn) %% 10 == 0){
     print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
@@ -560,6 +560,13 @@ for(arxn in reactionInfo$rMech){
  
 }
 
+#for(a_name in names(shiny_flux_data)){
+#  a_rxn_file <- shiny_flux_data[[a_name]][[2]]
+#  for(a_plot in names(a_rxn_file)){
+#    a_plot_name <- gsub('[^A-Za-z]', '', a_plot)
+#    ggsave(file = paste0("tmp/", a_name, "==", a_plot_name, ".pdf"), plot = a_rxn_file[names(a_rxn_file) == a_plot][[1]])
+#    }
+#  }
 
 
 # significant or default reaction forms
@@ -581,20 +588,15 @@ save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
 
 
 
-reactionInfo
-shiny_flux_data
-rxToPW
-pathwaySet
 
+##### Systems level comparison of optimized and external parameter values #####
 
-rxToPW
-fraction_flux_deviation
-rxn_fits
-
+load("flux_cache/paramCI.Rdata")
+load("flux_cache/reconstructionWithCustom.Rdata")
 
 ##### Summary based on interval overlap #####
 
@@ -635,6 +637,9 @@ MLsummary <- data.table(MLdata[MLdata$reaction %in% reactionInfo$rMech[reactionI
 setnames(MLsummary, "0.5", "q0.5")
 MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
 MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme"))
+MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
+MLsummary[,leverage := leverage/totalLeverage]
+MLsummary$VarExplained <- rxn_fits$parPearson[chmatch(MLsummary$reaction, rxn_fits$rxn)]
 
 enz_leverage <- data.frame(reaction = MLsummary[Type == "enzyme",reaction], rank = NA)
 enz_leverage$rank[order(MLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
@@ -649,12 +654,61 @@ ggplot(MLsummary, aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "i
 ggsave("Figures/metabolicLeverage.pdf", height = 6, width = 10)
   
 
-  
 
-##### Systems level comparison of optimized and external parameter values #####
 
-load("flux_cache/paramCI.Rdata")
-load("flux_cache/reconstructionWithCustom.Rdata")
+
+###### Summarize metabolic leverage ######
+# Reversible MM kinetics and RM + best significant regulator
+# Indicate fraction of missing explanatory power
+
+# consider reactions with a positive correlation between the rm form and flux carried
+valid_rxns <- rxn_fits$rxn[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]][rxn_fits$parPearson[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]] >= 0]
+valid_rxns <- reactionInfo$reaction[reactionInfo$rMech %in% valid_rxns]
+
+best_sig_regulator <- sapply(unique(valid_rxns), function(x){
+  subrxn <- reactionInfo[reactionInfo$reaction == x,]
+  subrxn <- subrxn[!is.na(subrxn$Qvalue) & subrxn$modification %in% grep('rmCond|t_metX|^$', subrxn$modification, invert = T, value = T) & subrxn$Qvalue < 0.1,]
+  if(nrow(subrxn) == 0){
+    NA
+    }else{
+      subrxn$rMech[which.min(subrxn$Qvalue)]
+      }
+  }) # identify which regulator results in the greatest improvement in fit for each reaction (if a signfiicant regulator was found)
+best_sig_regulator <- best_sig_regulator[!is.na(best_sig_regulator)]
+
+
+MLsummary <- data.table(MLdata[(MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" & reactionInfo$reaction %in% valid_rxns] | MLdata$reaction %in% best_sig_regulator) & MLdata$condition == "P0.05",])
+setnames(MLsummary, "0.5", "q0.5")
+MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
+MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive")] <- "regulatory"
+
+# partitioning explained variance into ML contributions - keeping relative fractions proportional but adjusting the sum
+# MLfrac_species = ML * r2
+# MLfrac_residual = sum(ML) * (1-r2)
+# divide both by r2
+# MLfrac_species = ML
+# MLfrac_residual = sum(ML) * (1-r2)/r2
+
+residualLeverage <- MLsummary[,list(Type = "residual", leverage = sum(leverage) * (1-rxn_fits$parPearson[chmatch(reaction, rxn_fits$rxn)]^2)/rxn_fits$parPearson[chmatch(reaction, rxn_fits$rxn)]^2)
+                              , by = "reaction"]
+
+MLsummary <- rbind(MLsummary, residualLeverage, use.names = T)
+          
+
+MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme", "regulatory", "residual"))
+MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
+MLsummary[,leverage := leverage/totalLeverage]
+
+MLsummary[,rxn := reactionInfo$reaction[reactionInfo$rMech == reaction], by = "reaction"]
+
+          
+          
+table(MLsummary$Type)
+
+
+
+
+
 
 ######### Compare Km values found through optimization to those from literature ################
 
@@ -725,16 +779,19 @@ boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = el
                        legend.position = "right", panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1), 
                        axis.line = element_blank(), axis.text = element_text(color = "black"))
 
-ggplot(absolute_quant, aes(x = lit_mean, y = log10(MLE), color = speciesType)) + geom_point(size = 1.3) + stat_abline(size = 2, alpha = 0.5) +
-  boxplot_theme + scale_color_brewer(palette = "Set1") + 
+### only look at rm kinetics and significant modifications ###
+
+rxn_of_interest <- reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" | !is.na(reactionInfo$Qvalue) & reactionInfo$Qvalue < 0.1]
+
+ggplot(absolute_quant[absolute_quant$rxnForm %in% rxn_of_interest,], aes(x = lit_mean, y = log10(MLE), color = speciesType)) + geom_point(size = 1.3) + stat_abline(size = 2, alpha = 0.5) +
+  boxplot_theme + scale_color_brewer(palette = "Set1") + stat_smooth(method = "lm", fill = "black") +
   scale_x_continuous(expression("Literature" ~ log[10] ~ "Affinity (M)")) +
   scale_y_continuous(expression("Optimized" ~ log[10] ~ "Affinity (M)"))
 ggsave("Figures/affinity_match.pdf", height = 8, width = 8)
 
-lm(absolute_quant, formula = "MLE ~ lit_mean")
 
-summary(lm(absolute_quant, formula = "MLE ~ lit_mean"))$coef[2,4]
 
+summary(lm(log10(absolute_quant$MLE) ~ absolute_quant$lit_mean))$coef[2,4]
 
 ### Look at metabolism-wide occupancy ###
 
@@ -801,10 +858,10 @@ free_energy_table$formType = ifelse(free_energy_table$RXform %in% reactionInfo$r
 free_energy_table$cc_dGr = reaction_free_energy$dGr[chmatch(free_energy_table$reaction, reaction_free_energy$reaction)]
 free_energy_table$cc_dGrSD = reaction_free_energy$dGrSD[chmatch(free_energy_table$reaction, reaction_free_energy$reaction)]
 
-free_energy_table[,c("log_keq_LB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]][rownames(rxn_fit_params[[x]]) == "keq", 1]}))
-free_energy_table[,c("log_keq_UB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]][rownames(rxn_fit_params[[x]]) == "keq", 2]}))
-free_energy_table[,c("log_keq_MLE")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$MLE[rownames(rxn_fit_params[[x]]) == "keq"]}))
-free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$absoluteQuant[rownames(rxn_fit_params[[x]]) == "keq"])})
+free_energy_table[,c("log_keq_LB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval[rownames(rxn_fit_params[[x]]$param_interval) == "keq", 1]}))
+free_energy_table[,c("log_keq_UB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval[rownames(rxn_fit_params[[x]]$param_interval) == "keq", 2]}))
+free_energy_table[,c("log_keq_MLE")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$MLE[rownames(rxn_fit_params[[x]]$param_interval) == "keq"]}))
+free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rownames(rxn_fit_params[[x]]$param_interval) == "keq"])})
 free_energy_table[,c("spearmanCorr")] <- sapply(free_energy_table$RXform, function(x){rxn_fits$parSpearman[rxn_fits$rxn == x]})
 
 free_energy_table <- free_energy_table[free_energy_table$cc_dGrSD < 10,] #remove reactions with highly uncertain CC predictions
