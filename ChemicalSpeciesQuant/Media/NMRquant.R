@@ -135,13 +135,15 @@ for(j in 1:length(treatment_mat[1,])){
 cond_finder <- t(sapply(NMR_point_estimate$condition, function(x){NMRdesign[NMRdesign$SampleType == x,][1,]}))[,4:5]
 NMR_point_estimate <- cbind(NMR_point_estimate, data.frame(limitation = unlist(cond_finder[,1]), DR = unlist(cond_finder[,2])))
 
-barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 20, face = "bold"), panel.background = element_blank(), legend.position = "none", 
-            panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.line = element_line(), axis.text.x = element_text(angle = 90)) 
+barplot_theme <- theme(text = element_text(size = 60, face = "bold"), title = element_text(size = 50, face = "bold"), panel.background = element_blank(), legend.position = "none", 
+            panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.line = element_line(), axis.text = element_text(size = 30, color = "black"), axis.text.x = element_text(angle = 90)) 
 
 #NMR_point_estimate  <- NMR_point_estimate[NMR_point_estimate$peak %in% c("Ethanol", "Acetate", "Glucose", "Glycerol"),]
-  
 
-NMRbarplot <- ggplot(NMR_point_estimate[NMR_point_estimate$peak %in% c("Ethanol", "Acetate", "Glucose", "Glycerol"),], aes(x = factor(condition), y = estimate, fill = factor(limitation))) + facet_grid(peak ~ ., scale = "free_y") + barplot_theme
+NMR_point_estimate_plot <- NMR_point_estimate[NMR_point_estimate$peak %in% c("Ethanol", "Acetate", "Glucose", "Glycerol"),]
+NMR_point_estimate_plot$peak <- factor(NMR_point_estimate_plot$peak, levels = c("Glucose", "Ethanol", "Acetate", "Glycerol"))
+
+NMRbarplot <- ggplot(NMR_point_estimate_plot, aes(x = factor(condition), y = estimate, fill = factor(limitation))) + facet_grid(peak ~ ., scale = "free_y") + barplot_theme
 NMRbarplot + geom_bar(stat = "identity") + ggtitle("Concentration of metabolites (and unknowns) in chemostat effluent") + scale_fill_brewer(palette = "Set2") + 
   geom_errorbar(aes(ymin = lb, ymax = ub)) + scale_x_discrete("Chemostat condition") + scale_y_continuous("Concentration (mM)")
 
