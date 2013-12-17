@@ -187,8 +187,33 @@ NMRsample_conc[,c('Lactate')] <- lactate_conc
 #plot(NMRsample_conc$Glucose ~ NMRsample_conc$glycerol_inferred)
 
 
+### Remove some outlier measurements (ethanol contamination) and samples ###
+# determine the studentized-residuals for the linear model: concentration ~ condition + slope*condition + residual
 
- 
+NMR_resids <- NMRsample_conc; NMR_resids[!is.na(NMR_resids)] <- NA
+
+condInfo <- NMRsamples[,c('limitation', 'DR')]
+condInfo[,'limitation'] <- factor(condInfo[,'limitation'])
+condInfo[,'DR'] <- as.numeric(condInfo[,'DR'])
+
+regModel <- model.matrix(~ limitation + limitation*DR, condInfo)
+condInfo$leverage <- diag(regModel %*% solve(t(regModel) %*% regModel) %*% t(regModel))
+
+for(a_specie_n in 1:ncol(NMRsample_conc)){
+  
+  specie_lm <- lm(NMRsample_conc[,a_specie_n] ~ regModel + 0)
+  NMR_resids[,a_specie_n] <- specie_lm$resid / (summary(specie_lm)$sigma * sqrt(1 - condInfo$leverage))
+  
+}
+
+sampleDeviation <- apply(NMR_resids, 1, function(x){sum(abs(x))}) 
+
+NMRsample_conc[NMRsamples$condition == 'L0.16_2',] <- NA # broadly inconsistent
+NMRsample_conc[NMRsamples$condition == 'u0.30_1' & NMRsamples$date == "2013_12",] <- NA # noted turbidity
+NMRsample_conc[NMRsamples$condition == 'c0.30_2','Ethanol'] <- NA # more C in ethanol measured than in provided glucose
+NMRsample_conc[NMRsamples$condition == 'u0.05_1','Ethanol'] <- NA
+NMRsample_conc[NMRsamples$condition == 'u0.30_1' & NMRsamples$date == "2013_04_27",'Ethanol'] <- NA
+NMRsample_conc[NMRsamples$condition == 'u0.30_2' & NMRsamples$date == "2013_12",'Glucose'] <- NA
 
 
 #### Summarize concentration by chemostat and generate summary figures of knowns + unknowns and just knowns ####
@@ -197,7 +222,7 @@ NMRsample_conc[,c('Lactate')] <- lactate_conc
 sampleAug <- data.frame(NMRsamples[,c('SampleType', 'date', 'limitation', 'DR')], NMRsample_conc)
 sampleMelt <- data.table(melt(sampleAug, id.vars = c('SampleType', 'date', 'limitation', 'DR'), variable.name = "peak", value.name = 'estimate'))
 
-NMR_point_estimate <- sampleMelt[,list(estimate = mean(estimate), se = sd(estimate, na.rm = T)/sqrt(length(estimate))), by = c("SampleType", "peak", "date", "limitation", "DR")]
+NMR_point_estimate <- sampleMelt[,list(estimate = mean(estimate, na.rm = T), se = sd(estimate, na.rm = T)/sqrt(length(estimate[!is.na(estimate)]))), by = c("SampleType", "peak", "date", "limitation", "DR")]
 NMR_point_estimate[,lb := estimate - 1.96*se]
 NMR_point_estimate[,ub := estimate + 1.96*se]
 
