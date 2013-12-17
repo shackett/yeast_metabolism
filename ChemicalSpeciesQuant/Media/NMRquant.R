@@ -1,10 +1,4 @@
 #library("rNMR")
-setwd("/Users/Sean/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Media")
-
-options(stringsAsFactors = FALSE)
-library(reshape2)
-library(gplots)
-library(ggplot2)
 
 ### Convert bruker files to UCSF format - select the highest level folder 
 #cf()
@@ -14,138 +8,238 @@ library(ggplot2)
 #roi()
 #write.table(roiTable, "RoiTable.tsv", sep = "\t", col.names = TRUE, row.names = FALSE, quote = F)
 
+setwd("/Users/Sean/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Media")
+
+options(stringsAsFactors = FALSE)
+library(reshape2)
+library(gplots)
+library(ggplot2)
+library(data.table)
+library(colorRamps)
+
 ##### Analysis #######
 
-### Describe the NMR samples ####
+#### Describe the NMR samples ####
 
-NMRsummary <- read.delim("effluentQuant_vz_roiSummary.txt")
-NMRsamples <- NMRsummary$File
-NMRsamples <- unname(sapply(sapply(NMRsamples, function(x){strsplit(x, '2013_04_27_')[[1]][2]}), function(x){strsplit(x, '.ucsf')[[1]][1]}))
-NMRsamples <- unname(sapply(NMRsamples, function(x){sub('ref_', 'p0.05H', x)}))
-NMRsample_table <- data.frame(t(sapply(NMRsamples, function(x){strsplit(x, '_')[[1]]})))
-rownames(NMRsample_table) <- unname(apply(NMRsample_table, 1, function(x){paste(x, collapse = "_")}))
-colnames(NMRsample_table) <- c("SampleType", "Rep")
+NMRsummary <- read.delim("effluentQuant_roiHeight.txt")
 
-NMRsample_table$is_sample <- TRUE; NMRsample_table$is_sample[grep('std', NMRsample_table$SampleType)] <- FALSE
-NMRsample_table$DR <- NMRsample_table$limitation <- NA
+NMRsample_table <- data.frame(file = NMRsummary$File, date = NA, condition = NA, SampleType = NA, Rep = NA, is_sample = NA, limitation = NA, DR = NA)
+for(i in 1:nrow(NMRsample_table)){
+  dateSplit <- '[0-9]{4}_[0-9]{2}'
+  NMRsample_table$date[i] <- regmatches(NMRsample_table$file[i], regexpr(dateSplit, NMRsample_table$file[i]))
+
+  dateSplit <- '[0-9]{4}_[0-9]{2}_[0-9]{2,}'
+  longMatch <- regmatches(NMRsample_table$file[i], regexpr(dateSplit, NMRsample_table$file[i]))
+  if(length(longMatch) != 0){
+    NMRsample_table$date[i] <- longMatch
+    }
+  
+  condName <- strsplit(NMRsample_table$file[i], split = NMRsample_table$date[i])[[1]][2]
+  NMRsample_table$condition[i] <- strsplit(condName, split = '^_|.ucsf')[[1]][2]
+
+  }
+
+NMRsample_table$condition <- unname(sapply(NMRsample_table$condition, function(x){sub('ref_', 'p0.05H', x)}))
+NMRsample_table$Rep <- sapply(NMRsample_table$condition, function(x){regmatches(x, regexpr('[0-9A-Z]$', x))})
+NMRsample_table$SampleType <- sapply(NMRsample_table$condition, function(x){strsplit(x, '_*[0-9A-Z]$', x)[[1]][1]})
+NMRsample_table$SampleType <- toupper(NMRsample_table$SampleType)
+
+NMRsample_table$is_sample <- TRUE; NMRsample_table$is_sample[grep('STD', NMRsample_table$SampleType)] <- FALSE
 
 NMRsample_table$limitation[NMRsample_table$is_sample] <- sapply(NMRsample_table$SampleType[NMRsample_table$is_sample], function(x){strsplit(x, '[0-9.]+')[[1]][1]})
 NMRsample_table$DR[NMRsample_table$is_sample] <- sapply(NMRsample_table$SampleType[NMRsample_table$is_sample], function(x){regmatches(x, regexpr('[0-9.]{4}', x))})
 
 
-
-### Create a matrix of NMR data ####
+#### Create a matrix of NMR data from peak height ####
 
 NMRmatrix <- as.matrix(NMRsummary[,-1])
-rownames(NMRmatrix) <- rownames(NMRsample_table)
-colnames(NMRmatrix)[grep('Glucose',colnames(NMRmatrix))] = 'Glucose'
-colnames(NMRmatrix)[grep('Ethanol',colnames(NMRmatrix))] = 'Ethanol'
-colnames(NMRmatrix)[grep('Glycerol',colnames(NMRmatrix))] = 'Glycerol'
+rownames(NMRmatrix) <- NMRsample_table$condition
+
+### use the NMR peak with the lowest coefficient of variation ###
+
+for(a_compound in c('Glucose', 'Ethanol', 'Glycerol', 'Acetate', 'Lactate')){
+  
+  if(a_compound %in% 'Ethanol' & length(grep(a_compound, colnames(NMRmatrix))) != 1){ # if specified take the biggest peak
+    colnames(NMRmatrix)[grep(a_compound, colnames(NMRmatrix))][which.max(apply(NMRmatrix[,grep(a_compound, colnames(NMRmatrix))], 2, mean))] <- a_compound
+  } else if(length(grep(a_compound, colnames(NMRmatrix))) == 1){
+    
+    colnames(NMRmatrix)[grep(a_compound, colnames(NMRmatrix))] <- a_compound
+    
+  } else if(length(grep(a_compound, colnames(NMRmatrix))) > 1){
+    
+    subMat <- data.table(NMRsample_table[,c('date', 'SampleType')], NMRmatrix[,grep(a_compound, colnames(NMRmatrix))])
+    subMatmelt <- data.table(melt(subMat, id.vars = c('date', 'SampleType')))
+    
+    peakCV <- subMatmelt[,list(CV = sd(value)/mean(value)), by = c('variable', 'date', 'SampleType')]
+    peakAvgCV <- peakCV[, list(medCV = median(CV)), by = variable]
+    
+    colnames(NMRmatrix)[colnames(NMRmatrix) == peakAvgCV$variable[which.min(peakAvgCV$medCV)]] <- a_compound
+  } else {
+    print(paste(a_compound, "not found"))
+    
+  }
+}
+
+heatmap.2(cor(NMRmatrix[,colnames(NMRmatrix) != "DSS_0"]), symkey = T, col = blue2yellow(100))
+heatmap.2(scale(log2(NMRmatrix[grep('std', rownames(NMRmatrix), invert = T), grep('DSS', colnames(NMRmatrix), invert = T)]), center = T, scale = F), trace = "none", symkey = T, col = blue2yellow(100))
+
+#### Define NMR standards ####
+
+NMRstandards <- NMRsample_table[!NMRsample_table$is_sample,]
+NMRstandards$relative_conc = as.numeric(sub('([0-9.]{1,5})([xX])', '\\1', regmatches(NMRstandards$condition, regexpr('^([0-9.]{1,5})[xX]', NMRstandards$condition))))
+
+# standards specific to each date
+standard_conc <- rbind(data.frame(date = "2013_04_27", compound = c("Glucose", "Ethanol", "Acetate", "Glycerol"), concentration = c(122, 244, 10, 10)), 
+                       data.frame(date = "2013_12", compound = c("Glucose", "Ethanol", "Acetate", "Glycerol", "Lactate"), concentration = c(122, 244, 10, 10, 10))) #concentrations of 1x standard (mM)
 
 
-heatmap.2(cor(NMRmatrix[,-1]))
-heatmap.2(log2(NMRmatrix[,-1]), Rowv = FALSE)
 
 ### Regression of standard peak areas onto known concentration ####
+# mapping standard abundance to concentration
+# Confirm that concentrations are linear on a log-log plot
 
-NMRstandards <- data.frame(name = NMRsample_table[grep('std', NMRsample_table[,1]),], grep('std', NMRsample_table[,1]))[,c(1,2,6)]
-colnames(NMRstandards) <- c("SampleType", "Rep", "Index")
-NMRstandards$relative_conc = as.numeric(sapply(NMRstandards$SampleType, function(x){strsplit(x, 'xstd')[[1]]}))
+NMRstandardConc <- NMRmatrix[chmatch(NMRstandards$condition, rownames(NMRmatrix)), colnames(NMRmatrix) %in% standard_conc$compound]
 
-standard_conc <- c(Glucose = 122, Ethanol = 244, Acetate = 10, Glycerol = 10) #concentrations of 1x standard (mM)
+LMlist <- list()
 
-NMRstandardConc <- NMRmatrix[NMRstandards$Index,colnames(NMRmatrix) %in% names(standard_conc)]
-plot(NMRmatrix[c(1:length(NMRmatrix[,1]))[-NMRstandards$Index],colnames(NMRmatrix) %in% names(standard_conc)][,3])
-
-### mapping standard abundance to concentration ####
-
-for(i in 1:length(NMRstandardConc[1,])){
-  print(plot(log(NMRstandards$relative_conc) ~ log(NMRstandardConc[,i]), xlab = "log_peak", ylab = "log_conc", main = colnames(NMRstandardConc)[i], pch = 16))
-  print(plot(lm(log(NMRstandards$relative_conc) ~ log(NMRstandardConc[,i])), which = 1))
+for(i in 1:ncol(NMRstandardConc)){
+  
+  specieConc <- data.table(standard = rownames(NMRstandardConc), stdConc = NMRstandards$relative_conc, peakHeight = NMRstandardConc[,i])
+  dayConc <- standard_conc[standard_conc$compound == colnames(NMRstandardConc)[i],]
+  specieConc$MasterConc <- dayConc$concentration[chmatch(NMRstandards$date[chmatch(specieConc$standard, NMRstandards$condition)], dayConc$date)]
+  specieConc <- specieConc[!is.na(specieConc$MasterConc),] # remove standards which do not contain the relevent metabolite
+  specieConc[,standardConc := stdConc * MasterConc] 
+  
+  log_peakSize = log2(specieConc$peakHeight)
+  log_Conc = log2(specieConc$standardConc)
+  
+  concLM <- lm(log_Conc ~ log_peakSize)
+  LMlist[[colnames(NMRstandardConc)[i]]] <- concLM
+  
+  print(plot(log_Conc ~ log_peakSize, xlab = "log_peak", ylab = "log_conc", main = colnames(NMRstandardConc)[i], pch = 16))
+  abline(a = concLM$coef[1], b = concLM$coef[2], col = "red")
+  print(plot(concLM, which = 1))
+  
 }
 
-### for ethanol a linear model is sufficient, while for acetate and glucose a quadratic fit is needed
+### Quantifying identified metabolite concentrations in each experimental sample
 
-standard_fit_degree <- c(Glucose = 3, Ethanol = 2, Acetate = 3, Glycerol = 3)
-standard_fit_lm <- list()
+NMRsample_data <- NMRmatrix[NMRsample_table$is_sample, grep('DSS', colnames(NMRmatrix), invert = T)]
+NMRsamples <- NMRsample_table[NMRsample_table$is_sample,]
 
-for(i in colnames(NMRstandardConc)){
-  
-  log_pred_peak <- log2(NMRstandardConc[,colnames(NMRstandardConc) == i])
-  log_ref_conc <- log2(standard_conc[names(standard_conc) == i] * NMRstandards$relative_conc)
-  
-  if(standard_fit_degree[names(standard_fit_degree) == i] == 2){
-    standard_fit_lm[[i]] <- lm(log_ref_conc ~ log_pred_peak)
-  }else if(standard_fit_degree[names(standard_fit_degree) == i] == 3){
-    standard_fit_lm[[i]] <- lm(log_ref_conc ~ log_pred_peak + I(log_pred_peak^2))
-    standard_fit_lm[[i]] <- lm(log_ref_conc ~ poly(log_pred_peak, 2, raw = TRUE))
-  }else{print("check yo self")}
-  
-  #predict(standard_fit_lm[[i]], data.frame(log_pred_peak = log_pred_peak), interval = "confidence")
-}
+NMRsample_conc <- NMRsample_data; NMRsample_conc[!is.na(NMRsample_conc)] <- NA
 
-### Determining sample concentrations from either comparison to standard regression or DSS ####
-
-NMRmatrix_conc <- NMRmatrix
-
-for(i in 1:length(NMRmatrix_conc[1,])){
-  if(colnames(NMRmatrix_conc)[i] %in% names(standard_conc)){
+for(i in 1:ncol(NMRsample_data)){
+  if(colnames(NMRsample_data)[i] %in% standard_conc$compound){
     ### scale peak height to standards ###
-    NMRmatrix_conc[,i] <- 2^predict(standard_fit_lm[[colnames(NMRmatrix_conc)[i]]], data.frame(log_pred_peak = log2(NMRmatrix_conc[,i])))
+    NMRsample_conc[,i] <- 2^predict(LMlist[[colnames(NMRsample_data)[i]]], data.frame(log_peakSize = log2(NMRsample_data[,i])))
     
     }else{
       ### scale peak height to DSS molarity (5mM*(1/9)) (although proton number of a peak affects this)
-      NMRmatrix_conc[,i] <- sapply(NMRmatrix_conc[,i], function(x){max(x, 0)}) * 5/9
+      NMRsample_conc[,i] <- sapply(NMRsample_data[,i], function(x){max(x, 0)}) * 5/9
       }
   }
 
-NMRmatrix_HM <- NMRmatrix_conc[c(1:length(NMRmatrix[,1]))[-NMRstandards$Index],grep('DSS', colnames(NMRmatrix_conc), invert = TRUE) ]
-NMRdesign <- NMRsample_table[NMRsample_table$is_sample,]
 
-heatmap.2(NMRmatrix_HM/t(t(rep(1, length(NMRmatrix_HM[,1])))) %*% apply(NMRmatrix_HM, 2, sd), Rowv = FALSE)
+#### Deconvolve overlapping peaks of Ethanol-Lactate and Lactate-Glycerol using standards w & w/o lactate ####
 
-### Point estimation (and variance) of concentration in each condition ####
+# A # from standards peakArea(concentration)
+# B # from pure peak, quantify concentration
+# C # for mixed peak subtract E[conc] from peak area
 
-NMR_point_estimate <- NULL
+NMRarea <- read.delim("effluentQuant_roiArea.txt")
 
-### contrasts are relative to zero rather than intercept
-
-treatment_mat <- matrix(0, ncol = length(unique(NMRdesign$SampleType)), nrow = length(NMRdesign[,1]))
-colnames(treatment_mat) <- unique(NMRdesign$SampleType)
-for(t in 1:length(treatment_mat[1,])){
-  treatment_mat[,t][NMRdesign$SampleType == colnames(treatment_mat)[t]] <- 1
+if(!all(NMRarea$File == NMRsummary$File)){
+  print("roiSummary (height) and roiArea do not match")
   }
 
-for(j in 1:length(treatment_mat[1,])){
-  
-  data_subset <- NMRmatrix_HM[treatment_mat[,j] == 1,]
-  if(j == 5){data_subset[rownames(data_subset) == "c0.30_2", colnames(data_subset) == "Ethanol"] <- NA}
-  if(j == 23){data_subset[rownames(data_subset) == "u0.05_1", colnames(data_subset) == "Ethanol"] <- NA}
-  if(j == 27){data_subset[rownames(data_subset) == "u0.30_1", colnames(data_subset) == "Ethanol"] <- NA}
-  
-  outputDF <- data.frame(condition = colnames(treatment_mat)[j], peak = colnames(NMRmatrix_HM), estimate = apply(data_subset, 2, mean, na.rm = T), se = apply(data_subset, 2, sd, na.rm = T)/sqrt(colSums(!is.na(data_subset))))
-  outputDF$lb <- outputDF$estimate - 1.96*outputDF$se
-  outputDF$ub <- outputDF$estimate + 1.96*outputDF$se
-  rownames(outputDF) <- NULL
-  
-  NMR_point_estimate <- rbind(NMR_point_estimate, outputDF)
-  
-  }
+NMRarea <- as.matrix(NMRarea[,-1])
+rownames(NMRarea) <- NMRsample_table$condition
 
-cond_finder <- t(sapply(NMR_point_estimate$condition, function(x){NMRdesign[NMRdesign$SampleType == x,][1,]}))[,4:5]
-NMR_point_estimate <- cbind(NMR_point_estimate, data.frame(limitation = unlist(cond_finder[,1]), DR = unlist(cond_finder[,2])))
+NMRstandardArea <- NMRarea[chmatch(NMRstandards$condition, rownames(NMRmatrix)),]
+
+### Ethanol-Lactate ###
+
+specieConc <- data.table(standard = rownames(NMRstandardConc), stdConc = NMRstandards$relative_conc, peakHeight = NMRstandardArea[,'Lactate_13'])
+specieConc$Lactate <- sapply(NMRstandards$date, function(x){conc = standard_conc$conc[standard_conc$compound == "Lactate" & standard_conc$date == x]; ifelse(length(conc) == 1, conc, 0)})*specieConc$stdConc
+specieConc$Ethanol <- sapply(NMRstandards$date, function(x){conc = standard_conc$conc[standard_conc$compound == "Ethanol" & standard_conc$date == x]; ifelse(length(conc) == 1, conc, 0)})*specieConc$stdConc
+
+plot(specieConc$peakHeight ~ specieConc$stdConc, col = factor(specieConc$Lactate))
+
+LEfit <- lm(data = specieConc, formula = peakHeight ~ Lactate + Ethanol + 0)
+lactate_conc <- (NMRarea[NMRsample_table$is_sample,'Lactate_13'] - (NMRsample_conc[,c('Ethanol')] * LEfit$coef[names(LEfit$coef) == "Ethanol"]))/LEfit$coef[names(LEfit$coef) == "Lactate"]
+
+NMRsample_conc[,c('Lactate')] <- lactate_conc
+
+### Lactate - Unknown ###
+
+#specieConc <- data.table(standard = rownames(NMRstandardConc), stdConc = NMRstandards$relative_conc, peakHeight = NMRstandardArea[,'Lactate_41'])
+#specieConc$Lactate <- sapply(NMRstandards$date, function(x){conc = standard_conc$conc[standard_conc$compound == "Lactate" & standard_conc$date == x]; ifelse(length(conc) == 1, conc, 0)})*specieConc$stdConc
+#specieConc$Glycerol <- sapply(NMRstandards$date, function(x){conc = standard_conc$conc[standard_conc$compound == "Glycerol" & standard_conc$date == x]; ifelse(length(conc) == 1, conc, 0)})*specieConc$stdConc
+
+#plot(specieConc$peakHeight ~ specieConc$stdConc, col = factor(specieConc$Lactate))
+
+#LGfit <- lm(data = specieConc, formula = peakHeight ~ Lactate + Glycerol + 0)
+#glycerol_conc <- (NMRarea[NMRsample_table$is_sample,'Lactate_41'] - (NMRsample_conc[,c('lactate_inferred')] * LGfit$coef[names(LGfit$coef) == "Lactate"]))/LGfit$coef[names(LGfit$coef) == "Glycerol"]
+
+#NMRsample_conc <- cbind(NMRsample_conc, data.frame(glycerol_inferred = glycerol_conc))
+
+#plot(NMRsample_conc$Glucose ~ NMRsample_conc$glycerol_inferred)
+
+
+
+ 
+
+
+#### Summarize concentration by chemostat and generate summary figures of knowns + unknowns and just knowns ####
+
+
+sampleAug <- data.frame(NMRsamples[,c('SampleType', 'date', 'limitation', 'DR')], NMRsample_conc)
+sampleMelt <- data.table(melt(sampleAug, id.vars = c('SampleType', 'date', 'limitation', 'DR'), variable.name = "peak", value.name = 'estimate'))
+
+NMR_point_estimate <- sampleMelt[,list(estimate = mean(estimate), se = sd(estimate, na.rm = T)/sqrt(length(estimate))), by = c("SampleType", "peak", "date", "limitation", "DR")]
+NMR_point_estimate[,lb := estimate - 1.96*se]
+NMR_point_estimate[,ub := estimate + 1.96*se]
+
+setnames(NMR_point_estimate, c('SampleType'), c('condition'))
+
+
+
 
 barplot_theme <- theme(text = element_text(size = 60, face = "bold"), title = element_text(size = 50, face = "bold"), panel.background = element_blank(), legend.position = "none", 
-            panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.line = element_line(), axis.text = element_text(size = 30, color = "black"), axis.text.x = element_text(angle = 90)) 
+                       panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.line = element_line(), axis.text = element_text(size = 30, color = "black"), axis.text.x = element_text(angle = 90)) 
 
 #NMR_point_estimate  <- NMR_point_estimate[NMR_point_estimate$peak %in% c("Ethanol", "Acetate", "Glucose", "Glycerol"),]
 
-NMR_point_estimate_plot <- NMR_point_estimate[NMR_point_estimate$peak %in% c("Ethanol", "Acetate", "Glucose", "Glycerol"),]
-NMR_point_estimate_plot$peak <- factor(NMR_point_estimate_plot$peak, levels = c("Glucose", "Ethanol", "Acetate", "Glycerol"))
 
-NMRbarplot <- ggplot(NMR_point_estimate_plot, aes(x = factor(condition), y = estimate, fill = factor(limitation))) + facet_grid(peak ~ ., scale = "free_y") + barplot_theme
-NMRbarplot + geom_bar(stat = "identity") + ggtitle("Concentration of metabolites (and unknowns) in chemostat effluent") + scale_fill_brewer(palette = "Set2") + 
-  geom_errorbar(aes(ymin = lb, ymax = ub)) + scale_x_discrete("Chemostat condition") + scale_y_continuous("Concentration (mM)")
+
+NMR_point_estimate_plot <- NMR_point_estimate
+NMR_point_estimate_plot$peak <- factor(NMR_point_estimate_plot$peak, levels = c("Glucose", "Ethanol", "Acetate", "Lactate", "Glycerol", as.character(sort(unique(NMR_point_estimate_plot$peak)[!(unique(NMR_point_estimate_plot$peak) %in%  c("Glucose", "Ethanol", "Acetate", "Lactate", "Glycerol"))]))))
+NMR_point_estimate_plot$limitation <- factor(NMR_point_estimate_plot$limitation, levels = c("P", "C", "N", "L", "U"))
+
+setkeyv(NMR_point_estimate_plot, c('limitation', 'condition', 'date', 'peak'))
+
+NMR_point_estimate_plot[order(limitation, condition, date, peak)]
+NMR_point_estimate_plot[,cond_date := paste(condition, date, sep = "_")]
+NMR_point_estimate_plot$cond_date <- factor(NMR_point_estimate_plot$cond_date, levels = unique(NMR_point_estimate_plot$cond_date))
+
+unique_conditions <- NMR_point_estimate_plot[,list(condition = unique(condition)), by = cond_date]
+
+
+NMRbarplot <- ggplot(NMR_point_estimate_plot, aes(x = cond_date, y = estimate, fill = factor(limitation))) + facet_wrap( ~ peak, scale = "free_y", ncol = 2) + barplot_theme
+NMRbarplot + geom_bar(stat = "identity") + ggtitle('Concentration of metabolites (and unknowns) \n in chemostat effluent') + scale_fill_brewer(palette = "Set2") + 
+  geom_errorbar(aes(ymin = lb, ymax = ub)) + scale_x_discrete("Chemostat condition", labels = NMR_point_estimate_plot$condition[chmatch(levels(NMR_point_estimate_plot$cond_date), as.character(NMR_point_estimate_plot$cond_date))]) + scale_y_continuous("Concentration (mM)")
+
+ggsave("mediaComposition_all.pdf", width = 24, height = 22)
+
+NMRbarplot <- ggplot(NMR_point_estimate_plot[NMR_point_estimate_plot$peak %in% standard_conc$compound,], aes(x = cond_date, y = estimate, fill = factor(limitation))) + facet_grid(peak ~ ., scale = "free_y") + barplot_theme
+NMRbarplot + geom_bar(stat = "identity") + ggtitle("Concentration of metabolites in chemostat effluent") + scale_fill_brewer(palette = "Set2") + 
+  geom_errorbar(aes(ymin = lb, ymax = ub)) + scale_x_discrete("Chemostat condition", labels = NMR_point_estimate_plot$condition[chmatch(levels(NMR_point_estimate_plot$cond_date), as.character(NMR_point_estimate_plot$cond_date))]) + scale_y_continuous("Concentration (mM)")
 
 ggsave("mediaComposition.pdf", width = 14, height = 22)
+
+
 write.table(NMR_point_estimate, "mediaComposition_NMR.tsv", sep = "\t", row.names = FALSE, col.names = TRUE, quote = F)
+
+
+
