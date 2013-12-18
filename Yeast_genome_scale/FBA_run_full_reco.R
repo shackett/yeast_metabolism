@@ -17,7 +17,7 @@ options(stringsAsFactors = FALSE)
 
 # Specify whether growth optimization should be through linear programming (LP) - maximizing biomass given nutrients or 
 # through quadratic programming (QP) - optimally matching experimental boundary fluxes to optimized ones.
-QPorLP <- "checkfeas" # LP and PhPP no longer supported
+QPorLP <- "QP" # LP and PhPP no longer supported
 if(QPorLP == "QP"){
   #ln -s /Library/gurobi510/mac64/lib/libgurobi51.so libgurobi51.so
   library(gurobi) # QP solver interface
@@ -31,7 +31,7 @@ if(QPorLP == "QP"){
 modeGurobi = 'python'
 pythonMode = 'simple' # simple,thdyn, dir or ll (loopless)
 FVA = 'T' # Should flux variblility analysis be performed
-useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -56,6 +56,8 @@ rxnparFile <- rbind(rxnparFile, customList$rxnparFile)
 corrFile <- rbind(corrFile, customList$corrFile)
 specparFile <- rbind(specparFile, customList$specparFile)
 fluxDirFile <- rbind(fluxDirFile, customList$fluxDirFile)
+
+save(rxnFile, rxnparFile, corrFile, fluxDirFile, fluxDirFile, file = "flux_cache/reconstructionWithCustom.Rdata")
 
 ### Determine unique metabolites and reactions ###
 
@@ -87,7 +89,7 @@ modelMetComp <- read.delim("flux_cache/stoiMetsComp.tsv", header = TRUE)
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 
 #compositionFile <- read.delim("../Yeast_comp_energy.txt") #energy required to assimilate biomass components
-nutrientFile <- read.delim("companionFiles/Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u"))
+nutrientFile <- read.delim("companionFiles/Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("N", "P", "C", "L", "U"))
 rownames(nutrientFile) <- nutrientFile[,1]; nutrientFile <- nutrientFile[,-1]
 nutModelNames <- data.frame(commonName = rownames(nutrientFile), modelName = sapply(rownames(nutrientFile), function(x){paste(x, '[extracellular]')}))
 rownames(nutrientFile) <- nutModelNames$modelName
@@ -222,14 +224,14 @@ prot_penalty[reactions %in% freeTransportRxns] <- 0
 #### Define the treatment in terms of nutrient availability and auxotrophies ####
 
 treatment_par <- list()
-n_c <- 25
+n_c <- nrow(chemostatInfo)
 for(i in 1:n_c){
   #define nutrient uptake and excretion rate - soft matches on (using maximal available for now)
   #measured_bounds <- data.frame(nutrient = rownames(nutrientFile), conc_per_t = nutrientFile[,colnames(nutrientFile) == nutrientCode$nutrient[nutrientCode$shorthand == chemostatInfo$limitation[i]]]*chemostatInfo$actualDR[i])
   
-  measured_bounds <- mediaSummary[mediaSummary$condition == chemostatInfo$condition[i],]
-  measured_bounds <- rbind(measured_bounds, data.frame(condition = chemostatInfo$condition[i], specie = rownames(nutrientFile)[!(rownames(nutrientFile) %in% measured_bounds$specie)], change = NA, sd = NA, lb = 0, 
-     ub = nutrientFile[,colnames(nutrientFile) == nutrientCode$nutrient[nutrientCode$shorthand == chemostatInfo$limitation[i]]][!(rownames(nutrientFile) %in% measured_bounds$specie)], type = "uptake", density = NA))
+  measured_bounds <- mediaSummary[mediaSummary$condition == chemostatInfo$ChemostatCond[i],]
+  measured_bounds <- rbind(measured_bounds, data.frame(condition = chemostatInfo$ChemostatCond[i], specie = rownames(nutrientFile)[!(rownames(nutrientFile) %in% measured_bounds$specie)], change = NA, sd = NA, lb = 0, 
+     ub = nutrientFile[,colnames(nutrientFile) == nutrientCode$nutrient[nutrientCode$shorthand == chemostatInfo$Limitation[i]]][!(rownames(nutrientFile) %in% measured_bounds$specie)], type = "uptake", density = NA))
   
   # multiply steady-state concentrations by DR to get the uptake/excretion rates
   measured_bounds$change <- measured_bounds$change*chemostatInfo$actualDR[i]
@@ -243,15 +245,15 @@ for(i in 1:n_c){
   measured_bounds <- data.table(measured_bounds)
   
   
-  treatment_par[[chemostatInfo$condition[i]]][["nutrients"]] <- measured_bounds
+  treatment_par[[chemostatInfo$ChemostatCond[i]]][["nutrients"]] <- measured_bounds
   
   #define ura3 and leu2 auxotrophies
-  if(chemostatInfo$limitation[i] == "L"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID))}
-  if(chemostatInfo$limitation[i] == "u"){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))}
-  if(chemostatInfo$limitation[i] %in% c("c", "p", "n")){treatment_par[[chemostatInfo$condition[i]]][["auxotrophies"]] <- NA}
+  if(chemostatInfo$Limitation[i] == "L"){treatment_par[[chemostatInfo$ChemostatCond[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID))}
+  if(chemostatInfo$Limitation[i] == "U"){treatment_par[[chemostatInfo$ChemostatCond[i]]][["auxotrophies"]] <- as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID))}
+  if(chemostatInfo$Limitation[i] %in% c("C", "P", "N")){treatment_par[[chemostatInfo$ChemostatCond[i]]][["auxotrophies"]] <- NA}
   
   #define observed fluxes per culture volume #scaled to intracellular volume later
-  biomass_match <- data.frame(specie = comp_by_cond$compositionFile$MetName, AltName = comp_by_cond$compositionFile$AltName,change = unname(-1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$condition[i]]*chemostatInfo$actualDR[i]))
+  biomass_match <- data.frame(specie = comp_by_cond$compositionFile$MetName, AltName = comp_by_cond$compositionFile$AltName,change = unname(-1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$ChemostatCond[i]]*chemostatInfo$actualDR[i]))
   biomass_list <- list()
   
   for(component in unique(comp_by_cond$compositionFile$varCategory)){
@@ -269,13 +271,13 @@ for(i in 1:n_c){
     
     # define the accuracy of a constraint in terms of the coefficient of variation - sd over mean
     if(component %in% colnames(comp_by_cond$CV_table)){
-      biomass_list[[component]]$SD = as.numeric(subset(comp_by_cond$CV_table, comp_by_cond$CV_table$condition == chemostatInfo$condition[i], component))
+      biomass_list[[component]]$SD = as.numeric(subset(comp_by_cond$CV_table, comp_by_cond$CV_table$condition == chemostatInfo$ChemostatCond[i], component))
       }else{
         biomass_list[[component]]$SD = 1/10
       }
     }
   
-  treatment_par[[chemostatInfo$condition[i]]][["boundaryFlux"]] = biomass_list
+  treatment_par[[chemostatInfo$ChemostatCond[i]]][["boundaryFlux"]] = biomass_list
   }
 
 possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehydrogenase", rxnFile$Reaction),]$ReactionID)), as.character(unique(rxnFile[grep("orotidine", rxnFile$Reaction),]$ReactionID)))
@@ -305,8 +307,7 @@ for(x in 1:length(sources)){
 ## extract the IDs of excreted metabolites ##
 
 
-
-excreted <- c('ethanol \\[extracellular\\]', 'acetate \\[extracellular\\]', 'glycerol \\[extracellular\\]')
+excreted <- c('ethanol \\[extracellular\\]', 'acetate \\[extracellular\\]', '\\(R\\)-lactate \\[extracellular\\]', 'glycerol \\[extracellular\\]')
 
 resource_matches <- lapply(excreted, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -376,6 +377,8 @@ all_FA <- corrFile$SpeciesID[corrFile$SpeciesType %in% fatty_acids$tID]
 
 HLsubset <- stoiMat[metabolites %in% all_FA, grep('hydrolase|lipase', colnames(named_stoi))]
 lipase_reactions <- colnames(HLsubset)[colSums(HLsubset) != 0]
+
+
 
 
 
@@ -548,40 +551,41 @@ S <- cbind(S, bookkeepingS)
 ## Add pseudoreactions which track some combination of fluxes ##
 ## rIDs are either identified by being pre-specified (Measured_reactions) or involve consumption of a specific specie (Consumed_species)
 
-
-internal_trackingS <- matrix(0, nrow = length(interal_flux_list), ncol = ncol(S))
-colnames(internal_trackingS) <- colnames(S)
-rownames(internal_trackingS) <- paste(names(interal_flux_list), "usage_bookkeeping")
-
-for(i in 1:length(interal_flux_list)){
-  Frxns <- interal_flux_list[[i]]$reactions[interal_flux_list[[i]]$positive]
-  Revrxns <- interal_flux_list[[i]]$reactions[!interal_flux_list[[i]]$positive]
-  matched_reactions <- c(1:nrow(Sinfo))[(Sinfo$reaction %in% Frxns & Sinfo$direction == "F") | Sinfo$reaction %in% Revrxns]
+if(length(interal_flux_list) != 0){
   
-  internal_trackingS[i,matched_reactions] <- interal_flux_list[[i]]$coef[chmatch(Sinfo$reaction[matched_reactions], interal_flux_list[[i]]$reactions)]
+  internal_trackingS <- matrix(0, nrow = length(interal_flux_list), ncol = ncol(S))
+  colnames(internal_trackingS) <- colnames(S)
+  rownames(internal_trackingS) <- paste(names(interal_flux_list), "usage_bookkeeping")
   
+  for(i in 1:length(interal_flux_list)){
+    Frxns <- interal_flux_list[[i]]$reactions[interal_flux_list[[i]]$positive]
+    Revrxns <- interal_flux_list[[i]]$reactions[!interal_flux_list[[i]]$positive]
+    matched_reactions <- c(1:nrow(Sinfo))[(Sinfo$reaction %in% Frxns & Sinfo$direction == "F") | Sinfo$reaction %in% Revrxns]
+    
+    internal_trackingS[i,matched_reactions] <- interal_flux_list[[i]]$coef[chmatch(Sinfo$reaction[matched_reactions], interal_flux_list[[i]]$reactions)]
+    
   }
-
-S <- rbind(S, internal_trackingS)
-
-
-internalRxSplit <- data.frame(rxDesignation = c(paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_offset"), 
-                                                 paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_match_F"),
-                                                 paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_match_R")), 
-                               reaction = rep(paste((unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])),"composition"), times = 3), 
-                               direction = c(rep("F", length(interal_flux_list)*2), rep("R", length(interal_flux_list))))
-
-
-internal_bookkeeping <- matrix(0, nrow = nrow(S), ncol = nrow(internalRxSplit))
-colnames(internal_bookkeeping) <- internalRxSplit$rxDesignation
-
-for(j in 1:ncol(internal_bookkeeping)){
-  internal_bookkeeping[rownames(S) %in% paste(strsplit(internalRxSplit$reaction[j], ' composition')[[1]], "usage_bookkeeping"), j] <- -1
+  
+  S <- rbind(S, internal_trackingS)
+  
+  
+  internalRxSplit <- data.frame(rxDesignation = c(paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_offset"), 
+                                                  paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_match_F"),
+                                                  paste(c(unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])), "comp_match_R")), 
+                                reaction = rep(paste((unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])),"composition"), times = 3), 
+                                direction = c(rep("F", length(interal_flux_list)*2), rep("R", length(interal_flux_list))))
+  
+  
+  internal_bookkeeping <- matrix(0, nrow = nrow(S), ncol = nrow(internalRxSplit))
+  colnames(internal_bookkeeping) <- internalRxSplit$rxDesignation
+  
+  for(j in 1:ncol(internal_bookkeeping)){
+    internal_bookkeeping[rownames(S) %in% paste(strsplit(internalRxSplit$reaction[j], ' composition')[[1]], "usage_bookkeeping"), j] <- -1
   }
-
-Sinfo <- rbind(Sinfo, internalRxSplit)
-S <- cbind(S, internal_bookkeeping)
-
+  
+  Sinfo <- rbind(Sinfo, internalRxSplit)
+  S <- cbind(S, internal_bookkeeping)
+}
 
 ################ F : flux balance ############
 
@@ -629,7 +633,7 @@ if(!file.exists("flux_cache/infeasibleRxnMet.txt") | QPorLP == 'checkfeas'){
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
 
 if(QPorLP == "QP"){
-  growth_rate <- data.frame(cond = chemostatInfo$condition[1:n_c], limit = chemostatInfo$limitation[1:n_c], dr = chemostatInfo$actualDR[1:n_c], L1 = NA, L2 = NA)
+  growth_rate <- data.frame(cond = chemostatInfo$ChemostatCond, limit = chemostatInfo$Limitation, dr = chemostatInfo$actualDR, L1 = NA, L2 = NA)
   }
 
 flux_vectors <- list()
@@ -646,7 +650,8 @@ if(QPorLP == "QP"){
 
   
   flux_elevation_factor <- 10^6
-  flux_penalty <- 1000/(flux_elevation_factor)
+  flux_penalty <- 500/(flux_elevation_factor)
+  #flux_penalty <- 1000/(flux_elevation_factor)
   
   qpModel$A <- Matrix(S)
   qpModel$rhs <- Fzero #flux balance
@@ -694,9 +699,9 @@ if(QPorLP == "QP"){
     cond_boundary_rxns$rate[cond_boundary_rxns$reaction %in% paste(unique(comp_by_cond$compositionFile$varCategory), "composition")] <- fluxComp
     
     qpModel$lb[cond_boundary_rxns$index][!is.na(cond_boundary_rxns$rate)] <- cond_boundary_rxns$rate[!is.na(cond_boundary_rxns$rate)]
-    qpModel$lb[cond_boundary_rxns$index][is.na(cond_boundary_rxns$rate)] <- 0
-    
     qpModel$ub[cond_boundary_rxns$index][!is.na(cond_boundary_rxns$rate)] <- cond_boundary_rxns$rate[!is.na(cond_boundary_rxns$rate)]
+    
+    qpModel$lb[cond_boundary_rxns$index][is.na(cond_boundary_rxns$rate)] <- 0
     qpModel$ub[cond_boundary_rxns$index][is.na(cond_boundary_rxns$rate)] <- Inf
     
     ## quadratic matching of exchange fluxes and production of biomass components ##
@@ -718,15 +723,30 @@ if(QPorLP == "QP"){
       ## overwrite diagonal elements of Q with precision (inverse variance) ##
       matchedSpecies$Precision[matchedSpecies$reaction == paste(biomassSpec, "composition")] <- (1/(treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$SD*fluxComp))^2
       
-      ### overwrite stoichiometry for each biomass reaction to reflect the actual portions consumed such that the expected flux is equal to fluxComp
-      for(biomassSpecRx in names(biomassConv)[grep(paste('^', biomassSpec, sep = ""), names(biomassConv))]){
-        
-        comp_replacement <- data.frame(treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$exchange, biomassConv[[biomassSpecRx]])
-        
-        qpModel$A[comp_replacement$conversion.index,stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- comp_replacement$change*ifelse(sum(grep('_R$', biomassSpecRx)) != 0, -1, 1) / fluxComp
-        
+      if(biomassSpec %in% unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Boundary"])){
+        ### overwrite stoichiometry for each biomass reaction to reflect the actual portions consumed such that the expected flux is equal to fluxComp ##
+        for(biomassSpecRx in names(biomassConv)[grep(paste('^', biomassSpec, sep = ""), names(biomassConv))]){
+          
+          comp_replacement <- data.frame(treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$exchange, biomassConv[[biomassSpecRx]])
+          
+          qpModel$A[comp_replacement$conversion.index,stacked_comp_offset$index[stacked_comp_offset$rxDesignation == biomassSpecRx]] <- comp_replacement$change*ifelse(sum(grep('_R$', biomassSpecRx)) != 0, -1, 1) / fluxComp
+        }
       }
+      
+      if(biomassSpec %in% unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])){
+        ### overwrite internal fluxes ##
+        for(biomassSpecRx in names(biomassConv)[grep(paste('^', biomassSpec, sep = ""), names(biomassConv))]){
+          
+          comp_replacement <- internalRxSplit[internalRxSplit$reaction %in% paste(biomassSpec, "composition"),]
+          comp_replacement$change <- treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$exchange$change * ifelse(comp_replacement$direction == "F", 1, -1) / fluxComp
+          
+          qpModel$A[rownames(S) == paste(biomassSpec, "usage_bookkeeping"), chmatch(internalRxSplit$rxDesignation[internalRxSplit$reaction %in% paste(biomassSpec, "composition")], colnames(S))] <- comp_replacement$change
+          
+        }
+      }
+      
     }
+    
     #qpModel$A[rowSums(qpModel$A[,stacked_comp_offset$index] != 0) != 0,stacked_comp_offset$index]
     
     ## correct precisions for flux elevation factor
@@ -754,7 +774,8 @@ if(QPorLP == "QP"){
       ### load: read pythout.txt files containing solved FVA models
       ### otherwise... run locally: prohibitively slow for FVA
       
-      # to submit all treatments to the que use "cetus_script.sh XXfolderXX" - where XXfolderXX is relative to the base directory
+      # to submit all treatments to the que use "cetus_script.sh XXfolderXX" - where XXfolderXX is relative to the login directory
+      # e.g. cetus_script.sh FBA/FBA_python/pythonVA_test
       
       pythout = FVA_setup(useCluster)
       
@@ -806,8 +827,6 @@ if(QPorLP == "QP"){
     #plot(log2(ffAnalyze$force) ~ log2(ffAnalyze$reference))
     #ffAnalyze[abs(ffAnalyze$log2Fluxchange) > 5,][order(ffAnalyze[abs(ffAnalyze$log2Fluxchange) > 5,]$log2Fluxchange),]
     
-    
-    
     #metFeed <- data.frame(mets = metabolites, obj = NA)
     #for(metN in 1:nrow(metFeed)){
     #  metFeedbalanceStoi <- data.frame(specie = metFeed$mets[metN], stoi = 1)
@@ -856,7 +875,7 @@ if(QPorLP == "QP"){
     flux_vectors[[names(treatment_par)[treatment]]]$"constraints" <- constrainedFlux
     flux_vectors[[names(treatment_par)[treatment]]]$"residual" <- residualFlux
     
-    residual_flux_stack <- rbind(residual_flux_stack, cbind(condition = chemostatInfo$condition[treatment], residualFlux))
+    residual_flux_stack <- rbind(residual_flux_stack, cbind(condition = chemostatInfo$ChemostatCond[treatment], residualFlux))
     
     ### Compare the elemental composition of all boundary constraints ### 
     
@@ -868,7 +887,7 @@ if(QPorLP == "QP"){
     
     boundary_stoichiometry <- qpModel$A[,sapply(residualFlux$reactions, function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
     boundary_stoichiometry <- boundary_stoichiometry[rowSums(boundary_stoichiometry != 0) != 0,]
-    boundary_stoichiometry <- boundary_stoichiometry[grep('bookkeeping', rownames(boundary_stoichiometry), invert = T),] 
+    boundary_stoichiometry <- boundary_stoichiometry[grep('bookkeeping', rownames(boundary_stoichiometry), invert = T),]
     boundary_stoichiometry <- as.matrix(boundary_stoichiometry)
     
     boundary_elements <- convert_to_elemental(boundary_stoichiometry, modelMetComp)
@@ -887,12 +906,16 @@ if(QPorLP == "QP"){
       }
     ele_df$exchange <- factor(ele_df$exchange, levels = c("Reactant", "Product"))
     ele_df$color <- boundary_label$color[chmatch(ele_df$reactions, boundary_label$reaction)]
-    ele_df$condition <- chemostatInfo$condition[treatment]
+    ele_df$condition <- chemostatInfo$ChemostatCond[treatment]
     
     composition_balance <- rbind(composition_balance, ele_df)
     
     }  
   } 
+
+
+
+
 
 #reaction_info('r_0249')
 #rxnFile[rxnFile$ReactionID == "r_0005",]
@@ -903,8 +926,8 @@ if(QPorLP == "QP"){
 ########### Mass balance of individual conditions ####### 
 
 ele_df_melt <- data.table(melt(composition_balance, id.vars = c("reactions", "condition", "element", "exchange", "color")))
-ele_df_melt[,limitation := chemostatInfo$limitation[chmatch(ele_df_melt$condition, chemostatInfo$condition)],]
-ele_df_melt[,GR := chemostatInfo$DRgoal[chmatch(ele_df_melt$condition, chemostatInfo$condition)],]
+ele_df_melt[,limitation := chemostatInfo$Limitation[chmatch(ele_df_melt$condition, chemostatInfo$ChemostatCond)],]
+ele_df_melt[,GR := chemostatInfo$DRgoal[chmatch(ele_df_melt$condition, chemostatInfo$ChemostatCond)],]
 ele_df_melt[,shortvar := factor(ifelse(variable == "netFlux", "OPT", "EXP"), levels = c("EXP", "OPT")),]
 
 
@@ -919,14 +942,13 @@ for(an_element in unique(ele_df_melt$element)){
   involvedRxns <- elemental_mat[,sum(value != 0), by = reactions]
   elemental_mat <- elemental_mat[reactions %in% involvedRxns[V1 != 0,]$reactions,]
   
-  elemental_barplot <- ggplot(elemental_mat, aes(x = exchange, y = value, fill = color)) + barplot_theme + facet_grid(limitation + shortvar ~ GR) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = ifelse(length(unique(elemental_mat$reactions)) < 5, 2, 5)), labels = boundary_label$reaction[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions], breaks = boundary_label$color[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions]) +
-    scale_y_continuous("Flux per element (moles / hour * mL cellular volume)") + scale_x_discrete("", expand = c(0,0)) + ggtitle(paste("Experimental and Optimized -- ", an_element, " -- mass balance"))
+  elemental_barplot <- ggplot(elemental_mat, aes(x = exchange, y = value, fill = color)) + barplot_theme + facet_grid(limitation + shortvar ~ GR) + scale_fill_identity(name = "Class", guide = guide_legend(nrow = ifelse(length(unique(elemental_mat$reactions)) < 5, 2, 6)), labels = boundary_label$reaction[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions], breaks = boundary_label$color[boundary_label$reaction %in% involvedRxns[V1 != 0,]$reactions]) +
+    scale_y_continuous("Flux per atom (moles / hour * mL cellular volume)") + scale_x_discrete("", expand = c(0,0)) + ggtitle(paste("Experimental and Optimized -- ", an_element, " -- mass balance"))
   print(elemental_barplot + geom_bar(stat = "identity", position = "stack"))  
   }
 dev.off()
 
 
-    
 
 
 ########### Generate a flux matrix of reactions carrying flux in some condition, as which deviations account for the L2 penalty #####
@@ -959,7 +981,13 @@ ggsave("flux_residuals.pdf", width = 18, height = 20)
 #rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 #fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 
+#write.output(fluxMat_per_cellVol, "Flux_analysis/rawFluxHM.tsv")
 
+#sort(apply(fluxMat_per_cellVol, 1, function(x){median(abs(x)[x != 0])}), decreasing = T)[1:200]
+
+
+
+###
 
 
 std_flux <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd)*ifelse((apply(fluxMat_per_cellVol, 1, function(x){median(x[x != 0])}) >= 0), 1, -1))) %*% rep(1, n_c))
@@ -987,7 +1015,7 @@ impSVD_pcs <- impSVD$v
 colnames(impSVD_pcs) <- paste("PC", c(1:npc))
 rownames(impSVD_pcs) <- colnames(std_flux_rxnName)
 
-heatmap.2(t(impSVD_pcs), Colv = FALSE, Rowv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,21), denscol = "white")
+heatmap.2(t(impSVD_pcs), Colv = FALSE, Rowv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
 
 heatmap.2(std_flux, trace = "none", Colv = F)
 
@@ -1069,9 +1097,10 @@ invalid_flux <- invalid_flux[invalid_flux$value,]
 for(i in 1:nrow(invalid_flux)){
   
   fva_rep <- total_flux_cast[rownames(total_flux_cast) == invalid_flux[i,1], colnames(total_flux_cast) == invalid_flux[i,2],]
+  fva_rep[!is.finite(fva_rep)] <- fva_rep[names(fva_rep) == "standardQP"]
   
-  fva_rep[grep('max', names(fva_rep))][is.infinite(fva_rep[grep('max', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * 10
-  fva_rep[grep('min', names(fva_rep))][is.infinite(fva_rep[grep('min', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * -10
+  #fva_rep[grep('max', names(fva_rep))][is.infinite(fva_rep[grep('max', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * 10
+  #fva_rep[grep('min', names(fva_rep))][is.infinite(fva_rep[grep('min', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * -10
   
   total_flux_cast[rownames(total_flux_cast) == invalid_flux[i,1], colnames(total_flux_cast) == invalid_flux[i,2],] <- fva_rep
   

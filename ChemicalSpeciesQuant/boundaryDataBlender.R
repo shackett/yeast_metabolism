@@ -87,8 +87,20 @@ chemostatInfo_bu <- read.table("BulkComposition/chemostatDRmisc.tsv", sep = "\t"
 
 # Load all chemostat conditions
 chemostatInfo <- read.table("chemostatInformation/ListOfChemostats_augmented.txt", sep = "\t", header = T)
+
+sampleInfo <- read.table("chemostatInformation/Sample_information/sampleInfo.txt", sep = "\t", header = TRUE) ## dry weight from culture
+sampleInfo <- sampleInfo[sampleInfo$Sample %in% chemostatInfo$composition_data,]
+sampleInfo$DWperML <- sampleInfo$DryWeight/sampleInfo$cultureV #mg dry weight per mL of culture
+sampleInfo$ChemostatID <- sampleInfo$Sample
+
+sampleInfoMerge <- merge(chemostatInfo, sampleInfo, by = "ChemostatID")
+# mg dry weight per uL of cells - this direct experimental ratio can be scaled the observed chemostat density to infer the expected dry weight density
+sampleInfoMerge$mg_per_uL_cells <- sampleInfoMerge$DWperML/sampleInfoMerge$VolFrac_mean
+   
 # Switch to the subset which will be analyzed
 chemostatInfo <- chemostatInfo[chemostatInfo$include_this,]
+chemostatInfo$DWperML <- chemostatInfo$VolFrac_mean * sampleInfoMerge$mg_per_uL_cells[chmatch(chemostatInfo$composition_data, sampleInfoMerge$ChemostatID)]
+
 
 # Initialize
 n_c <- nrow(chemostatInfo)
@@ -100,12 +112,6 @@ comp_by_cond$moles_per_cell <- comp_by_cond$grams_per_cell <- tmp
 ## coefficient of variation of experimental composition measurements ##
 CV_table <- data.table(condition = chemostatInfo$ChemostatCond)
 comp_by_cond$CV_table <- CV_table
-
-
-sampleInfo <- read.table("chemostatInformation/Sample_information/sampleInfo.txt", sep = "\t", header = TRUE) ## dry weight from culture
-sampleInfo <- sampleInfo[sampleInfo$Sample %in% chemostatInfo$composition_data,]
-
-chemostatInfo$DWperML = sampleInfo$DryWeight[chmatch(sampleInfo$Sample, chemostatInfo$composition_data)]/sampleInfo$cultureV[chmatch(sampleInfo$Sample, chemostatInfo$composition_data)] #mg dry weight per mL of culture
 
 chemostatInfo$DWperCell = chemostatInfo$DWperML * (1/1000) / chemostatInfo$VolFrac_mean * (chemostatInfo$medcellVol * 10^-9) #g dry weight per cell
 
@@ -482,8 +488,8 @@ comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, l
 
 SPM <- read.delim("Media/measuredNutrients.tsv")
 NMR <- read.delim("Media/mediaComposition_NMR.tsv")
-nutrientFile <- read.delim("../Yeast_genome_scale/Boer_nutrients.txt")[1:6,1:6]; nutrientCode <- data.frame(nutrient = colnames(nutrientFile)[-1], shorthand = c("n", "p", "c", "L", "u")) #molar concentration of nutrients
-nutrientFileConv <- data.frame(mediaName = colnames(nutrientFile)[-1], shortName = c("n", "p", "c", "L", "u"))
+nutrientFile <- read.delim("../Yeast_genome_scale/Boer_nutrients.txt")[1:6,1:6] #molar concentration of nutrients
+nutrientFileConv <- data.frame(mediaName = colnames(nutrientFile)[-1], shortName = c("N", "P", "C", "L", "U"))
 
 mediaSummary <- NULL
 
@@ -498,17 +504,22 @@ SPM$maxSD <- mapply(function(x,y){max(x, y)}, x = SPM$phosphateSD, y = SPM$SDcon
 
 # take a consensus SD for p-lim and !p-lim
 
-SPM_out <- data.frame(condition = SPM$condition, specie = "phosphate [extracellular]", change = SPM$phosphateUptake, sd = SPM$maxSD, lb = 0, ub = SPM$ceiling, type = "uptake")
+SPM_out <- data.frame(condition = chemostatInfo$ChemostatCond, specie = "phosphate [extracellular]", change = SPM$phosphateUptake, sd = SPM$maxSD, lb = 0, ub = SPM$ceiling, type = "uptake")
 mediaSummary <- rbind(mediaSummary, SPM_out)
 
 ### NMR data - glucose -> EtOH, Ac, glycerol 
 speciesOfInterest <- data.frame(NMRname = c("Glucose", "Ethanol", "Acetate", "Lactate", "Glycerol"), mediaName = c("D-glucose", NA, NA, NA, NA), 
-                                modelName = c("D-glucose [extracellular]", "ethanol [extracellular]", "acetate [extracellular]", "(S)-lactate [extracellular]", "glycerol [extracellular]"), 
+                                modelName = c("D-glucose [extracellular]", "ethanol [extracellular]", "acetate [extracellular]", "(R)-lactate [extracellular]", "glycerol [extracellular]"), 
                                 type = c("uptake", rep("excretion", 4)))
 
 for(a_specie_n in 1:nrow(speciesOfInterest)){
-  NMR_data_subset <- NMR[(NMR$peak == speciesOfInterest$NMRname[a_specie_n]) & NMR$condition %in% chemostatInfo$condition,]
-  NMR_data_subset$condition <- factor(NMR_data_subset$condition, levels = chemostatInfo$condition)
+  
+  # match NMR data by associated NMR_name and NMR_date
+  data_index <- mapply(function(x,y){c(1:nrow(NMR))[NMR$peak == speciesOfInterest$NMRname[a_specie_n] & NMR$condition == x & NMR$date == y]
+  }, x = chemostatInfo$NMR_name, y = chemostatInfo$NMR_date)
+  
+  NMR_data_subset <- NMR[data_index,]
+  NMR_data_subset$condition <- factor(NMR_data_subset$condition, levels = chemostatInfo$NMR_name)
   NMR_data_subset <- NMR_data_subset[order(NMR_data_subset$condition),]
   NMR_data_subset$consensusSD <- NMR_data_subset$estimate * median(NMR_data_subset$se/NMR_data_subset$estimate, na.rm = T) #take a consensus SD using a fixed CV
   NMR_data_subset$maxSD <-  mapply(function(x,y){max(x, y, na.rm = T)}, x = NMR_data_subset$se, y = NMR_data_subset$consensusSD)
@@ -556,9 +567,9 @@ cellularDFmelt <- data.table(cellularDFmelt)
 cellularDFmelt$condition <- as.character(cellularDFmelt$condition); cellularDFmelt$specie <- as.character(cellularDFmelt$specie)
 
 jointCompSummary <- rbind(mediaSummary[,list(condition, specie, density, type),], cellularDFmelt)
-jointCompSummary[,Limitation := chemostatInfo$limitation[chemostatInfo$condition == condition], by = condition]
-jointCompSummary[,DR := chemostatInfo$DRgoal[chemostatInfo$condition == condition], by = condition]
-jointCompSummary <- jointCompSummary[!(jointCompSummary$condition %in% c("p0.05H1", "p0.05H2")),]
+jointCompSummary[,Limitation := chemostatInfo$Limitation[chemostatInfo$NMR_name == condition], by = condition]
+jointCompSummary$Limitation <- factor(jointCompSummary$Limitation, level = unique(chemostatInfo$Limitation))
+jointCompSummary[,DR := chemostatInfo$DRgoal[chemostatInfo$NMR_name == condition], by = condition]
 
 jointCompSummary$type <- factor(jointCompSummary$type, levels = c("uptake", "excretion", "biomass"))
 
