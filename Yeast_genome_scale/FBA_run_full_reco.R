@@ -31,7 +31,7 @@ if(QPorLP == "QP"){
 modeGurobi = 'python'
 pythonMode = 'simple' # simple,thdyn, dir or ll (loopless)
 FVA = 'T' # Should flux variblility analysis be performed
-useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -881,10 +881,10 @@ if(QPorLP == "QP"){
     
     boundary_label <- data.frame(reaction = residualFlux$reactions, color = NA)
     
-    boundary_label$color[boundary_label$reaction %in% paste(free_flux, "boundary")] <- brewer.pal(sum(boundary_label$reaction %in% paste(free_flux, "boundary")), "Dark2")
+    boundary_label$color[boundary_label$reaction %in% paste(free_flux, "[extracellular] boundary")] <- brewer.pal(sum(boundary_label$reaction %in% paste(free_flux, "[extracellular] boundary")), "Dark2")
     boundary_label$color[is.na(boundary_label$color)][grep('boundary', boundary_label$reaction[is.na(boundary_label$color)])] <- brewer.pal(length(grep('boundary', boundary_label$reaction[is.na(boundary_label$color)])), "Set3")
-    boundary_label$color[grep('composition', boundary_label$reaction)] <- c(brewer.pal(length(grep('composition', boundary_label$reaction))-1, "Pastel2"), "brown1")
-    
+    boundary_label$color[grep('composition', boundary_label$reaction)] <- c(brewer.pal(8, "Pastel2"), brewer.pal(length(grep('composition', boundary_label$reaction)) - 8, "YlOrBr"))
+           
     boundary_stoichiometry <- qpModel$A[,sapply(residualFlux$reactions, function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
     boundary_stoichiometry <- boundary_stoichiometry[rowSums(boundary_stoichiometry != 0) != 0,]
     boundary_stoichiometry <- boundary_stoichiometry[grep('bookkeeping', rownames(boundary_stoichiometry), invert = T),]
@@ -987,9 +987,40 @@ ggsave("flux_residuals.pdf", width = 18, height = 20)
 
 
 
+#### Determine which reactions have smooth flux patterns within each condition ####
+# use F-test
+
+smooth_flux_Fstat <- data.frame(rxn = rownames(fluxMat_per_cellVol), Fstat = NA, valid_flux = NA)
+cond_model_matrix <- model.matrix(data = chemostatInfo, ~ factor(Limitation) + factor(Limitation)*actualDR)
+
+for(i in 1:nrow(fluxMat_per_cellVol)){
+  smooth_flux_Fstat$Fstat[i] <- anova(lm(fluxMat_per_cellVol[i,] ~ cond_model_matrix + 0))[1,5]
+  }
+
+smooth_flux_Fstat$valid_flux <- smooth_flux_Fstat$Fstat < 0.0001
+
+### carbon dioxide 
+
+carbon_dioxide_ex <- fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "carbon dioxide [extracellular] boundary"]
+small_mol_excretion <- apply(fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) %in% c("ethanol [extracellular] boundary", "acetate [extracellular] boundary",
+                                                                                      "(R)-lactate [extracellular] boundary", "glycerol [extracellular] boundary"),], 2, sum)
+
+qplot(y = -1*carbon_dioxide_ex, x = small_mol_excretion, color = chemostatInfo$Limitation) +
+  geom_abline(intercept = 0, slope = 1)
+
+
+
+
+std_flux_rxnName[rownames(std_flux_rxnName) == "carbon dioxide [extracellular] boundary"] / std_flux_rxnName[rownames(std_flux_rxnName) == "oxygen [extracellular] boundary"]
+
+heatmap.2(std_flux_rxnName[smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
+heatmap.2(std_flux_rxnName[!smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
+
+
+
+
+
 ###
-
-
 std_flux <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd)*ifelse((apply(fluxMat_per_cellVol, 1, function(x){median(x[x != 0])}) >= 0), 1, -1))) %*% rep(1, n_c))
 
 std_flux_rxnName <- std_flux
@@ -1108,7 +1139,7 @@ for(i in 1:nrow(invalid_flux)){
 
 
 
-plot(sort(compaFluxes$magfluxDeparture[!compaFluxes$fluxCap])[1:3500])
+#plot(sort(compaFluxes$magfluxDeparture[!compaFluxes$fluxCap])[1:3500])
 
 # save flux summaries and pipe into FBGA.R #
 flux_summary$total_flux_cast <- total_flux_cast
