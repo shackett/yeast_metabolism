@@ -468,6 +468,13 @@ for(i in 1:length(nutrient_rxns)){
   nutrientS[nutrient_rxns[i],i] <- 1
   }
 
+## oxygen is directly coupled with ETC, to avoid un-physiological cycling ##
+oxygen_stoi <- S_rxns[,grep('r_0438', colnames(S_rxns))]
+oxygen_stoi[names(oxygen_stoi) == "s_1278"] <- 0
+nutrientS[,boundary_met$SpeciesName == "oxygen [extracellular]"] <- oxygen_stoi # oxygen uptake == complex IV flux
+S_rxns_split[grep('s_2817', rownames(S_rxns_split)), grep('r_218[23]', colnames(S_rxns_split))] <- 0 # make oxygen use for FA-desaturation a freebee.
+
+
 nutrientRxSplit <- data.frame(rxDesignation = c(paste(c(boundary_met$SpeciesName), "boundary_offset"), paste(c(boundary_met$SpeciesName), "boundary_match_F"), paste(c(boundary_met$SpeciesName), "boundary_match_R")), 
       reaction = rep(paste(c(boundary_met$SpeciesName), "boundary"), times = 3), direction = c(rep("F", length(nutrient_rxns)*2), rep("R", length(nutrient_rxns))))
 
@@ -856,7 +863,7 @@ if(QPorLP == "QP"){
       frindices <- c(1:length(Sinfo[,1]))[Sinfo$reaction == frcombo]
       sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * solvedModel$x[frindices]/flux_elevation_factor)
     })
-    
+    fluxComp
     # set fluxes below 10^-10 to zero, hist(log10(collapsedFlux)) indicates that there are many fluxes which are non-zero because of failure to round to zero
     collapsedFlux[abs(collapsedFlux) < 10^-10] <- 0
     
