@@ -31,7 +31,7 @@ if(QPorLP == "QP"){
 modeGurobi = 'python'
 pythonMode = 'simple' # simple,thdyn, dir or ll (loopless)
 FVA = 'T' # Should flux variblility analysis be performed
-useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -239,11 +239,25 @@ for(i in 1:n_c){
   measured_bounds$lb <- measured_bounds$lb*chemostatInfo$actualDR[i]
   measured_bounds$ub <- measured_bounds$ub*chemostatInfo$actualDR[i]
   
-  #remove phosphate because empirical uptake rates far exceed capacity of biomass assimilation
+  # remove phosphate because empirical uptake rates far exceed capacity of biomass assimilation
   measured_bounds <- data.frame(measured_bounds)
   measured_bounds[measured_bounds$specie == "phosphate [extracellular]", colnames(measured_bounds) %in% c("change", "sd")] <- NA
   measured_bounds <- data.table(measured_bounds)
   
+  # define approximate oxygen uptake using a RQ of 5 for non-carbon-limited culture and < 5 for carbon-limited culture
+  # employed by approximating vCO2 as 5/4 [ethanol + actetate]
+  if(chemostatInfo$Limitation[i] == "C"){
+    oxygen_bounds <- data.frame(condition = chemostatInfo$ChemostatCond[i], specie = 'oxygen [extracellular]', change = 0, sd = Inf, 
+                                lb = sum(measured_bounds$change[measured_bounds$specie %in% c("ethanol [extracellular]", "acetate [extracellular]")])/4,
+                                ub = Inf, type = "uptake", density = NA)
+  } else {
+    oxygen_bounds <- data.frame(condition = chemostatInfo$ChemostatCond[i], specie = 'oxygen [extracellular]', 
+                                change = sum(measured_bounds$change[measured_bounds$specie %in% c("ethanol [extracellular]", "acetate [extracellular]")])/4,
+                                sd = NA, lb = 0, ub = Inf, type = "uptake", density = NA)
+    oxygen_bounds$sd <- oxygen_bounds$change/5
+  }
+  
+  measured_bounds <- rbind(measured_bounds, oxygen_bounds)
   
   treatment_par[[chemostatInfo$ChemostatCond[i]]][["nutrients"]] <- measured_bounds
   
@@ -294,7 +308,7 @@ compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$Reactio
 
 ## extract the metabolite ID corresponding to the extracellular introduction of nutrients ##
 
-sources <- c("D-glucose", "ammonium", '^phosphate \\[extracellular\\]', "sulphate", "uracil", "L-leucine")
+sources <- c("D-glucose", "ammonium", '^phosphate \\[extracellular\\]', "sulphate", "uracil", "L-leucine", "oxygen")
 		
 resource_matches <- lapply(sources, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -332,7 +346,7 @@ for(x in 1:length(sinks)){
 
 ## freely exchanging metabolites through extracellular compartment ##
 
-free_flux <- c("carbon dioxide", "oxygen", "H2O", "H+")
+free_flux <- c("carbon dioxide", "H2O", "H+")
 
 resource_matches <- lapply(free_flux, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
 
@@ -985,36 +999,16 @@ ggsave("flux_residuals.pdf", width = 18, height = 20)
 
 #sort(apply(fluxMat_per_cellVol, 1, function(x){median(abs(x)[x != 0])}), decreasing = T)[1:200]
 
+### observed RQ ###
 
-
-#### Determine which reactions have smooth flux patterns within each condition ####
-# use F-test
-
-smooth_flux_Fstat <- data.frame(rxn = rownames(fluxMat_per_cellVol), Fstat = NA, valid_flux = NA)
-cond_model_matrix <- model.matrix(data = chemostatInfo, ~ factor(Limitation) + factor(Limitation)*actualDR)
-
-for(i in 1:nrow(fluxMat_per_cellVol)){
-  smooth_flux_Fstat$Fstat[i] <- anova(lm(fluxMat_per_cellVol[i,] ~ cond_model_matrix + 0))[1,5]
-  }
-
-smooth_flux_Fstat$valid_flux <- smooth_flux_Fstat$Fstat < 0.0001
-
-### carbon dioxide 
+-1*fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "carbon dioxide [extracellular] boundary"] / fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "oxygen [extracellular] boundary"]
 
 carbon_dioxide_ex <- fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "carbon dioxide [extracellular] boundary"]
-small_mol_excretion <- apply(fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) %in% c("ethanol [extracellular] boundary", "acetate [extracellular] boundary",
-                                                                                      "(R)-lactate [extracellular] boundary", "glycerol [extracellular] boundary"),], 2, sum)
+small_mol_excretion <- apply(fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) %in% c("ethanol [extracellular] boundary", "acetate [extracellular] boundary"),], 2, sum)
 
 qplot(y = -1*carbon_dioxide_ex, x = small_mol_excretion, color = chemostatInfo$Limitation) +
   geom_abline(intercept = 0, slope = 1)
 
-
-
-
-std_flux_rxnName[rownames(std_flux_rxnName) == "carbon dioxide [extracellular] boundary"] / std_flux_rxnName[rownames(std_flux_rxnName) == "oxygen [extracellular] boundary"]
-
-heatmap.2(std_flux_rxnName[smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
-heatmap.2(std_flux_rxnName[!smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
 
 
 
@@ -1048,12 +1042,31 @@ rownames(impSVD_pcs) <- colnames(std_flux_rxnName)
 
 heatmap.2(t(impSVD_pcs), Colv = FALSE, Rowv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
 
-heatmap.2(std_flux, trace = "none", Colv = F)
+heatmap.2(std_flux, trace = "none", Colv = F, col = greenred(100))
 
 
 
 
+#### Determine which reactions have smooth flux patterns within each condition ####
+# use F-test
 
+smooth_flux_Fstat <- data.frame(rxn = rownames(fluxMat_per_cellVol), Fstat = NA, valid_flux = NA)
+cond_model_matrix <- model.matrix(data = chemostatInfo, ~ factor(Limitation) + factor(Limitation)*actualDR)
+
+for(i in 1:nrow(fluxMat_per_cellVol)){
+  smooth_flux_Fstat$Fstat[i] <- anova(lm(fluxMat_per_cellVol[i,] ~ cond_model_matrix + 0))[1,5]
+  }
+
+smooth_flux_Fstat$valid_flux <- smooth_flux_Fstat$Fstat < 0.0001
+
+std_flux_all <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd)*ifelse((apply(fluxMat_per_cellVol, 1, function(x){median(x[x != 0])}) >= 0), 1, -1))) %*% rep(1, n_c))
+
+heatmap.2(std_flux_all[smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
+heatmap.2(std_flux_all[!smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
+
+
+
+#### Summarize data for further analysis ####
 
 
 flux_summary <- list()
