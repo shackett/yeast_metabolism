@@ -610,6 +610,11 @@ interval_overlap_summary$Type[is.na(interval_overlap_summary$Type)] <- "+ litera
 
 # Reduce to best overlapping basic reaction or regulations
 interval_overlap_summary <- interval_overlap_summary[,list(predictionOverlap = max(intervalOverlap)), by = c("reaction", "Type")]
+# add reactions with no literature supported regulation back with their RM values (and note with color)
+interval_overlap_match <- interval_overlap_summary[!(interval_overlap_summary$reaction %in% interval_overlap_summary$reaction[interval_overlap_summary$Type %in% "+ literature activator or inhibitor"]) & interval_overlap_summary$Type == "Substrates and Enzymes",]
+interval_overlap_match$Type <- "+ literature activator or inhibitor"
+
+interval_overlap_summary <- rbind(data.frame(interval_overlap_summary, color = "firebrick1"), data.frame(interval_overlap_match, color = "darkgoldenrod1"))
 
 # Order each type seperately
 interval_overlap_summary$x <- NA
@@ -620,93 +625,28 @@ for(a_type in unique(interval_overlap_summary$Type)){
 interval_overlap_summary$Type <- factor(interval_overlap_summary$Type, levels = c("Substrates and Enzymes", "+ literature activator or inhibitor", "+ hypothetical activator or inhibitor"))
 interval_overlap_summary$x <- factor(interval_overlap_summary$x)
 
+interval_exp_summary <- data.table(interval_overlap_summary)
+interval_exp_summary <- interval_exp_summary[,list(label = paste(signif(mean(predictionOverlap) * 100, 3), '% of fluxes\nare consistent', sep = '')) , by = "Type"]
+
+
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
                          panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank(),
                          strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"), axis.text.y = element_text(size = 20, color = "black"))
-  
-ggplot(interval_overlap_summary, aes(x = x, y = predictionOverlap, fill = "firebrick1")) + facet_grid(Type~.) + geom_bar(stat = "identity", position = "dodge", width = 0.85) + barplot_theme +
- scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Flux prediction ", expand = c(0,0)) + scale_fill_identity("Prediction Method")
+
+
+ggplot() + facet_grid(Type~.) + geom_bar(data = interval_overlap_summary, aes(x = x, y = predictionOverlap, fill = color), stat = "identity", position = "dodge", width = 0.85) + barplot_theme +
+ scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Flux prediction ", expand = c(0,0)) + scale_fill_identity("Prediction Method") +
+ geom_text(data = interval_exp_summary, aes(label = label), x = 5, y = 0.75, color = "black", hjust = 0) +
+ ggtitle('Fraction of confidence intervals \n capturing experimental value')
+
 ggsave("Figures/intervalOverlapSummary.pdf", height = 14, width = 10)
 
 
 
 
-##### Summarize weighted-elasticities / physiological leverage #####
+##### Generate summarizing metabolic leverage for a condition #####
 
-MLsummary <- data.table(MLdata[MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""] & MLdata$condition == "P0.05",])
-setnames(MLsummary, "0.5", "q0.5")
-MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme"))
-MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
-MLsummary[,leverage := leverage/totalLeverage]
-MLsummary$VarExplained <- rxn_fits$parPearson[chmatch(MLsummary$reaction, rxn_fits$rxn)]
-
-enz_leverage <- data.frame(reaction = MLsummary[Type == "enzyme",reaction], rank = NA)
-enz_leverage$rank[order(MLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
-
-MLsummary$rank <- factor(enz_leverage$rank[chmatch(MLsummary$reaction, enz_leverage$reaction)])
-setkeyv(MLsummary, c("Type", "rank"))
-setkey(MLsummary)
-
-ggplot(MLsummary, aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
-  barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
-  scale_fill_brewer(palette = "Set1") + scale_x_discrete("Reactions")
-ggsave("Figures/metabolicLeverage.pdf", height = 6, width = 10)
-  
-
-
-
-
-###### Summarize metabolic leverage ######
-# Reversible MM kinetics and RM + best significant regulator
-# Indicate fraction of missing explanatory power
-
-# consider reactions with a positive correlation between the rm form and flux carried
-valid_rxns <- rxn_fits$rxn[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]][rxn_fits$parPearson[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]] >= 0]
-valid_rxns <- reactionInfo$reaction[reactionInfo$rMech %in% valid_rxns]
-
-best_sig_regulator <- sapply(unique(valid_rxns), function(x){
-  subrxn <- reactionInfo[reactionInfo$reaction == x,]
-  subrxn <- subrxn[!is.na(subrxn$Qvalue) & subrxn$modification %in% grep('rmCond|t_metX|^$', subrxn$modification, invert = T, value = T) & subrxn$Qvalue < 0.1,]
-  if(nrow(subrxn) == 0){
-    NA
-    }else{
-      subrxn$rMech[which.min(subrxn$Qvalue)]
-      }
-  }) # identify which regulator results in the greatest improvement in fit for each reaction (if a signfiicant regulator was found)
-best_sig_regulator <- best_sig_regulator[!is.na(best_sig_regulator)]
-
-
-MLsummary <- data.table(MLdata[(MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" & reactionInfo$reaction %in% valid_rxns] | MLdata$reaction %in% best_sig_regulator) & MLdata$condition == "P0.05",])
-setnames(MLsummary, "0.5", "q0.5")
-MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive")] <- "regulatory"
-
-# partitioning explained variance into ML contributions - keeping relative fractions proportional but adjusting the sum
-# MLfrac_species = ML * r2
-# MLfrac_residual = sum(ML) * (1-r2)
-# divide both by r2
-# MLfrac_species = ML
-# MLfrac_residual = sum(ML) * (1-r2)/r2
-
-residualLeverage <- MLsummary[,list(Type = "residual", leverage = sum(leverage) * (1-rxn_fits$parPearson[chmatch(reaction, rxn_fits$rxn)]^2)/rxn_fits$parPearson[chmatch(reaction, rxn_fits$rxn)]^2)
-                              , by = "reaction"]
-
-MLsummary <- rbind(MLsummary, residualLeverage, use.names = T)
-          
-
-MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme", "regulatory", "residual"))
-MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
-MLsummary[,leverage := leverage/totalLeverage]
-
-MLsummary[,rxn := reactionInfo$reaction[reactionInfo$rMech == reaction], by = "reaction"]
-
-          
-          
-table(MLsummary$Type)
-
-
-
+metabolic_leverage_summary_plots("L0.05")
 
 
 
@@ -784,18 +724,59 @@ boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = el
 rxn_of_interest <- reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" | !is.na(reactionInfo$Qvalue) & reactionInfo$Qvalue < 0.1]
 
 ggplot(absolute_quant[absolute_quant$rxnForm %in% rxn_of_interest,], aes(x = lit_mean, y = log10(MLE), color = speciesType)) + geom_point(size = 1.3) + stat_abline(size = 2, alpha = 0.5) +
-  boxplot_theme + scale_color_brewer(palette = "Set1") + stat_smooth(method = "lm", fill = "black") +
+  boxplot_theme + stat_smooth(method = "lm", fill = "black") +
+  scale_color_brewer("Metabolite Class", palette = "Set1", labels = c("Inhibitors", 'Substrates/\nProducts')) + 
   scale_x_continuous(expression("Literature" ~ log[10] ~ "Affinity (M)")) +
-  scale_y_continuous(expression("Optimized" ~ log[10] ~ "Affinity (M)"))
-ggsave("Figures/affinity_match.pdf", height = 8, width = 8)
+  scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ "Affinity (M)"))
+ggsave("Figures/affinity_match.pdf", height = 10, width = 12)
+
+summary(lm(data = absolute_quant[absolute_quant$rxnForm %in% rxn_of_interest,], formula = "log10(MLE) ~ lit_mean"))
+
+
+##
+
+absolute_quant[!is.na(absolute_quant$dist_overlap) & absolute_quant$dist_overlap > 0.18 & absolute_quant$dist_overlap < 0.22 & absolute_quant$lit_SD != 0,]
+
+### Look at the differences between predicted and literature values versus the quality of fit ###
+
+par_lb <- absolute_quant$X2.5.
+par_ub <- absolute_quant$X97.5.
+lit_mean <- absolute_quant$lit_mean
+lit_SD <- absolute_quant$lit_SD
+
+dist_overlap <- function(par_lb, par_ub, lit_mean, lit_SD){
+  sapply(1:length(par_lb), function(i){
+    diff(pnorm(c(log10(par_lb[i]), log10(par_ub[i])), mean = lit_mean[i], sd = lit_SD[i]))/(log10(par_ub[i]) - log10(par_lb[i]))
+  })
+}
+absolute_quant$dist_overlap <- dist_overlap(absolute_quant$X2.5., absolute_quant$X97.5., absolute_quant$lit_mean, absolute_quant$lit_SD)
+absolute_quant$param_range <- log2(absolute_quant$X97.5.) - log2(absolute_quant$X2.5.)
+
+
+absolute_quant_deviation <- absolute_quant[,c('rxn', 'rxnForm', 'MLE', 'lit_mean', 'lit_SD', 'speciesType', 'speciesSubtype', 'dist_overlap', 'param_range')]
+absolute_quant_deviation$MLE <- log10(absolute_quant_deviation$MLE)
+absolute_quant_deviation$Interval_Overlap <- fraction_flux_deviation$"Interval Overlap"[chmatch(absolute_quant_deviation$rxnForm, fraction_flux_deviation$rxn)]
+absolute_quant_deviation$Deviation <- absolute_quant_deviation$MLE - absolute_quant_deviation$lit_mean
+absolute_quant_deviation <- absolute_quant_deviation[absolute_quant$param_range < 10 & !is.na(absolute_quant_deviation$dist_overlap),]
+
+scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), 
+      legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"),
+      strip.background = element_rect(fill = "cyan"), axis.text = element_text(color = "black")) 
+
+
+ggplot(absolute_quant_deviation[absolute_quant_deviation$rxnForm %in% rxn_of_interest,], aes(x = Interval_Overlap, y = dist_overlap, color = factor(speciesType))) + 
+  geom_point(size = 4) + stat_smooth(method = "lm", size = 2) + scale_color_brewer("Metabolite Class", palette = "Set1", labels = c("Inhibitors", 'Substrates/\nProducts')) +
+  scatter_theme + scale_x_continuous("Fit Quality") + scale_y_continuous('Overlap of affinity distribution\nand literature values') + 
+  ggtitle('Accuracy of metabolite affinity predictions\n increases with fit quality')
+ggsave("Figures/KmConsistencyVersusFit.pdf", height = 14, width = 14)
 
 
 
-summary(lm(log10(absolute_quant$MLE) ~ absolute_quant$lit_mean))$coef[2,4]
+summary(lm(data = absolute_quant_deviation[absolute_quant_deviation$rxnForm %in% rxn_of_interest,], formula = "dist_overlap ~ Interval_Overlap * factor(speciesType)"))
 
 ### Look at metabolism-wide occupancy ###
 
-mw_occupancy <- data.table(affinity_comparisons)[,list(specie = specie, log10S_km = log10(2^medianAbund/MLE), log10occ = (2^medianAbund/(2^medianAbund + MLE)), type = speciesSubtype)]
+mw_occupancy <- data.table(affinity_comparisons)[,list(rxnForm = rxnForm, specie = specie, log10S_km = log10(2^medianAbund/MLE), log10occ = (2^medianAbund/(2^medianAbund + MLE)), type = speciesSubtype)]
 
 common_mets <- sort(table(mw_occupancy$specie), decreasing = T)[1:6]
 
@@ -814,7 +795,8 @@ mw_occupancy <- mw_occupancy[!mw_occupancy$chosenSpecies %in% "H+",]
 
 mw_occupancy$chosenSpecies <- factor(mw_occupancy$chosenSpecies, levels = names(sort(table(mw_occupancy$chosenSpecies), decreasing = T)))
 
-
+# subset mw_occupany if desired #
+mw_occupancy <- mw_occupancy[mw_occupancy$rxnForm %in% rxn_of_interest,]
 
 
 table(mw_occupancy$type, mw_occupancy$chosenSpecies)
@@ -826,13 +808,14 @@ ggplot() + geom_violin(data = mw_occupancy, aes(x = chosenSpecies, y = log10S_km
   facet_grid(type ~ .) + geom_text(data = spec_counts, aes(x = chosenSpecies, y = 0, label = Counts), color = "BLUE", size = 6) +
   scale_y_continuous(expression(frac(S, K[M])), breaks = seq(-3, 3, by = 1), labels = 10^seq(-3, 3, by = 1)) +
   boxplot_theme
+ggsave("Figures/speciesSKm.pdf", width = 12, height = 14)
 
 # S / S + Km
 ggplot() + geom_violin(data = mw_occupancy, aes(x = chosenSpecies, y = log10occ), fill = "firebrick2", scale = "width") +
   facet_grid(type ~ .) + geom_text(data = spec_counts, aes(x = chosenSpecies, y = 0.5, label = Counts), color = "BLUE", size = 6) +
   scale_y_continuous(expression(frac(S, S + K[M])), breaks = seq(0, 1, by = 0.2), label = sapply(seq(0, 1, by = 0.2) * 100, function(x){paste(x, "%", sep = "")})) +
   boxplot_theme
-
+ggsave("Figures/speciesOccupancy.pdf", width = 12, height = 14)
 
 
 
@@ -849,7 +832,7 @@ ggplot() + geom_violin(data = mw_occupancy, aes(x = chosenSpecies, y = log10occ)
 reaction_free_energy <- read.delim("companionFiles/cc_dG_python.tsv")
 
 free_energy_table <- data.frame(RXform = names(rxn_fit_params), reaction = substr(names(rxn_fit_params), 1, 6), cc_dGr = NA, cc_dGrSD = NA, log_keq_LB = NA, 
-                                log_keq_UB = NA, log_keq_MLE = NA, logQmedian = NA, spearmanCorr = NA)
+                                log_keq_UB = NA, log_keq_MLE = NA, logQmedian = NA, intervalOverlap = NA)
 
 free_energy_table <- free_energy_table[free_energy_table$reaction %in% reaction_free_energy$reaction,]
 
@@ -862,7 +845,7 @@ free_energy_table[,c("log_keq_LB")] <- log(sapply(free_energy_table$RXform, func
 free_energy_table[,c("log_keq_UB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval[rownames(rxn_fit_params[[x]]$param_interval) == "keq", 2]}))
 free_energy_table[,c("log_keq_MLE")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$MLE[rownames(rxn_fit_params[[x]]$param_interval) == "keq"]}))
 free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rownames(rxn_fit_params[[x]]$param_interval) == "keq"])})
-free_energy_table[,c("spearmanCorr")] <- sapply(free_energy_table$RXform, function(x){rxn_fits$parSpearman[rxn_fits$rxn == x]})
+free_energy_table[,c("intervalOverlap")] <- sapply(free_energy_table$RXform, function(x){fraction_flux_deviation$"Interval Overlap"[fraction_flux_deviation$rxn == x]})
 
 free_energy_table <- free_energy_table[free_energy_table$cc_dGrSD < 10,] #remove reactions with highly uncertain CC predictions
 
@@ -881,21 +864,54 @@ boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = el
 
 
 energy_fit <- free_energy_table#[free_energy_table$formType == "Best Fit",]
-energy_weight <- energy_fit$spearmanCorr; energy_weight[energy_weight < 0] <- 0
+energy_weight <- energy_fit$intervalOverlap; energy_weight[energy_weight < 0] <- 0
 
-freeEfit <- lm((energy_fit$log_keq_MLE - energy_fit$logQmedian)*(8.315 * (273 + 25) / 1000) ~ 
-     energy_fit$cc_dGr, weights = energy_weight)
+freeEfit <- lm((energy_fit$logQmedian - energy_fit$log_keq_MLE)*(8.315 * (273 + 25) / 1000) ~ energy_fit$cc_dGr, weights = energy_weight)
 
 weight_fit <- coef(freeEfit)
 summary(freeEfit)$coef[2,4]
 
 ggplot(free_energy_table[free_energy_table$formType == "Best Fit",], aes(x = cc_dGr, xmin = cc_dGr - 2*cc_dGrSD, xmax = cc_dGr + 2*cc_dGrSD,
-                              y = (log_keq_MLE - logQmedian)*(8.315 * (273 + 25) / 1000),
-                              ymin = (log_keq_LB - logQmedian)*(8.315 * (273 + 25) / 1000),
-                              ymax = (log_keq_UB - logQmedian)*(8.315 * (273 + 25) / 1000))) +
-  geom_errorbar(aes(color = spearmanCorr), size = 1) + geom_errorbarh(aes(color = spearmanCorr), size = 1) + boxplot_theme +
+                              y = (logQmedian - log_keq_MLE)*(8.315 * (273 + 25) / 1000),
+                              ymin = (logQmedian - log_keq_LB)*(8.315 * (273 + 25) / 1000),
+                              ymax = (logQmedian - log_keq_UB)*(8.315 * (273 + 25) / 1000))) +
+  geom_errorbar(aes(color = intervalOverlap), size = 1) + geom_errorbarh(aes(color = intervalOverlap), size = 1) + boxplot_theme +
   geom_abline(intercept = weight_fit[1], slope = weight_fit[2], size = 2, color = "BLUE") +
+  geom_abline(intercept = 0, slope = 1) +
   scale_x_continuous(expression("Component Contribution" ~ Delta[G]^o)) + 
   scale_y_continuous(expression("Parameter Inference" ~ Delta[G])) +
-  scale_color_gradient2("Par ~ FBA spearman", low = "green", mid = "black", high = "red", limits = c(-1,1))
+  scale_color_gradient2("Par ~ FBA interval overlap", low = "green", mid = "green", high = "red", limits = c(0,1))
+
+
+### Remap axes ###
+free_energy_direct_comp_table <- data.frame(predicted = (free_energy_table$logQmedian - free_energy_table$log_keq_MLE)*(8.315 * (273 + 25) / 1000),
+                                            free_energy_table[,c('cc_dGr', 'intervalOverlap', 'RXform', 'formType')])
+free_energy_direct_comp_table$Deviation <- free_energy_direct_comp_table$predicted - free_energy_direct_comp_table$cc_dGr
+
+free_energy_subset <- free_energy_direct_comp_table#[free_energy_direct_comp_table$formType == "Best Fit",]
+reversible_rxn_match <- reversibleRx[chmatch(substr(free_energy_subset$RXform, 1, 6), reversibleRx$rx),]
+
+free_energy_subset$is_reversible <- ifelse(reversible_rxn_match$modelBound == "reversible", T, F)
+
+ggplot(free_energy_subset, aes(x = cc_dGr, y = predicted, color = intervalOverlap)) + geom_point() + facet_wrap(~ is_reversible, ncol = 1) +
+  scale_x_continuous(expression("Component Contribution" ~ Delta[G]^o)) + 
+  scale_y_continuous(expression("Parameter Inference" ~ Delta[G])) +
+  geom_abline(intercept = 0, slope = 1) + geom_point(x = 0, y = 0, size = 5, col = "BLACK") +
+  scale_color_gradient("Par ~ FBA interval overlap", low = "green", high = "red", limits = c(0,1)) + boxplot_theme
+
+chisq.test(table(free_energy_subset$predicted < 0, !free_energy_subset$is_reversible))
+chisq.test(table(free_energy_subset$predicted < 0, free_energy_subset$cc_dGr < 0 ))
+
+deviation_design_matrix <- as.matrix(data.frame(int = 1, reversible_effect = ifelse(free_energy_subset$is_reversible, 1, 0), 
+                                                irreversible_slope = free_energy_subset$intervalOverlap * !free_energy_subset$is_reversible,
+                                                reversible_slope = free_energy_subset$intervalOverlap * free_energy_subset$is_reversible))
+
+summary(lm(abs(free_energy_subset$Deviation) ~ deviation_design_matrix + 0))
+
+ggplot(free_energy_subset, aes(x = intervalOverlap, y = abs(Deviation), col = factor(is_reversible))) + geom_point() + stat_smooth(method = "lm", size = 2) +
+  scale_y_continuous(expression("abs( Parameter Inference" ~ Delta[G] - ~ 'Component Contribution' ~ Delta[G]^o ~ ")")) + 
+  scale_x_continuous("Par ~ FBA interval overlap") + scale_color_brewer("Reversible\nReaction?", palette = "Set1") + boxplot_theme
+ggsave("Figures/gibbsDeviation.pdf", width = 12, height = 14)
+
+
 
