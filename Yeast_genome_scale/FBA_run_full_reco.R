@@ -31,7 +31,7 @@ if(QPorLP == "QP"){
 modeGurobi = 'python'
 pythonMode = 'simple' # simple,thdyn, dir or ll (loopless)
 FVA = 'T' # Should flux variblility analysis be performed
-useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -246,17 +246,24 @@ for(i in 1:n_c){
   
   # define approximate oxygen uptake using a RQ of 5 for non-carbon-limited culture and < 5 for carbon-limited culture
   # employed by approximating vCO2 as 5/4 [ethanol + actetate]
+  
   if(chemostatInfo$Limitation[i] == "C"){
+    oxygen_uptake = (measured_bounds$change[measured_bounds$specie %in% c("D-glucose [extracellular]")]/5 + 
+                     sum(measured_bounds$change[measured_bounds$specie %in% c("ethanol [extracellular]", "acetate [extracellular]")])/2)/2    
+    
     oxygen_bounds <- data.frame(condition = chemostatInfo$ChemostatCond[i], specie = 'oxygen [extracellular]', change = 0, sd = Inf, 
-                                lb = sum(measured_bounds$change[measured_bounds$specie %in% c("ethanol [extracellular]", "acetate [extracellular]")])/4,
+                                lb = oxygen_uptake,
                                 ub = Inf, type = "uptake", density = NA)
   } else {
+    oxygen_uptake = (measured_bounds$change[measured_bounds$specie %in% c("D-glucose [extracellular]")]/5 + 
+                     sum(measured_bounds$change[measured_bounds$specie %in% c("ethanol [extracellular]", "acetate [extracellular]")])/4)/2    
+    
     oxygen_bounds <- data.frame(condition = chemostatInfo$ChemostatCond[i], specie = 'oxygen [extracellular]', 
-                                change = sum(measured_bounds$change[measured_bounds$specie %in% c("ethanol [extracellular]", "acetate [extracellular]")])/4,
+                                change = oxygen_uptake,
                                 sd = NA, lb = 0, ub = Inf, type = "uptake", density = NA)
     oxygen_bounds$sd <- oxygen_bounds$change/5
   }
-  
+
   measured_bounds <- rbind(measured_bounds, oxygen_bounds)
   
   treatment_par[[chemostatInfo$ChemostatCond[i]]][["nutrients"]] <- measured_bounds
@@ -1012,11 +1019,13 @@ ggsave("flux_residuals.pdf", width = 18, height = 20)
 
 carbon_dioxide_ex <- fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "carbon dioxide [extracellular] boundary"]
 small_mol_excretion <- apply(fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) %in% c("ethanol [extracellular] boundary", "acetate [extracellular] boundary"),], 2, sum)
+oxyen_used <- fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "oxygen [extracellular] boundary_bookkeeping",]
 
 qplot(y = -1*carbon_dioxide_ex, x = small_mol_excretion, color = chemostatInfo$Limitation) +
   geom_abline(intercept = 0, slope = 1)
 
-
+qplot(y = oxyen_used, x = -1*carbon_dioxide_ex, color = chemostatInfo$Limitation) +
+  geom_abline(intercept = 0, slope = 1)
 
 
 
