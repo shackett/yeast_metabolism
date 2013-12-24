@@ -705,6 +705,8 @@ if(QPorLP == "QP"){
   
   for(treatment in 1:n_c){
     
+    # Define the maximal flux through reactions which are intrinsically constrained by the concentration of nutrients in the media, or are auxotrophies
+    
     cond_bound <- rep(Inf, times = length(S[1,]))
     cond_bound[Sinfo$reaction %in% treatment_par[[treatment]]$auxotrophies] <- 0 #auxotrophies have a maximum flux of zero
     
@@ -714,6 +716,15 @@ if(QPorLP == "QP"){
     cond_bound[cond_nutrients$index] <- cond_nutrients$ub #maximal nutrient fluxes set as [nutrient]*DR
     
     qpModel$ub <- cond_bound #hard bound the maximal flux through each reaction - Inf except for nutrient absorption
+    
+    # Define lower bounds on flux through reactions - zero unless otherwise informed
+    
+    cond_min <- rep(0, times = length(S[1,]))
+    cond_min[cond_nutrients$index] <- cond_nutrients$lb
+    
+    qpModel$lb <- cond_min
+    
+    # Setup quadratic penalty
     
     ## constrain the offset fluxes to exactly equal the expected flux ##
     # exchange rates for nutrient/excreted mets, lb = ub = Glucose uptake = fluxComp for composition
