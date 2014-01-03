@@ -118,6 +118,8 @@ reversibleRx$reversible[!is.na(reversibleRx$manual)] <- reversibleRx$manual[!is.
 ccPred <- read.delim("companionFiles/cc_dG_python.tsv") # generated from votti/vzcode/gen_input_comp_cont.R on github
 reversibleRx[chmatch(ccPred$reaction, reversibleRx$rx), colnames(reversibleRx) %in% c("CCdG", "CCdGsd")] = ccPred[,-1]
 
+### cache reaction directionality and thermodynamics
+write.table(reversibleRx, file = "companionFiles/reversibleRx.tsv", sep = "\t", row.names = F, col.names = T, quote = F)
 
 #### Associate rxns with enzyme ascertainment in proteomics s.t. flux can favor measured pathways ####
 ### Associate proteins with reactions and format complexes
@@ -213,11 +215,6 @@ prot_penalty[reactions %in% ATPbreakdownRxns] <- 0.1
 
 freeTransportRxns = c("r_1277", "r_2096", "r_1978", "r_1979", "r_1696", "r_1697") # transport of water, carbon dioxide and oxygen
 prot_penalty[reactions %in% freeTransportRxns] <- 0
-
-
-####
-#save(list = ls(), file = "FBAinputFiles.Rdata")
-
 
 
 
@@ -650,8 +647,7 @@ if(!file.exists("flux_cache/infeasibleRxnMet.txt") | QPorLP == 'checkfeas'){
   write(infRxnMet,file='flux_cache/infeasibleRxnMet.txt')
 }
 
-
-
+save(S, file = 'flux_cache/yeast_stoi_directed.Rdata')
 
 
 
@@ -1139,7 +1135,7 @@ colnames(flux_summary$fva_summary_df) <- colnames(fluxMat_per_cellVol)[cond_orde
 
 # verify comparable fluxes between standard QP and FVA approaches
 
-sharedRx <- grep('^r_[0-9]{4}', intersect(flux_summary$IDs$reactionID, rownames(flux_summary$fva_summary_df)), value = T)
+sharedRx <- grep('^r_[0-9]{4}', intersect(flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux], rownames(flux_summary$fva_summary_df)), value = T)
 
 standard_QP <- flux_summary$cellularFluxes[flux_summary$IDs$reactionID %in% sharedRx,]; rownames(standard_QP) <- sharedRx
 fva_QP <- flux_summary$fva_summary_df[rownames(flux_summary$fva_summary_df) %in% sharedRx,,]

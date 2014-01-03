@@ -15,7 +15,6 @@ options(stringsAsFactors = FALSE)
 ######## Import all of the species involved in a reaction and other reaction information ###########
 
 load("../ChemicalSpeciesQuant/boundaryFluxes.Rdata") #load condition specific boundary fluxes and chemostat info (actual culture DR)
-chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.05H2")),] # the 25 chemostat conditions of interest and their actual growth rates
 n_c <- nrow(chemostatInfo)
 
 ##### Import list of metabolite abundances and rxn forms - **rxnf**
@@ -130,7 +129,7 @@ for (i in 1:nrow(rmCondList)){
 
 ### ensure that the ordering of conditions is the same ###
 
-cond_mapping <- data.frame(standard = chemostatInfo$condition, e = colnames(rxnList[[1]]$enzymeComplexes), m = rownames(rxnList[[1]]$rxnMet), f = rownames(rxnList[[1]]$flux))
+cond_mapping <- data.frame(standard = chemostatInfo$ChemostatCond, e = colnames(rxnList[[1]]$enzymeComplexes), m = rownames(rxnList[[1]]$rxnMet), f = rownames(rxnList[[1]]$flux))
 
 if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapping$enzyme_cond == cond_mapping$met_cond)){
   warning('There is a problem with the order of the conditions. (check cond_mapping)')
@@ -357,8 +356,6 @@ reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(
 reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])})
 
 reactionInfo$changeP <- NA # model comparison based upon AIC and LRT
-reactionInfo$AIC <- 2*reactionInfo$npar - 2*reactionInfo$ML + 2*reactionInfo$npar*(reactionInfo$npar - 1)/(n_c - reactionInfo$npar - 1)
-reactionInfo$AICp <- NA
 
 for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$modification %in% c("", "rmCond"))]){
   rxn_eval <- reactionInfo[rx,]
@@ -369,8 +366,6 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
   }
   
   likDiff <- rxn_eval$ML - rxn_ref$ML
-  
-  reactionInfo$AICp[rx] <- min(exp((rxn_eval$AIC - rxn_ref$AIC)/2), 1)
   
   if(rxn_eval$npar == rxn_ref$npar){
     
@@ -438,7 +433,14 @@ rxToPW <- NULL
 for(rxN in grep('rm$', names(rxnList_form))){
   
   RXannot <- rxnList_form[[rxN]]$pathway
+  RXannot <- sub('[_]{0,2}Metabolic pathways', '', RXannot)
   GENEannot <- rxnList_form[[rxN]]$geneInfo
+  if(!(all(is.na(GENEannot)))){
+    GENEannot$PATHWAY <- sub('[_]{0,2}Metabolic pathways', '', GENEannot$PATHWAY)
+    if(GENEannot$PATHWAY == ""){
+      GENEannot <- NA
+      }
+    }
   
   if(RXannot == "" | is.na(RXannot)){
     if(all(is.na(GENEannot))){
@@ -462,12 +464,19 @@ for(rxN in grep('rm$', names(rxnList_form))){
     
 }  
 
+# Remove some minor pathway annotations
+minorPW <- names(table(rxToPW$pathway))[table(rxToPW$pathway) <= 3]
+otherPW <- rxToPW$rID[!(rxToPW$rID %in% unique(rxToPW$rID[!(rxToPW$pathway %in% minorPW)]))]
+
+otherPWreactions <- rxToPW[rxToPW$rID %in% otherPW,]
+otherPWreactions$pathway <- "Other"
+
+rxToPW <- rbind(rxToPW[!(rxToPW$pathway %in% minorPW),], unique(otherPWreactions))
+
 rxToPW <- rbind(rxToPW, data.frame(unique(rxToPW[,1:3]), pathway = "ALL REACTIONS"))
 
 reactionInfo$FullName <- mapply(function(x,y){paste(x, y, sep = " - ")}, x = rxToPW$reactionName[chmatch(reactionInfo$reaction, rxToPW$rID)], y = reactionInfo$Name)
   
-
-
 
 pathwaySet <- sort(table(rxToPW$pathway), decreasing = T)
 pathwaySet <- data.frame(pathway = names(pathwaySet), members = unname(pathwaySet), display = paste(names(pathwaySet), ' (', unname(pathwaySet), ')', sep = ""))
@@ -552,7 +561,7 @@ for(arxn in reactionInfo$rMech){
   MLdata <- rbind(MLdata, reaction_plots$ML_summary)
   shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reactionPropertiesPlots(reaction_plots))
   
- # shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <- param_compare()
+  #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <- param_compare()
   
   if(which(reactionInfo$rMech == arxn) %% 10 == 0){
     print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
@@ -597,6 +606,7 @@ save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, fraction_flux_deviation, fi
 
 load("flux_cache/paramCI.Rdata")
 load("flux_cache/reconstructionWithCustom.Rdata")
+reversibleRx.tsv <- read.table("companionFiles/reversibleRx.tsv")
 
 ##### Summary based on interval overlap #####
 
@@ -734,8 +744,6 @@ summary(lm(data = absolute_quant[absolute_quant$rxnForm %in% rxn_of_interest,], 
 
 
 ##
-
-absolute_quant[!is.na(absolute_quant$dist_overlap) & absolute_quant$dist_overlap > 0.18 & absolute_quant$dist_overlap < 0.22 & absolute_quant$lit_SD != 0,]
 
 ### Look at the differences between predicted and literature values versus the quality of fit ###
 
@@ -914,4 +922,38 @@ ggplot(free_energy_subset, aes(x = intervalOverlap, y = abs(Deviation), col = fa
 ggsave("Figures/gibbsDeviation.pdf", width = 12, height = 14)
 
 
+##### Determine which metabolite or protein is most correlated with pathway flux for each pathway
+# topology: metabolism_stoichiometry - set of all directed reactions
+
+load("flux_cache/yeast_stoi_directed.Rdata") # S: metabolism stoichiometry
+load("flux_cache/reconstructionWithCustom.Rdata") # metabolic reconstruction files
+
+carried_flux <- read.table("Flux_analysis/fluxCarriedSimple.tsv", header = T, sep = "\t")
+S_carried <- S; colnames(S_carried) <- sub('_[FR]$', '', colnames(S_carried))
+S_carried <- S_carried[,colnames(S_carried) %in% rownames(carried_flux)] # reactions which carry flux
+S_carried <- S_carried[rowSums(S_carried != 0) != 0,] # metabolites which are utilized
+S_carried <- S_carried[!(rownames(S_carried) %in% corrFile$SpeciesID[grep('^H\\+|^H2O|^ATP |^ADP |^NAD|^phosphate', corrFile$SpeciesName)]),] # remove cofactors and common species
+#grep('^H\\+|^H2O|^ATP |^ADP |^NAD|^phosphate', corrFile$SpeciesName, value = T)
+
+
+# convert stoichiometric matrix to a directed bipartite graph
+S_graph <- melt(t(S_carried), varnames = c("source", "sink"))
+S_graph <- S_graph[S_graph$value != 0,] # reactions - metabolite links
+S_graph$source <- as.character(S_graph$source); S_graph$sink <- as.character(S_graph$sink) # class coercion
+
+S_graph[S_graph$value < 0,] <- S_graph[S_graph$value < 0,][,c(2,1,3)] # for consumed metabolites, invert direction
+S_graph <- S_graph[,-3]
+
+library(igraph)
+
+S_igraph <- graph.data.frame(S_graph)
+V(S_igraph)$type <- V(S_igraph) %in% colnames(S_carried)
+
+sort(betweenness(S_igraph), decreasing = T)[1:4] # remove water, H+, ATP, ADP
+
+# define a pathway operationally as a set of reactions satisfying:
+# connected through other pathway members
+# proportional flux through all members (pearson correlation = 1)
+
+# igraph tcl-tk interface ?
 
