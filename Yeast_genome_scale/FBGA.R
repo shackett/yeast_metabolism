@@ -606,7 +606,7 @@ save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, fraction_flux_deviation, fi
 
 load("flux_cache/paramCI.Rdata")
 load("flux_cache/reconstructionWithCustom.Rdata")
-reversibleRx.tsv <- read.table("companionFiles/reversibleRx.tsv")
+reversibleRx <- read.table("companionFiles/reversibleRx.tsv")
 
 ##### Summary based on interval overlap #####
 
@@ -922,8 +922,12 @@ ggplot(free_energy_subset, aes(x = intervalOverlap, y = abs(Deviation), col = fa
 ggsave("Figures/gibbsDeviation.pdf", width = 12, height = 14)
 
 
-##### Determine which metabolite or protein is most correlated with pathway flux for each pathway
+
+
+##### Determine which metabolite or protein is most correlated with pathway flux for each pathway #####
 # topology: metabolism_stoichiometry - set of all directed reactions
+
+library(igraph)
 
 load("flux_cache/yeast_stoi_directed.Rdata") # S: metabolism stoichiometry
 load("flux_cache/reconstructionWithCustom.Rdata") # metabolic reconstruction files
@@ -932,8 +936,8 @@ carried_flux <- read.table("Flux_analysis/fluxCarriedSimple.tsv", header = T, se
 S_carried <- S; colnames(S_carried) <- sub('_[FR]$', '', colnames(S_carried))
 S_carried <- S_carried[,colnames(S_carried) %in% rownames(carried_flux)] # reactions which carry flux
 S_carried <- S_carried[rowSums(S_carried != 0) != 0,] # metabolites which are utilized
-S_carried <- S_carried[!(rownames(S_carried) %in% corrFile$SpeciesID[grep('^H\\+|^H2O|^ATP |^ADP |^NAD|^phosphate', corrFile$SpeciesName)]),] # remove cofactors and common species
-#grep('^H\\+|^H2O|^ATP |^ADP |^NAD|^phosphate', corrFile$SpeciesName, value = T)
+S_carried <- S_carried[!(rownames(S_carried) %in% corrFile$SpeciesID[grep('^H\\+|^H2O|^ATP |^ADP |^NAD|^phosphate|^ammonium', corrFile$SpeciesName)]),] # remove cofactors and common species
+#grep('^H\\+|^H2O|^ATP |^ADP |^NAD|^phosphate|^ammonium', corrFile$SpeciesName, value = T)
 
 
 # convert stoichiometric matrix to a directed bipartite graph
@@ -944,8 +948,6 @@ S_graph$source <- as.character(S_graph$source); S_graph$sink <- as.character(S_g
 S_graph[S_graph$value < 0,] <- S_graph[S_graph$value < 0,][,c(2,1,3)] # for consumed metabolites, invert direction
 S_graph <- S_graph[,-3]
 
-library(igraph)
-
 S_igraph <- graph.data.frame(S_graph)
 V(S_igraph)$type <- V(S_igraph) %in% colnames(S_carried)
 
@@ -955,5 +957,164 @@ sort(betweenness(S_igraph), decreasing = T)[1:4] # remove water, H+, ATP, ADP
 # connected through other pathway members
 # proportional flux through all members (pearson correlation = 1)
 
-# igraph tcl-tk interface ?
+# define clusters of highly correlated reactions
 
+fluxCorrelation <- abs(cor(t(carried_flux[rownames(carried_flux) %in% colnames(S_carried),])))
+reaction_adjacency <- graph.adjacency(fluxCorrelation > 0.999)
+reaction_clusters <- igraph::clusters(reaction_adjacency, mode = "weak") # find clusters of correlaated reacrtions
+
+# identify connected subgraphs using a subset of reactions defined by these correlated reaction clusters (without restricting metabolities)
+
+pathway_set <- list()
+for(clust_n in 1:reaction_clusters$no){
+  
+  if(length(V(reaction_adjacency)$name[reaction_clusters$membership == clust_n]) < 3){next} # catch minute clusters
+  
+  # reduce stoichiometric matrix to the relevent set of reactions
+  pw_subset <- S_carried[,colnames(S_carried) %in% V(reaction_adjacency)$name[reaction_clusters$membership == clust_n]]
+  pw_subset <- pw_subset[,!duplicated(colnames(pw_subset))]
+  pw_subset <- pw_subset[rowSums(pw_subset != 0) != 0,]
+  
+  if(nrow(pw_subset) < 4){next}
+  
+  # determine the weakly connected subgraphs within this set of reactions
+  S_graph_subset <- melt(t(pw_subset), varnames = c("source", "sink"))
+  S_graph_subset <- S_graph_subset[S_graph_subset$value != 0,] # reactions - metabolite links
+  S_graph_subset$source <- as.character(S_graph_subset$source); S_graph_subset$sink <- as.character(S_graph_subset$sink) # class coercion
+
+  S_graph_subset[S_graph_subset$value < 0,] <- S_graph_subset[S_graph_subset$value < 0,][,c(2,1,3)] # for consumed metabolites, invert direction
+  S_graph_subset <- S_graph_subset[,-3]
+  
+  S_igraph_subset <- graph.data.frame(S_graph_subset)
+  V(S_igraph_subset)$type <- V(S_igraph_subset) %in% colnames(pw_subset)
+
+  reaction_clusters_subset <- igraph::clusters(S_igraph_subset, mode = "weak")
+  # save clusters which involve more than 3 reactions
+  cluster_rxns <- lapply(1:reaction_clusters_subset$no, function(x){
+    clust_members <- V(S_igraph_subset)$name[reaction_clusters_subset$membership == x]
+    clust_members[clust_members %in% colnames(pw_subset)]
+    })
+  
+  for(a_clust in 1:reaction_clusters_subset$no){
+    rxns <- cluster_rxns[[a_clust]]
+    
+    if(length(rxns) >= 3){
+      pw_output <- pw_subset[,colnames(pw_subset) %in% rxns]
+      pw_output <- pw_output[rowSums(pw_output != 0) != 0,]
+      
+      pathway_set <- append(pathway_set, list(stoi = pw_output))
+      
+      }
+    }
+  }
+
+# load metabolomics and proteomics
+
+metabolite_abundance <- read.delim('flux_cache/tab_boer_log2rel.txt')
+
+enzyme_abund <- read.delim("./companionFiles/proteinAbundance.tsv")
+rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
+rxn_enzyme_groups <- read.delim("./flux_cache/rxn_enzyme_groups.tsv")
+  
+nbs <- 10000
+
+for(a_pathway in 1:length(pathway_set)){
+  stoi_subset <- pathway_set[[a_pathway]]
+  
+  pw_flux <- apply(carried_flux[rownames(carried_flux) %in% colnames(stoi_subset),], 2, median)
+  pw_flux <- pw_flux * ifelse(median(pw_flux) < 0, -1, 1) # set positive direction as direction carried in the majority of conditions
+  
+  # metabolites
+  matching_met_index <- sapply(unique(corrFile$SpeciesType[corrFile$SpeciesID %in% rownames(stoi_subset)]), function(a_met){grep(a_met, metabolite_abundance$tID)})
+  matching_met_df <- metabolite_abundance[unique(unlist(matching_met_index)),, drop = F]
+  
+  if(nrow(matching_met_df) > 0){
+    matching_met_matrix <- 2^matching_met_df[,grep('[PCNLU][0-9.]{4}', colnames(matching_met_df))]
+    if(!all(names(pw_flux) %in% colnames(matching_met_matrix))){stop("check ordering")}
+    matching_met_matrix <- matching_met_matrix[,chmatch(colnames(matching_met_matrix), names(pw_flux)), drop = F]
+    
+    pathway_corr <- t(sapply(1:nrow(matching_met_matrix), function(a_row){
+      # regress metabolite/enzyme on flux 
+      # determine a null distribution using a pivotal t-statistic-based bootstrap
+      
+      pw_reg <- lm(pw_flux ~ matching_met_matrix[a_row,])
+      reg_resids <- pw_reg$resid * sqrt(length(pw_flux)/pw_reg$df.residual)
+      
+      pivotal_t <- t(sapply(1:nbs, function(z){ 
+        pw_null <- I(pw_reg$fitted + sample(reg_resids, replace = T))
+        summary(lm(pw_null ~ matching_met_matrix[a_row,]))$coef[2,1:2]
+        }))
+      pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
+      
+      data.frame(pwnum = a_pathway, class = "metabolite", specie = matching_met_df$Metabolite[a_row], corr = cor(pw_flux, matching_met_matrix[a_row,]), pval = 1 - sum(pivotal_dist > 0)/(nbs+1))
+      
+      }))
+      
+    #pathway_corr <- t(sapply(1:nrow(matching_met_matrix), function(a_row){
+    #  null = sapply(1:nperm, function(z){cor(pw_flux, sample(matching_met_matrix[a_row,]))})
+    #  data.frame(pwnum = a_pathway, class = "metabolite", specie = matching_met_df$Metabolite[a_row], corr = cor(pw_flux, matching_met_matrix[a_row,]), pval = 1 - sum(cor(pw_flux, matching_met_matrix[a_row,]) > null)/(nperm + 1))
+    #  }))
+    
+    }else{
+      pathway_corr <- NULL
+    }
+  
+  # enzymes
+  enzyme_subset <- 2^enzyme_abund[rownames(enzyme_abund) %in% unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% colnames(stoi_subset)]),,drop = F]
+  colnames(enzyme_subset) <- toupper(colnames(enzyme_subset))
+  
+  if(nrow(enzyme_subset) > 0){
+    if(!all(names(pw_flux) %in% colnames(enzyme_subset))){stop("check ordering")}
+    matching_enzyme_matrix <- enzyme_subset[,chmatch(colnames(enzyme_subset), names(pw_flux)), drop = F]
+    
+    enzyme_corr <- t(sapply(1:nrow(matching_enzyme_matrix), function(a_row){
+      # regress metabolite/enzyme on flux 
+      # determine a null distribution using a pivotal t-statistic-based bootstrap
+      
+      pw_reg <- lm(pw_flux ~ matching_enzyme_matrix[a_row,])
+      reg_resids <- pw_reg$resid * sqrt(length(pw_flux)/pw_reg$df.residual)
+      
+      pivotal_t <- t(sapply(1:nbs, function(z){ 
+        pw_null <- I(pw_reg$fitted + sample(reg_resids, replace = T))
+        summary(lm(pw_null ~ matching_enzyme_matrix[a_row,]))$coef[2,1:2]
+        }))
+      pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
+      
+      data.frame(pwnum = a_pathway, class = "enzyme", specie = rownames(matching_enzyme_matrix)[a_row], corr = cor(pw_flux, matching_enzyme_matrix[a_row,]), pval = 1 - sum(pivotal_dist > 0)/(nbs+1))
+      
+      }))
+    
+    #enzyme_corr <- t(sapply(1:nrow(matching_enzyme_matrix), function(a_row){
+    #  null = sapply(1:nperm, function(z){cor(pw_flux, sample(matching_enzyme_matrix[a_row,]))})
+    #  data.frame(pwnum = a_pathway, class = "enzyme", specie = rownames(matching_enzyme_matrix)[a_row], corr = cor(pw_flux, matching_enzyme_matrix[a_row,]), pval = 1 - sum(cor(pw_flux, matching_enzyme_matrix[a_row,]) > null)/(nperm + 1))
+    #  }))
+    pathway_corr <- rbind(pathway_corr, enzyme_corr)
+    }
+  pathway_set[[a_pathway]] <- list(stoi = pathway_set[[a_pathway]], corr = pathway_corr)
+}
+
+
+z <- sapply(1:length(pathway_set), function(x){pathway_set[[x]][[2]]})
+z2 <- do.call(rbind, z)
+melt()
+# some metabolites track flux through pathways but many enzymes and metabolites are anti-correlated with flux-carried
+
+
+
+
+
+library(colorRamps)
+heatmap.2(abs(cor(t(carried_flux))), trace = "none", col = blue2yellow(100))
+heatmap.2((fluxCorrelation > 0.999)*1, trace = "none", col = green2red(2))
+table(abs(cor(t(carried_flux))) > 0.999)
+
+
+
+# igraph tcl-tk interface ?
+tkplot(S_igraph)
+tkplot(S_igraph)
+layout.norm # rescale = F
+# load
+# add species
+# save
+# subset for relevant species
