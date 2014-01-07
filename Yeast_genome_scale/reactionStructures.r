@@ -304,7 +304,10 @@ for (rowTID in ambRow){
 
 # make a tID to Boer dictionary
 dicttIDBoer <- tmatchBoerTID[,1]
-names(dicttIDBoer) <- listTID$SpeciesType[tmatchBoerTID[,2]]
+names(di rctLine <- rct_s2p[1,]
+      rctLine[] <-NA
+      rctTab <- rct_s2p[rct_s2p$ReactionID == modTab$rxn[i],]
+     cttIDBoer) <- listTID$SpeciesType[tmatchBoerTID[,2]]
 
 ### Make the Boer Table absolute ###
 # 1) correct for the different dilution rates in the Boer-experiments and the experiments where the protein concentrations have been measured
@@ -364,7 +367,7 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   ### determine how many significant principal components should be included based on repeated random sub-sampling validation ###
   pcrange <- c(2,18)
   npc.compare <- estim_ncpPCA(metabolomicsMatrix, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 100)
-  npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.01 + min(npc.compare$criterion)][1]
+  npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.3 + min(npc.compare$criterion)][1]
   
   ### metabolomic PC summary ###
   
@@ -399,7 +402,7 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   
   svd_projection <- reorgMetSVD$u %*% diag(reorgMetSVD$d[1:npc]) %*% t(reorgMetSVD$v)
   
-  heatmap.2(svd_projection, Rowv = F, Colv = F, trace = "none", symkey = T, col = blue2yellow(50), main = "UDt(V) - 8 dimensional summary")
+  heatmap.2(svd_projection, Rowv = F, Colv = F, trace = "none", symkey = T, col = blue2yellow(50), main = paste("UDt(V) - ", npc, " dimensional summary", sep =""))
   heatmap.2(reorgMets - svd_projection, trace = "none", symkey = T, col = blue2yellow(50), main = "Residual Variation - Reclustered")
   
   dev.off()
@@ -424,6 +427,7 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   colnames(remapped_metabolites) <- colnames(remapped_SD) <- unname(colnames(metabolomicsMatrix))
   
   metSVD <- svd(remapped_metabolites, nu = npc, nv = npc) # SVD of remapped metabolite -> save so that the principal components of met relative abundance can be used
+  rownames(metSVD$v) <- colnames(remapped_metabolites)
   
   metabolomicsData_remapped <- data.frame(metabolomicsData[,1:3], remapped_metabolites)
   tab_boer <- metabolomicsData_remapped
@@ -520,8 +524,11 @@ if (!file.exists('flux_cache/metaboliteTables.RData')){
   abs_tab_boer$tID <- sapply(abs_tab_boer$Metabolite,function(x){
     paste(listTID$SpeciesType[matchBoerTID[matchBoerTID[,1] == which(tab_boer$Metabolite== x ),2]],collapse=";")
   })
-  
   write.table(abs_tab_boer,'flux_cache/tab_boer_abs.txt',sep='\t')
+  
+  boer_save <- cbind(tID = sapply(tab_boer$Metabolite,function(x){paste(listTID$SpeciesType[matchBoerTID[matchBoerTID[,1] == which(tab_boer$Metabolite== x ),2]],collapse=";")}), tab_boer)
+  write.table(boer_save,'flux_cache/tab_boer_log2rel.txt', sep='\t', row.names = F, col.names = T, quote = F)
+  
   save(tab_boer,metOrigin,metSVD,remapped_SD,expanded_met_correlations,file='flux_cache/metaboliteTables.RData')
 } else load('flux_cache/metaboliteTables.RData')
 
@@ -628,14 +635,14 @@ name2stoi <- function(names,rxnName){
 # 2) make a filter for the stoichiometric matrix for all measured substrates
 # 3) make a filter for things that are not measured anyway (e.g. H+, Proteins)
 # 4) make a histogram of how many reactants are missing per reaction
-# 1)
+
 boer_t <- unique(listTID$SpeciesType[matchBoerTID[,2]])
 
 boer_s <- corrFile$SpeciesID[corrFile$SpeciesType %in% boer_t]
 
 boer_filt <- row.names(stoiMat) %in% boer_s
 
-# some compounds are small and thus probaly dont matter if their missing
+# some compounds are small and thus probaly dont matter if they're missing
 # e.g. H+, H2O
 #est_names <- c("H+","water",'ammonium','diphosphate','oxygen','carbon dioxide','phosphate')
 smallMol <- c("t_0398","t_0399",'t_0233','t_0332','t_0591','t_0249','t_0608')
@@ -1739,9 +1746,9 @@ Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
     # write equations for comp, uncom and noncomp inhibition for all inhibitors that have a maxSim target
     
     if (!allInhMods){
-      modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','subtype')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
+      modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','subtype','hill')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
     } else {
-      modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
+      modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','hill')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
       modTab[modTab$modtype == 'inh','subtype'] <- 'uncompetitive'
       tmodTab <-modTab[modTab$modtype == 'inh' & !is.na(modTab$SimMatch),]
       tmodTab$subtype <- 'noncompetitive'
@@ -1753,9 +1760,6 @@ Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
     
     rxnForms <- list()
     for (i in 1:nrow(modTab)){
-      rctLine <- rct_s2p[1,]
-      rctLine[] <-NA
-      rctTab <- rct_s2p[rct_s2p$ReactionID == modTab$rxn[i],]
       if (nrow(rctTab) > 0){
         rctLine$ReactionID <- modTab$rxn[i]
         rctLine$SubstrateID <- modTab$tID[i]
@@ -1783,7 +1787,7 @@ Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
         }
         rctTab <- rbind(rctTab,rctLine)
         print(i)
-        entry <- paste(modTab$rxn[i],'-',as.character(formMode),'-',strsplit(modTab$tID[i],'/')[[1]][1],'-',modTab$modtype[i],'-',subMod,sep='')
+        entry <- paste(modTab$rxn[i],'-',as.character(formMode),'-',strsplit(modTab$tID[i],'/')[[1]][1],'-',modTab$modtype[i],'-',subMod,ifelse(is.na(modTab$hill) | modTab$hill == 1, '', '_ultra'), sep='')
         rxnForms[[entry]]<- tab2ReactionForms(rctTab,formMode)[[1]]
         #rxnForms[[entry]]$modTable <- modTable[modTable$rxn == modTab$rxn[i] & modTable$tID == modTab$tID[i] & modTable$modtype == modTab$modtype[i] &
         # !is.na(modTable$rxn) & !is.na(modTable$tID),]
@@ -1797,6 +1801,8 @@ Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
 
 rxnf <- list() # a list 
 
+# Generate reaction forms for reversible michaelis-menten and convenience kinetics
+
 rxnForms <- tab2ReactionForms(rct_s2p,'rm') # with product inhibition
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
@@ -1808,8 +1814,6 @@ for (x in names(rxnForms)){
 }
 
 
-
- 
 ## Write all the rate laws with all Brenda modifications and all possible inhibitor modes      
 
 rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T)
@@ -1827,12 +1831,19 @@ rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
-
 rm(rxnForms)
 
 # add information for the hypothetical metabolite, t_metX, to information list
 listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = "", row = nrow(listTID) + 1))
 
+## Add additional regulators of interest from manual_modTable
+manualRegulators <- read.table('companionFiles/manual_modTable.txt', sep = "\t", header = T)
+
+rxnForms <- Mod2reactionEq(manualRegulators,'rm',F)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+rm(rxnForms)
 
 # add the infos to the rxn structure
 rxnf <- addInfo2rxnf(rxnf)
