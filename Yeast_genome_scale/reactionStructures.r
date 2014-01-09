@@ -304,10 +304,7 @@ for (rowTID in ambRow){
 
 # make a tID to Boer dictionary
 dicttIDBoer <- tmatchBoerTID[,1]
-names(di rctLine <- rct_s2p[1,]
-      rctLine[] <-NA
-      rctTab <- rct_s2p[rct_s2p$ReactionID == modTab$rxn[i],]
-     cttIDBoer) <- listTID$SpeciesType[tmatchBoerTID[,2]]
+names(dicttIDBoer) <- listTID$SpeciesType[tmatchBoerTID[,2]]
 
 ### Make the Boer Table absolute ###
 # 1) correct for the different dilution rates in the Boer-experiments and the experiments where the protein concentrations have been measured
@@ -1081,7 +1078,7 @@ matchs2p <- function(rctlstinp){
       }
       rct_s2p[i] <-paste(s2pvec, collapse = ', ')
       
-    }else{ # reactions with different nr of substrates then products (s != p)
+    }else{ # reactions with different nr of substrates than products (s != p)
       # -> match all from the larger of both (e.g. s) the other side
       
       diffvec <- abs(apply(expand.grid(subs, prod), 1, cmpCpds))
@@ -1760,6 +1757,9 @@ Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
     
     rxnForms <- list()
     for (i in 1:nrow(modTab)){
+      rctLine <- rct_s2p[1,]
+      rctLine[] <- NA
+      rctTab <- rct_s2p[rct_s2p$ReactionID == modTab$rxn[i],]
       if (nrow(rctTab) > 0){
         rctLine$ReactionID <- modTab$rxn[i]
         rctLine$SubstrateID <- modTab$tID[i]
@@ -1787,7 +1787,7 @@ Mod2reactionEq <- function(modTable,formMode,allInhMods=F){
         }
         rctTab <- rbind(rctTab,rctLine)
         print(i)
-        entry <- paste(modTab$rxn[i],'-',as.character(formMode),'-',strsplit(modTab$tID[i],'/')[[1]][1],'-',modTab$modtype[i],'-',subMod,ifelse(is.na(modTab$hill) | modTab$hill == 1, '', '_ultra'), sep='')
+        entry <- paste(modTab$rxn[i],'-',as.character(formMode),'-',strsplit(modTab$tID[i],'/')[[1]][1],'-',modTab$modtype[i],'-',subMod,ifelse(is.na(modTab$hill[i]) | modTab$hill[i] == 1, '', '_ultra'), sep='')
         rxnForms[[entry]]<- tab2ReactionForms(rctTab,formMode)[[1]]
         #rxnForms[[entry]]$modTable <- modTable[modTable$rxn == modTab$rxn[i] & modTable$tID == modTab$tID[i] & modTable$modtype == modTab$modtype[i] &
         # !is.na(modTable$rxn) & !is.na(modTable$tID),]
@@ -1813,7 +1813,6 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 
-
 ## Write all the rate laws with all Brenda modifications and all possible inhibitor modes      
 
 rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T)
@@ -1821,17 +1820,28 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 
-## Write out allosteric activator and inhibitor reaction equations for a generic regulator
+## for allosteric regulators, also look at a varaible hill coefficient
 
-deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_metX", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1234)
+alloModTable <- modTable[ modTable$origin == 'Brenda', ]
+alloModTable$hill <- 1234
+
+rxnForms <- Mod2reactionEq(alloModTable,'rm',F)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+## Write out allosteric activator and inhibitor reaction equations for a hypothetical regulator whose patterns of variation are governed by metabolomic PCs.
+
+deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_metX", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1)
 deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)    
 deNovoRegulators$modtype <- rep(c("act", "inh"), each = length(unique(rct_s2p$ReactionID)))
+deNovoRegulators_bind <- deNovoRegulators; deNovoRegulators_bind$hill <- 1234
+deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators_bind)
 
 rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
-rm(rxnForms)
 
 # add information for the hypothetical metabolite, t_metX, to information list
 listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = "", row = nrow(listTID) + 1))
