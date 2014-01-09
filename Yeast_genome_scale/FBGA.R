@@ -538,8 +538,6 @@ for(arxn in reactionInfo$rMech){
     mapply(function(VI, PI){min(VI, PI)}, VI = fluxIntervals$VUB - fluxIntervals$VLB, PI = fluxIntervals$PUB - fluxIntervals$PLB)
   fluxOverlap[fluxOverlap < 0] <- 0
   vector_match$"Interval Overlap" <- mean(fluxOverlap)
-  vector_match$"weighted-Interval Overlap" <- mean(fluxOverlap * var((fluxIntervals$VLB + fluxIntervals$VUB)/2)/(flux_fit$fitted_flux$SD)^2) # Overlap measure weighted by Var across conditions / Var within condition
-  
   
   fraction_flux_deviation <- rbind(fraction_flux_deviation, vector_match)
   
@@ -555,7 +553,9 @@ for(arxn in reactionInfo$rMech){
   
   if("t_metX" %in% run_rxn$kineticPars$modelName){
     shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, hypoMetTrend(run_rxn, metSVD, tab_boer))
-  }
+  }else if(any(run_rxn$kineticPars$SpeciesType == "hillCoefficient")){
+    shiny_flux_data[[arxn]]$plotChoices$Hill <- hillPlot(run_rxn)
+    }
   
   reaction_plots <- reactionProperties()
   MLdata <- rbind(MLdata, reaction_plots$ML_summary)

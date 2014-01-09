@@ -1185,22 +1185,13 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   alloPrior <- run_rxn$kineticParPrior[run_rxn$kineticParPrior$rel_spec == "h_allo",]
   allo_binwidth <- 0.05
-  SpSldensity <- data.frame(hill = seq(alloPrior$par_1 - 5*alloPrior$par_2, alloPrior$par_1 + 5*alloPrior$par_2, by = allo_binwidth), bindensity = NA)
-  SpSldensity$bindensity = dnorm(SpSldensity$hill, mean = alloPrior$par_1, sd = alloPrior$par_2) * (1-alloPrior$par_3)*nrow(hillDF)
-  SpSldensity$bindensity[SpSldensity$hill == alloPrior$par_1]
-  
-  #
-  hillDF <- data.frame(hill = run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"])
-  
-  alloPrior <- run_rxn$kineticParPrior[run_rxn$kineticParPrior$rel_spec == "h_allo",]
-  allo_binwidth <- 0.05
   nrand <- 10000
-  SpSldensity <- data.frame(hill = c(rnorm(nrand*(1-alloPrior$par_3), alloPrior$par_1, alloPrior$par_2), rep(0, nrand*alloPrior$par_3)))
+  SpSldensity <- data.frame(hill = c(rnorm(nrand*(1-alloPrior$par_3), alloPrior$par_1, alloPrior$par_2), rep(0, nrand*alloPrior$par_3))) # generate the expected null from the spike and slab prior
   
   hypoMetPlots$Hill <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.5) +
     stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.5) +
     geom_vline(x = 2^mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2, alpha = 0.5) +
-    scale_x_continuous(expression(log[2] ~ "Hill coefficient"), limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
+    scale_x_continuous("Hill coefficient", limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
     barplot_theme + ggtitle("Hill coefficient posterior samples")
   
   
@@ -1230,6 +1221,42 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
     ggtitle("Most highly correlated metabolite to predicted regulator")
               
   return(hypoMetPlots)
+  
+}
+
+
+hillPlot <- function(run_rxn){
+  
+  #### Generate a histogram of hill coefficients for an allosteric regulator ####
+  
+  require(reshape2)
+  require(ggplot2)
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank()) 
+  
+  
+  mod_type <- run_rxn$rxnSummary$rxnFormData$Type[run_rxn$rxnSummary$rxnFormData$Hill != 1]
+  mod_type <- ifelse(mod_type == "act", "allosteric activator", "allosteric inhibitor")
+  
+  ### the MLE ###
+  
+  hillDF <- data.frame(hill = par_markov_chain[,run_rxn$kineticParPrior$SpeciesType == "hillCoefficient"])
+  hill_MLE <- hill[which.max(par_likelihood$likelihood)]
+  
+  alloPrior <- run_rxn$kineticParPrior[run_rxn$kineticParPrior$rel_spec == "h_allo",]
+  allo_binwidth <- 0.05
+  nrand <- 10000
+  SpSldensity <- data.frame(hill = c(rnorm(nrand*(1-alloPrior$par_3), alloPrior$par_1, alloPrior$par_2), rep(0, nrand*alloPrior$par_3)))
+  
+  hillPlot <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.5) +
+    stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.5) +
+    geom_vline(x = 2^hill_MLE, size = 2, alpha = 0.5) +
+    scale_x_continuous("Hill coefficient", limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
+    barplot_theme + ggtitle("Hill coefficient posterior samples")
+  
+  
+  return(hillPlot)
   
 }
 
@@ -1594,9 +1621,10 @@ reactionProperties <-  function(){
   
   measured_mets <- met_abund[,colSums(met_abund == 0) != n_c, drop = F]
   
-  if("t_metX" %in% colnames(measured_mets)){
+  if("hillCoefficient" %in% run_rxn$kineticPars$SpeciesType){
     hill_species = matrix(1, ncol = ncol(measured_mets), nrow = nrow(dist_pars))
-    hill_species[,colnames(measured_mets) == "t_metX"] <- 2^dist_pars[,colnames(dist_pars) == "h_allo"]
+    allosteric_spec <- run_rxn$rxnSummary$rxnFormData$SubstrateID[run_rxn$rxnSummary$rxnFormData$Subtype == "allosteric"]
+    hill_species[,colnames(measured_mets) == allosteric_spec] <- 2^dist_pars[,colnames(dist_pars) == "h_allo"]
     }else{hill_species = 1}
   
   measured_met_affinity <- dist_pars[,chmatch(colnames(measured_mets), run_rxn$kineticPars$rel_spec), drop = F]
@@ -1606,8 +1634,9 @@ reactionProperties <-  function(){
   
   for(cond in 1:n_c){
     
-    # ([S]/(km + [S])^h
-    affinity_array[,cond,] <- ((rep(1, nrow(measured_met_affinity)) %*% t(t(2^measured_mets[cond,])))/((rep(1, nrow(measured_met_affinity)) %*% t(t(2^measured_mets[cond,]))) + 2^measured_met_affinity))^hill_species
+    # 1 / ( (Km/[L])^h  + 1)
+    
+    affinity_array[,cond,] <- 1/((2^measured_met_affinity / (rep(1, nrow(measured_met_affinity)) %*% t(t(2^measured_mets[cond,]))))^hill_species + 1)
     
     }
   
@@ -1753,7 +1782,7 @@ reactionPropertiesPlots <- function(reaction_plots){
   
   output_plots$"Metabolite Occupancy" <- ggplot(reaction_plots$affinity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ metabolite, scales = "free_y") + 
     geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=c(0,1)) +
-    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ group("(",frac("[M]", "[M]" + K[M]),")")^"h"), expand = c(0,0))
+    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ frac("[M]"^"h", "[M]"^"h" + K[M]^"h")), expand = c(0,0))
   
   output_plots$"Flux Elasticity" <- ggplot(reaction_plots$elasticity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ specie, scales = "free_y", ncol = 2) + 
     geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
