@@ -1434,22 +1434,21 @@ pathwayPlots <- function(pathway){
   rxInfo_subset <- reactionInfo[reactionInfo$reaction %in% reactions,]
   rxInfo_subset <- rxInfo_subset[(rxInfo_subset$Qvalue < 0.01 | is.na(rxInfo_subset$Qvalue)) & c(1:nrow(rxInfo_subset)) %in% grep('rmCond', rxInfo_subset$modification, invert = T),]
   
+  # overwrite reaction text size based upon number of reactions
+  barplot_theme <- barplot_theme + theme(axis.text.x = element_text(size = min(15 + 600/nrow(rxInfo_subset), 60), color = "black", hjust = 1))
+  # when nrow = 100, font ~ 20, when nrow = 20, font ~ 40
+  
   Corr <- data.table(rxn_fits[rxn_fits$rxn %in% rxInfo_subset$rMech,])
   FFD <- data.table(fraction_flux_deviation[fraction_flux_deviation$rxn %in% rxInfo_subset$rMech,])
   
   pathwayPlot_list <- list()
   
-  for(plotType in c("VarEx", "SpCorr", "DotProduct", "Angle", "Capture", "wCapture")){
+  for(plotType in c("SpCorr", "DotProduct", "Angle", "Capture")){
     
     #### Define plotting variables ####
     
-    if(plotType == "VarEx"){
-      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Fit" = parametricFit/TSS, NNLS = NNLS/TSS),]
-      sortVar = "Parametric Fit"
-      good_dir = "+"
-    }
     if(plotType == "SpCorr"){
-      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Spearman" = parSpearman, "NNLS Spearman" = nnlsSpearman),]
+      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Spearman" = parSpearman),]
       sortVar = "Parametric Spearman"
       good_dir = "+"
     }
@@ -1469,12 +1468,7 @@ pathwayPlots <- function(pathway){
       sortVar = "Interval Overlap"
       good_dir = "+"
     }
-    if(plotType == "wCapture"){
-      plotDat <- FFD[,c('rxn', 'weighted-Interval Overlap'), with = F]
-      setnames(plotDat, "rxn", "rxnMech")
-      sortVar = "weighted-Interval Overlap"
-      good_dir = "+"
-      }
+    
     
     #### Order reactions first by lowest/highest value for a rxn and then within a reaction ####
     
@@ -1513,70 +1507,62 @@ pathwayPlots <- function(pathway){
     
     #### Define plotting method ####
     
-    if(plotType == "VarEx"){
-      
-      compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = variable)) + barplot_theme + facet_grid( ~ variable)
-      compPlot <- compPlot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-        scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(-1,1)) + scale_fill_brewer("Prediction Method", palette = "Set2") + coord_flip()
-      
-    }
-    
-    if(plotType == "SpCorr"){
-      
-      compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = variable)) + barplot_theme + facet_grid( ~ variable)
-      compPlot <- compPlot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-        scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(-1,1)) + scale_fill_brewer("Prediction Method", palette = "Set2") + coord_flip()
-      
-    }
-    
-    if(plotType %in% c("DotProduct", "Angle", "Capture", "wCapture")){
+    if(plotType %in% c("SpCorr", "DotProduct", "Angle", "Capture")){
       
       plotDat_melt$rxnType <- "reversible Michaelis-Menten"
-      plotDat_melt$rxnType[grep('act', plotDat_melt$rxnMech)] <- "+ Activator"
-      plotDat_melt$rxnType[grep('inh', plotDat_melt$rxnMech)] <- "+ Inhibitor"
-      plotDat_melt$rxnType <- factor(plotDat_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator", "+ Inhibitor"))
+      plotDat_melt$rxnType[intersect(grep('act', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = T))] <- "+ Activator (literature)"
+      plotDat_melt$rxnType[intersect(grep('inh', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = T))] <- "+ Inhibitor (literature)"
+      plotDat_melt$rxnType[intersect(grep('act', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = F))] <- "+ Activator (proposed)"
+      plotDat_melt$rxnType[intersect(grep('inh', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = F))] <- "+ Inhibitor (proposed)"
+      
+      rxn_colors <- data.frame(levels = c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)"),
+                               colors = c("limegreen", "firebrick1", "dodgerblue3", "coral", "deepskyblue"))
+      
+      plotDat_melt$rxnType <- factor(plotDat_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)"))
+      
+      
+      if(plotType == "SpCorr"){
+      
+      compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) 
+      compPlot <- compPlot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
+        scale_y_continuous(expression("Spearman correlation between "~ V^FBA ~ "&" ~ V^PAR), expand = c(0,0)) + 
+        scale_fill_manual("Prediction Method", labels = rxn_colors$levels, values = rxn_colors$colors) + coord_flip() + expand_limits(y = 1)
+      
+      }
       
       if(plotType == "DotProduct"){
         
-        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) + barplot_theme
+        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType))
         compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Unit dot product", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") +
+          scale_y_continuous(name = "Unit dot product", expand = c(0,0), limits = c(0,1)) + scale_fill_manual("Prediction Method", labels = rxn_colors$levels, values = rxn_colors$colors) +
           ggtitle(expression("Unit dot product:" ~ sum(frac(V^FBA, symbol("|")~V^FBA~symbol("|"))~"*"~frac(V^PAR, symbol("|")~V^PAR~symbol("|"))))) + coord_flip()
         
       }
       
       if(plotType == "Angle"){
         
-        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = 90 - value, fill = rxnType)) + barplot_theme
+        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = 90 - value, fill = rxnType))
         compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Angle", expand = c(0,0), limits = c(0,90), breaks = seq(0,90, by = 10), labels = rev(seq(0,90, by = 10))) + scale_fill_brewer("Prediction Method", palette = "Set1") +
+          scale_y_continuous(name = "Angle", expand = c(0,0), limits = c(0,90), breaks = seq(0,90, by = 10), labels = rev(seq(0,90, by = 10))) + scale_fill_manual("Prediction Method", labels = rxn_colors$levels, values = rxn_colors$colors) +
           ggtitle(expression("Angle between "~ V^FBA ~ "&" ~ V^PAR)) + coord_flip()
         
       }
       
       if(plotType == "Capture"){
         
-        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) + barplot_theme
+        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType))
         compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Confidence Interval Overlap", expand = c(0,0), limits = c(0,1)) + scale_fill_brewer("Prediction Method", palette = "Set1") + coord_flip()
+          scale_y_continuous(name = "Confidence Interval Overlap", expand = c(0,0), limits = c(0,1)) + scale_fill_manual("Prediction Method", labels = rxn_colors$levels, values = rxn_colors$colors) + coord_flip()
         
       }
-      
-      if(plotType == "wCapture"){
-        
-        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) + barplot_theme
-        compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Confidence Interval Overlap", expand = c(0,0)) + scale_fill_brewer("Prediction Method", palette = "Set1") + coord_flip() +
-          expand_limits(y = 0) + ggtitle(expression("Confidence Interval Overlap weighted by" ~ frac("Var(Between conditions", "Var(Within conditions")))
-        
-      }
-      
-      
     }
     pathwayPlot_list[[plotType]] <- compPlot
   }
   return(pathwayPlot_list)
 }
+
+
+
 
 
 reactionProperties <-  function(){
