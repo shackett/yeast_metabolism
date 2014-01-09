@@ -810,7 +810,7 @@ if(QPorLP == "QP"){
       ### otherwise... run locally: prohibitively slow for FVA
       
       # to submit all treatments to the que use "cetus_script.sh XXfolderXX" - where XXfolderXX is relative to the login directory
-      # e.g. cetus_script.sh FBA/FBA_python/pythonVA_test
+      # e.g. cetus_script.sh FBA/FBA_python/pythonVA
       
       pythout = FVA_setup(useCluster)
       
@@ -877,7 +877,7 @@ if(QPorLP == "QP"){
       frindices <- c(1:length(Sinfo[,1]))[Sinfo$reaction == frcombo]
       sum(ifelse(Sinfo$direction[frindices] == "F", 1, -1) * solvedModel$x[frindices]/flux_elevation_factor)
     })
-    fluxComp
+    
     # set fluxes below 10^-10 to zero, hist(log10(collapsedFlux)) indicates that there are many fluxes which are non-zero because of failure to round to zero
     collapsedFlux[abs(collapsedFlux) < 10^-10] <- 0
     
@@ -1182,6 +1182,11 @@ flux_summary$total_flux_cast <- total_flux_cast
 
 save(flux_summary, file = "flux_cache/fluxSummaryQP.Rdata")
 
+# save some objects for use by the manuscript
+
+
+save(stoiMat, rxnparFile, corrFile, compFile, metComp, chemostatInfo, nutrientFile, reversibleRx, file = "Flux_analysis/knitrNetFilez.Rdata")
+
 
 
 
@@ -1279,8 +1284,6 @@ for(a_compartment in unique(rxnEnzymes$compartment)[!(unique(rxnEnzymes$compartm
 #names(rxnstoi) <- metIDtoSpec(names(rxnstoi))
 #rxnstoi
 
-save(flux_vectors, growth_rate, treatment_par, file = "Flux_analysis/knitrFluxFilez.Rdata")
-save(rxnFile, rxnparFile, corrFile, compFile, metComp, chemostatInfo, nutrientFile, reversibleRx, file = "Flux_analysis/knitrNetFilez.Rdata")
 
 
 

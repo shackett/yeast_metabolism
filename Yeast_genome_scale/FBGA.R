@@ -306,7 +306,7 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 ######## Import cluster parameter results #########
 ##@##@ Start here if loading parameter sets ##@##@#
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
-
+ 
 load("paramOptim.Rdata")
 
 param_sets <- list.files('FBGA_files/paramSets/')
@@ -606,7 +606,7 @@ save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, fraction_flux_deviation, fi
 
 load("flux_cache/paramCI.Rdata")
 load("flux_cache/reconstructionWithCustom.Rdata")
-reversibleRx <- read.table("companionFiles/reversibleRx.tsv")
+reversibleRx <- read.table("companionFiles/reversibleRx.tsv", header = T)
 
 ##### Summary based on interval overlap #####
 
@@ -1018,13 +1018,35 @@ rxn_enzyme_groups <- read.delim("./flux_cache/rxn_enzyme_groups.tsv")
   
 nbs <- 10000
 
+ 
+rxn_pathways_carryFlux <- rxn_pathways[rxn_pathways$reactionID %in% rownames(carried_flux),]
+rxn_pathways_class_list <- sapply(rxn_pathways_carryFlux$pathway, function(x){strsplit(x, split = '__')[[1]]})
+names(rxn_pathways_class_list) <- rxn_pathways_carryFlux$reactionID
+pw_counts <- table(unlist(rxn_pathways_class_list))
+
 for(a_pathway in 1:length(pathway_set)){
   stoi_subset <- pathway_set[[a_pathway]]
   
   pw_flux <- apply(carried_flux[rownames(carried_flux) %in% colnames(stoi_subset),], 2, median)
   pw_flux <- pw_flux * ifelse(median(pw_flux) < 0, -1, 1) # set positive direction as direction carried in the majority of conditions
   
-  # metabolites
+  # determine the name of this pathway using hypergeometric
+  
+  pw_annotations <- unname(unlist(rxn_pathways_class_list[colnames(stoi_subset)]))
+  if(is.null(pw_annotations)){
+    pw <- "Unspecified"
+  }else{
+    pw_annot <- table(pw_annotations)
+    pw_p <- rep(NA, length(pw_annot))
+    for(i in 1:length(pw_annot)){
+      pw_p[i] <- 1 - phyper(q = pw_annot[i], m = pw_counts[names(pw_counts) == names(pw_annot[i])], n = sum(pw_counts) - pw_annot[i], k = sum(pw_annot))
+    }
+    pw <- names(pw_annot[pw_p == min(pw_p)][which.max(pw_annot[pw_p == min(pw_p)])])
+  }
+  
+  rx_names <- unique(rxnFile$Reaction[rxnFile$ReactionID %in% colnames(stoi_subset)])  
+  
+# metabolites
   matching_met_index <- sapply(unique(corrFile$SpeciesType[corrFile$SpeciesID %in% rownames(stoi_subset)]), function(a_met){grep(a_met, metabolite_abundance$tID)})
   matching_met_df <- metabolite_abundance[unique(unlist(matching_met_index)),, drop = F]
   
@@ -1046,7 +1068,7 @@ for(a_pathway in 1:length(pathway_set)){
         }))
       pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
       
-      data.frame(pwnum = a_pathway, class = "metabolite", specie = matching_met_df$Metabolite[a_row], corr = cor(pw_flux, matching_met_matrix[a_row,]), pval = 1 - sum(pivotal_dist > 0)/(nbs+1))
+      data.frame(pwnum = a_pathway, class = "metabolite", specie = matching_met_df$Metabolite[a_row], corr = cor(pw_flux, matching_met_matrix[a_row,]), pval = (1  - abs(0.5 - sum(pivotal_dist > 0)/nbs)*2) + (1/nbs))
       
       }))
       
@@ -1080,7 +1102,7 @@ for(a_pathway in 1:length(pathway_set)){
         }))
       pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
       
-      data.frame(pwnum = a_pathway, class = "enzyme", specie = rownames(matching_enzyme_matrix)[a_row], corr = cor(pw_flux, matching_enzyme_matrix[a_row,]), pval = 1 - sum(pivotal_dist > 0)/(nbs+1))
+      data.frame(pwnum = a_pathway, class = "enzyme", specie = rownames(matching_enzyme_matrix)[a_row], corr = cor(pw_flux, matching_enzyme_matrix[a_row,]), pval = (1  - abs(0.5 - sum(pivotal_dist > 0)/nbs)*2) + (1/nbs))
       
       }))
     
@@ -1090,14 +1112,31 @@ for(a_pathway in 1:length(pathway_set)){
     #  }))
     pathway_corr <- rbind(pathway_corr, enzyme_corr)
     }
-  pathway_set[[a_pathway]] <- list(stoi = pathway_set[[a_pathway]], corr = pathway_corr)
+  pathway_set[[a_pathway]] <- list(pw_name = pw, rx_names = rx_names, stoi = pathway_set[[a_pathway]], corr = pathway_corr, flux = pw_flux)
 }
 
+library(qvalue)
 
-z <- sapply(1:length(pathway_set), function(x){pathway_set[[x]][[2]]})
-z2 <- do.call(rbind, z)
-melt()
+pw_associations <- sapply(1:length(pathway_set), function(x){pathway_set[[x]][[2]]})
+pw_associations <- do.call(rbind, pw_associations)
+pw_associations <- as.data.frame(apply(pw_associations, c(1,2), as.character))
+pw_associations$qval <- qvalue(as.numeric(pw_associations$pval))$qvalues
+
 # some metabolites track flux through pathways but many enzymes and metabolites are anti-correlated with flux-carried
+
+sig_pw_associations <- pw_associations[pw_associations$qval < 0.05,]
+
+sig_met_pw_associations <- sig_pw_associations[sig_pw_associations$class == "metabolite",]
+
+# plot significant examples
+
+pw_flux <- apply(carried_flux[rownames(carried_flux) %in% colnames(stoi_subset),], 2, median)
+pw_flux <- pw_flux * ifelse(median(pw_flux) < 0, -1, 1) # set positive direction as direction carried in the majority of conditions
+
+
+
+
+
 
 
 

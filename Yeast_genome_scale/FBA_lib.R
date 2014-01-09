@@ -1001,8 +1001,11 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   enzyme_abund <- run_rxn$enzymes
   
-  Chemoconds <- data.frame(name = factor(rownames(enzyme_abund), levels = rownames(enzyme_abund)), Limitation = factor(substr(rownames(enzyme_abund),1,1)), DR = gsub('^[A-Z]', '', rownames(enzyme_abund)))
-  Chemoconds$actualDR <- chemostatInfo$actualDR[chmatch(as.character(Chemoconds$name), toupper(chemostatInfo$condition))]
+  Chemoconds <- data.frame(name = factor(rownames(enzyme_abund), levels = rownames(enzyme_abund)),
+                           Limitation = factor(substr(rownames(enzyme_abund),1,1), levels = unique(substr(rownames(enzyme_abund),1,1))),
+                           DR = gsub('^[A-Z]', '', rownames(enzyme_abund)))
+  Chemoconds$actualDR <- chemostatInfo$actualDR[chmatch(as.character(Chemoconds$name), chemostatInfo$ChemostatCond)]
+    
   
   DRordering <- data.frame(DRs = as.character(c("0.05", "0.11", "0.16", "0.22", "0.30")), order = 1:5)
   Chemoconds$DRorder <- DRordering$order[chmatch(as.character(Chemoconds$DR), DRordering$DRs)]
@@ -1010,12 +1013,17 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   #### Just looking at FBA fit ####
   
-  flux_plot_FBA <- data.frame(METHOD = "FBA", FLUX = (flux$FVAmin + flux$FVAmax)/2, LB = flux$FVAmin, UB = flux$FVAmax, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$actualDR)
+  flux_plot_FBA <- data.table(METHOD = "FBA", FLUX = (flux$FVAmin + flux$FVAmax)/2, LB = flux$FVAmin, UB = flux$FVAmax, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$actualDR)
   
   flux_range <- range(c(0, flux_plot_FBA$LB, flux_plot_FBA$UB))
   
-  output_plots$"FBA flux" <- ggplot(flux_plot_FBA, aes(x = DR, y = FLUX, col = condition)) + geom_hline(y = 0, size = 2) + geom_path(size = 2) + scatter_theme +
-    geom_linerange(aes(ymin = LB, ymax = UB), size = 2) + geom_point(size = sqrt(flux_plot_FBA$DR)*16) +
+  flux_plot_condLabel <- flux_plot_FBA[,list(x = DR[which.max(DR)], y = FLUX[which.max(DR)]), by = condition]
+  
+  output_plots$"FBA flux" <- ggplot() + geom_hline(y = 0, size = 2) + scatter_theme +
+    geom_path(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition), size = 2) +
+    geom_linerange(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition, ymin = LB, ymax = UB), size = 2) + 
+    geom_point(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition), size = sqrt(flux_plot_FBA$DR)*16) +
+    geom_text(data = flux_plot_condLabel, aes(x = x, y = y, label = condition, family = "mono", fontface = "bold"), color = "black") +
     scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA") +
     scale_y_continuous("Flux Carried", limits = flux_range)
   
@@ -1069,9 +1077,9 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   #all_species <- all_species[,colSums(all_species != 1) != 0]
   
   
-  scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+  scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", 
       panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
-      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"))
+     legend.text = element_text(size = 20, face = "bold"), axis.text = element_text(color = "black"), legend.key = element_rect(fill = "white"))
  
   species_df <- melt(cbind(all_species, data.frame(condition = Chemoconds$Limitation, DR = Chemoconds$actualDR, FLB = flux$FVAmin, FUB = flux$FVAmax)), id.vars = c("condition", "DR", "FLB", "FUB"), value.name = "RA")
   species_df$SD <- melt(all_species_SD, value.name = "SD", measure.vars = colnames(all_species_SD))$SD
@@ -1080,14 +1088,13 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   output_plots$"Metabolite and enzyme abundance" <- ggplot(species_df, aes(x = DR, y = RA, col = condition)) + geom_path(size = 2, alpha = 0.7) + geom_errorbar(aes(ymin = LB, ymax = UB), size = 1, alpha = 0.7) +
     facet_wrap(~ variable, scale = "free_y") +
-    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative/ absolute concentration")) +
+    scatter_theme + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative/ absolute concentration")) +
     ggtitle("Metabolite and enzyme relative abundance") + scale_x_continuous("Dilution Rate (1/h)")
-  
   
   output_plots$"Flux ~ species" <- ggplot(species_df, aes(y = (FLB + FUB)/2, x = 2^RA, ymin = FLB, ymax = FUB, xmin = 2^LB, xmax = 2^UB, col = condition)) + geom_path(size = 2, alpha = 0.7) +
     facet_wrap( ~ variable, scale = "free_x") + geom_point(aes(size = sqrt(DR)*14), alpha = 0.7) +
     geom_errorbar(size = 1) + geom_errorbarh(size = 1) + 
-    expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_x_continuous("Relative/absolute concentration") + 
+    expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_x_continuous("Relative/absolute concentration") + 
     ggtitle("Relationship between metabolite/enzyme levels and flux carried") + scale_y_continuous("Relative flux carried")
   
   return(output_plots)
@@ -1126,9 +1133,9 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
                          panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank()) 
   
-  scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+  scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", 
                          panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
-                         legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text.x = element_text(angle = 90), axis.text = element_text(color = "black"))
+                         legend.text = element_text(size = 20, face = "bold"), axis.text = element_text(color = "black"), legend.key = element_rect(fill = "white"))
   
   
   hypoMetPlots <- list()
@@ -1176,9 +1183,26 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   hillDF <- data.frame(hill = run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"])
   
-  hypoMetPlots$Hill <- ggplot(hillDF, aes(x = hill)) + geom_bar(fill = "coral") + geom_vline(y = mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2) +
-    scale_x_continuous(expression(log[2] ~ "Hill coefficient"), limits = c(-1,1)*max(abs(hillDF$hill))) + scale_y_continuous("Counts", expand = c(0,0)) +
+  alloPrior <- run_rxn$kineticParPrior[run_rxn$kineticParPrior$rel_spec == "h_allo",]
+  allo_binwidth <- 0.05
+  SpSldensity <- data.frame(hill = seq(alloPrior$par_1 - 5*alloPrior$par_2, alloPrior$par_1 + 5*alloPrior$par_2, by = allo_binwidth), bindensity = NA)
+  SpSldensity$bindensity = dnorm(SpSldensity$hill, mean = alloPrior$par_1, sd = alloPrior$par_2) * (1-alloPrior$par_3)*nrow(hillDF)
+  SpSldensity$bindensity[SpSldensity$hill == alloPrior$par_1]
+  
+  #
+  hillDF <- data.frame(hill = run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"])
+  
+  alloPrior <- run_rxn$kineticParPrior[run_rxn$kineticParPrior$rel_spec == "h_allo",]
+  allo_binwidth <- 0.05
+  nrand <- 10000
+  SpSldensity <- data.frame(hill = c(rnorm(nrand*(1-alloPrior$par_3), alloPrior$par_1, alloPrior$par_2), rep(0, nrand*alloPrior$par_3)))
+  
+  hypoMetPlots$Hill <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.5) +
+    stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.5) +
+    geom_vline(x = 2^mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2, alpha = 0.5) +
+    scale_x_continuous(expression(log[2] ~ "Hill coefficient"), limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
     barplot_theme + ggtitle("Hill coefficient posterior samples")
+  
   
   ### What measured metabolites most resemble these trends ###
   
@@ -1197,11 +1221,12 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   specCorrQuantiles_m$yadj <- mapply(function(x,y){subsetRange[rownames(subsetRange) == x][2] - diff(subsetRange[rownames(subsetRange) == x])/10*y}, x = specCorrQuantiles_m$variable, y = specCorrQuantiles_m$y)
   
-  similarGeneMelt <- melt(cbind(PCconds, t(PCsimilaritySubset)), id.vars = colnames(PCconds))
+  similarGeneMelt <- data.table(melt(cbind(PCconds, t(PCsimilaritySubset)), id.vars = colnames(PCconds)))
+  similarGeneMelt$Limitation <- factor(similarGeneMelt$Limitation, levels = unique(chemostatInfo$Limitation))
   
   hypoMetPlots$candidateMetabolites <- ggplot() + geom_path(data = similarGeneMelt, aes(x = DR, y = value, col = Limitation, size = 2, group = Limitation)) + facet_wrap(~ variable, scale = "free_y", ncol = 2) +
     geom_text(data = specCorrQuantiles_m, aes(x = 1, y = yadj, label = text), hjust = 0) +
-    scatter_theme + scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + scale_y_continuous("Relative concentration") +
+    scatter_theme + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous("Relative concentration") +
     ggtitle("Most highly correlated metabolite to predicted regulator")
               
   return(hypoMetPlots)
@@ -1537,11 +1562,6 @@ reactionProperties <-  function(){
   require(ggplot2)
   require(scales) # for converting fractions to percent
   
-  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "top", 
-  panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
-  axis.text = element_text(color = "black"), strip.background = element_rect(fill = "cornsilk1"), strip.text = element_text(color = "darkblue"))
-  
-  
   ### Define and align experimental data ###
   
   n_c <- nrow(run_rxn$metabolites)
@@ -1595,13 +1615,9 @@ reactionProperties <-  function(){
   
   affinity_summary <- affinity_array_melt[,list(LB = boxplot.stats(value)$stats[1], LH = boxplot.stats(value)$stats[2], median = boxplot.stats(value)$stats[3],
                                                 UH = boxplot.stats(value)$stats[4], UB = boxplot.stats(value)$stats[5]), by = c("metabolite", "condition")]
+  affinity_summary$condition <- factor(affinity_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% affinity_summary$condition])
   
-  output_plots$"Metabolite Occupancy" <- ggplot(affinity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ metabolite, scales = "free_y") + 
-    geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=c(0,1)) +
-    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ group("(",frac("[M]", "[M]" + K[M]),")")^"h"), expand = c(0,0))
-  
-  
-  
+  output_plots$affinity_summary <- affinity_summary
   
   ### Calculate flux elasticity over all parameter sets, conditions and non-constant species ###
   
@@ -1613,7 +1629,7 @@ reactionProperties <-  function(){
     elast_partials[[spec]] <- D(elast_equation, spec)
   }
   
-  
+  # calculate sensitivities #  partial F / partial S
   mcmc_partials <- sapply(1:nrow(dist_pars), function(x){
     
     pars <- dist_pars[x,]
@@ -1652,6 +1668,8 @@ reactionProperties <-  function(){
   all_species <- data.frame(2^met_abund, 2^enzyme_abund)
   all_species_expanded <- array(unlist(all_species[,chmatch(colnames(mcmc_partials), colnames(all_species))]), dim = dim(mcmc_partials))
   
+  # calculate elastici ties from partial derivatives * S/F
+  
   mcmc_elasticity <- mcmc_partials * (all_species_expanded/flux_expanded)
   
   
@@ -1667,10 +1685,10 @@ reactionProperties <-  function(){
   
   elasticity_summary <- flux_elasticity_melt[,list(LB = boxplot.stats(value)$stats[1], LH = boxplot.stats(value)$stats[2], median = boxplot.stats(value)$stats[3],
                                                    UH = boxplot.stats(value)$stats[4], UB = boxplot.stats(value)$stats[5]), by = c("specie", "condition")]
+  elasticity_summary$condition <- factor(elasticity_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% elasticity_summary$condition])
   
-  output_plots$"Flux Elasticity" <- ggplot(elasticity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ specie, scales = "free_y", ncol = 2) + 
-    geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
-    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Elasticity: "~ frac(rho~"F", rho~S)~frac("[S]","F")))
+  output_plots$elasticity_summary <- elasticity_summary
+  
   
   ### Physiological leverage: absolute partial correlation weighted by across-condition SD
   
@@ -1678,6 +1696,15 @@ reactionProperties <-  function(){
   colnames(all_exp_species)[colnames(all_exp_species) %in% run_rxn$kineticPars$rel_spec] <- run_rxn$kineticPars$formatted[chmatch(colnames(all_exp_species)[colnames(all_exp_species) %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
   
   all_exp_species <- all_exp_species[,chmatch(colnames(mcmc_elasticity), colnames(all_exp_species))]
+  
+  # Calculate the physiological SD from total Variance - within Condition Variance
+  
+  #condSD <- run_rxn$specSD
+  #colnames(condSD)[colnames(condSD) %in% run_rxn$kineticPars$rel_spec] <- run_rxn$kineticPars$formatted[chmatch(colnames(condSD)[colnames(condSD) %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
+  #WICSS <- apply(condSD^2, 2, sum)
+  #OCSS <- apply((all_exp_species - rep(1,nrow(all_exp_species)) %*% t(apply(all_exp_species, 2, mean)))^2, 2, sum)
+  
+  #
   
   SDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(mcmc_elasticity))
   
@@ -1689,11 +1716,9 @@ reactionProperties <-  function(){
   
   we_summary <- we_melt[,list(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
                               UH = boxplot.stats(physiological_leverage)$stats[4], UB = boxplot.stats(physiological_leverage)$stats[5]), by = c("specie", "condition")]
+  we_summary$condition <- factor(we_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% we_summary$condition])
   
-  output_plots$"Metabolic Leverage" <- ggplot(we_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
-    geom_boxplot(stat = "identity") + expand_limits(y=c(0,1)) + boxplot_theme +
-    scale_y_continuous("Metabolic Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
-    scale_fill_discrete("Specie")
+  output_plots$we_summary <- we_summary
   
   ### Summarize physiological leverage to look for general trends over reactions ###
   
@@ -1705,7 +1730,8 @@ reactionProperties <-  function(){
   
   ML_summary$Type[is.na(ML_summary$Type)] <- run_rxn$rxnSummary$rxnFormData$Subtype[chmatch(run_rxn$kineticPars$rel_spec[chmatch(as.character(ML_summary$specie[is.na(ML_summary$Type)]), run_rxn$kineticPars$formatted)], run_rxn$rxnSummary$rxnFormData$SubstrateID)]
   ML_summary$reaction = arxn  
-    
+  ML_summary$condition <- factor(ML_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% ML_summary$condition])
+  
   output_plots$ML_summary = ML_summary
   
   return(output_plots)
@@ -1713,6 +1739,34 @@ reactionProperties <-  function(){
 }
 
 
+
+reactionPropertiesPlots <- function(reaction_plots){
+  
+  # Plot output from reactionProperties.  This was split into two functions, because when trying to return plots from reactionProperties, MASSIVE pdfs were generated without a clear cause #
+  
+  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "top", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
+                         axis.text = element_text(color = "black"), strip.background = element_rect(fill = "cornsilk1"), strip.text = element_text(color = "darkblue"))
+  
+  
+  output_plots <- NULL
+  
+  output_plots$"Metabolite Occupancy" <- ggplot(reaction_plots$affinity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ metabolite, scales = "free_y") + 
+    geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=c(0,1)) +
+    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Metabolite Occupancy: "~ group("(",frac("[M]", "[M]" + K[M]),")")^"h"), expand = c(0,0))
+  
+  output_plots$"Flux Elasticity" <- ggplot(reaction_plots$elasticity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ specie, scales = "free_y", ncol = 2) + 
+    geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
+    scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Elasticity: "~ frac(rho~"F", rho~S)~frac("[S]","F")))
+  
+  output_plots$"Metabolic Leverage" <- ggplot(reaction_plots$we_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
+    geom_boxplot(stat = "identity") + expand_limits(y=c(0,1)) + boxplot_theme +
+    scale_y_continuous("Metabolic Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
+    scale_fill_discrete("Specie")
+  
+  return(output_plots)
+  
+}
 
 
 
@@ -1731,8 +1785,9 @@ param_compare <- function(){
   rename_table <- data.frame(tID = colnames(par_markov_chain), commonName = NA, commonPrint = NA)
   rename_table$commonName[rename_table$tID %in% names(run_rxn$rxnSummary$metNames)] <- unname(run_rxn$rxnSummary$metNames)[chmatch(rename_table$tID[rename_table$tID %in% names(run_rxn$rxnSummary$metNames)], names(run_rxn$rxnSummary$metNames))]
   rename_table$commonName[rename_table$tID == "keq"] <- "Keq"
-  rename_table$commonPrint <- nameReformat(names = rename_table$commonName, totalChar = 120)
-  
+  rename_table$commonPrint[!is.na(rename_table$commonName)] <- nameReformat(names = rename_table$commonName[!is.na(rename_table$commonName)], totalChar = 120)
+  #print(rename_table)
+  #break
   named_par_markov_chain <- par_markov_chain
   colnames(named_par_markov_chain) <- rename_table$commonPrint
   
@@ -1791,7 +1846,156 @@ param_compare <- function(){
 
   }
 
-
+metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
+  
+  # Generate 3 plots for a nutrient condition and dump ggsave pdfs #
+  # Summarize metabolic leverage - divide fraction of leverage by reaction into substrate, product and enzyme
+  # Label the fraction of variance explained by the parameteric fit based on relative metabolic leverage and identify the unexplained fraction of variance
+  # Label the CI overlap of the parameteric fit and FBA flux based on relative metabolic leverage and identify the unexplained fraction of variance  
+  # For the latter two plots, include both the RM leverage and the addition of the most significant putatively known regulator (if one exists) 
+  
+  ##### Summarize weighted-elasticities / physiological leverage #####
+  
+  MLsummary <- data.table(MLdata[MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""] & MLdata$condition == nutrient_cond,])
+  setnames(MLsummary, "0.5", "q0.5")
+  MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
+  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme"))
+  MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
+  MLsummary[,leverage := leverage/totalLeverage]
+  MLsummary$VarExplained <- rxn_fits$parPearson[chmatch(MLsummary$reaction, rxn_fits$rxn)]
+  
+  enz_leverage <- data.frame(reaction = MLsummary[Type == "enzyme",reaction], rank = NA)
+  enz_leverage$rank[order(MLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
+  
+  MLsummary$rank <- factor(enz_leverage$rank[chmatch(MLsummary$reaction, enz_leverage$reaction)])
+  setkeyv(MLsummary, c("Type", "rank"))
+  setkey(MLsummary)
+  
+  ggplot(MLsummary, aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
+    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+    scale_fill_brewer(palette = "Set1") + scale_x_discrete("Reactions")
+  ggsave("Figures/metabolicLeverage.pdf", height = 6, width = 10)
+  
+  
+  ###### Summarize metabolic leverage ######
+  # Reversible MM kinetics and RM + best significant regulator
+  # Indicate fraction of missing explanatory power
+  
+  # consider reactions with a positive correlation between the rm form and flux carried
+  valid_rxns <- rxn_fits$rxn[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]][rxn_fits$parPearson[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]] >= 0]
+  valid_rxns <- reactionInfo$reaction[reactionInfo$rMech %in% valid_rxns]
+  
+  best_sig_regulator <- sapply(unique(valid_rxns), function(x){
+    subrxn <- reactionInfo[reactionInfo$reaction == x,]
+    subrxn <- subrxn[!is.na(subrxn$Qvalue) & subrxn$modification %in% grep('rmCond|t_metX|^$', subrxn$modification, invert = T, value = T) & subrxn$Qvalue < 0.1,]
+    if(nrow(subrxn) == 0){
+      NA
+    }else{
+      subrxn$rMech[which.min(subrxn$Qvalue)]
+    }
+  }) # identify which regulator results in the greatest improvement in fit for each reaction (if a signfiicant regulator was found)
+  best_sig_regulator <- best_sig_regulator[!is.na(best_sig_regulator)]
+  
+  
+  MLsummary <- data.table(MLdata[(MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" & reactionInfo$reaction %in% valid_rxns] | MLdata$reaction %in% best_sig_regulator) & MLdata$condition == nutrient_cond,])
+  setnames(MLsummary, "0.5", "q0.5")
+  MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
+  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive")] <- "regulatory"
+  
+  # partitioning explained variance into ML contributions - keeping relative fractions proportional but adjusting the sum
+  # MLfrac_species = ML * r2
+  # MLfrac_residual = sum(ML) * (1-r2)
+  # divide both by r2
+  # MLfrac_species = ML
+  # MLfrac_residual = sum(ML) * (1-r2)/r2
+  
+  residualLeverage <- MLsummary[,list(Type = "residual", leverage = sum(leverage) * (1-rxn_fits$parPearson[chmatch(reaction, rxn_fits$rxn)]^2)/rxn_fits$parPearson[chmatch(reaction, rxn_fits$rxn)]^2)
+                                , by = "reaction"]
+  
+  MLsummary <- rbind(MLsummary, residualLeverage, use.names = T)
+  
+  
+  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme", "regulatory", "residual"))
+  MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
+  MLsummary[,leverage := leverage/totalLeverage]
+  
+  MLsummary[,rxn := reactionInfo$reaction[reactionInfo$rMech == reaction], by = "reaction"]
+  MLsummary[,rxnType := ifelse(any(Type %in% "regulatory"), "Regulator", "RM"), by = "reaction"]
+  MLsummary$rxnType <- factor(MLsummary$rxnType, levels = c("RM", "Regulator"))
+  
+  rank_var_explained <- data.frame(reaction = unique(MLsummary$rxn), rank = NA)
+  rank_var_explained$residLev <- sapply(rank_var_explained$reaction, function(x){min(MLsummary$leverage[MLsummary$Type == "residual" & MLsummary$rxn == x])})
+  rank_var_explained$rank[order(rank_var_explained$residLev, decreasing = T)] <- 1:nrow(rank_var_explained)
+  
+  
+  MLsummary$rxn <- factor(MLsummary$rxn, levels = rank_var_explained$reaction[order(rank_var_explained$rank)])
+  MLsummary <- MLsummary[order(MLsummary$rxn, MLsummary$rxnType, MLsummary$Type),]
+  MLsummary$reaction <- factor(MLsummary$reaction, levels = unique(MLsummary$reaction))
+  
+  TypeColors <- data.frame(class = levels(MLsummary$Type), color = c("firebrick1", "blue2", "chartreuse3", "darkorange", "gray90"))
+  
+  
+  ggplot(MLsummary, aes(x = reaction, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
+    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+    scale_fill_manual(values = TypeColors$color, labels = TypeColors$class)
+  ggsave("Figures/metabolicLeverage_variance.pdf", height = 8, width = 12)
+  
+  
+  
+  ##### Same summary with capture probability #####
+  
+  valid_rxns <- rxn_fits$rxn[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]][fraction_flux_deviation$"Interval Overlap"[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]] > 0]
+  valid_rxns <- reactionInfo$reaction[reactionInfo$rMech %in% valid_rxns]
+  
+  best_sig_regulator <- sapply(unique(valid_rxns), function(x){
+    subrxn <- reactionInfo[reactionInfo$reaction == x,]
+    subrxn <- subrxn[!is.na(subrxn$Qvalue) & subrxn$modification %in% grep('rmCond|t_metX|^$', subrxn$modification, invert = T, value = T) & subrxn$Qvalue < 0.1,]
+    if(nrow(subrxn) == 0){
+      NA
+    }else{
+      subrxn$rMech[which.min(subrxn$Qvalue)]
+    }
+  }) # identify which regulator results in the greatest improvement in fit for each reaction (if a signfiicant regulator was found)
+  best_sig_regulator <- best_sig_regulator[!is.na(best_sig_regulator)]
+  
+  
+  MLsummary <- data.table(MLdata[(MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" & reactionInfo$reaction %in% valid_rxns] | MLdata$reaction %in% best_sig_regulator) & MLdata$condition == nutrient_cond,])
+  setnames(MLsummary, "0.5", "q0.5")
+  MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
+  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive")] <- "regulatory"
+  
+  residualLeverage <- MLsummary[,list(Type = "residual", leverage = sum(leverage) * (1-fraction_flux_deviation$"Interval Overlap"[chmatch(reaction, rxn_fits$rxn)]^2)/fraction_flux_deviation$"Interval Overlap"[chmatch(reaction, rxn_fits$rxn)]^2)
+                                , by = "reaction"]
+  
+  MLsummary <- rbind(MLsummary, residualLeverage, use.names = T)
+  
+  
+  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme", "regulatory", "residual"))
+  MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
+  MLsummary[,leverage := leverage/totalLeverage]
+  
+  MLsummary[,rxn := reactionInfo$reaction[reactionInfo$rMech == reaction], by = "reaction"]
+  MLsummary[,rxnType := ifelse(any(Type %in% "regulatory"), "Regulator", "RM"), by = "reaction"]
+  MLsummary$rxnType <- factor(MLsummary$rxnType, levels = c("RM", "Regulator"))
+  
+  rank_var_explained <- data.frame(reaction = unique(MLsummary$rxn), rank = NA)
+  rank_var_explained$residLev <- sapply(rank_var_explained$reaction, function(x){min(MLsummary$leverage[MLsummary$Type == "residual" & MLsummary$rxn == x])})
+  rank_var_explained$rank[order(rank_var_explained$residLev, decreasing = T)] <- 1:nrow(rank_var_explained)
+  
+  
+  MLsummary$rxn <- factor(MLsummary$rxn, levels = rank_var_explained$reaction[order(rank_var_explained$rank)])
+  MLsummary <- MLsummary[order(MLsummary$rxn, MLsummary$rxnType, MLsummary$Type),]
+  MLsummary$reaction <- factor(MLsummary$reaction, levels = unique(MLsummary$reaction))
+  
+  TypeColors <- data.frame(class = levels(MLsummary$Type), color = c("firebrick1", "blue2", "chartreuse3", "darkorange", "gray90"))
+  
+  
+  ggplot(MLsummary, aes(x = reaction, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
+    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+    scale_fill_manual(values = TypeColors$color, labels = TypeColors$class)
+  ggsave("Figures/metabolicLeverage_intervalOverlap.pdf", height = 8, width = 12)
+  
+}
 
 
 calcElast <- function(run_rxn, par_markov_chain, par_likelihood){
@@ -2190,7 +2394,7 @@ lik_calc <- function(proposed_params){
 nameReformat <- function(names, totalChar){
   ### split names into multiple lines if they are too long
   
-  nameLengths <- data.frame(name = rename_table$commonName, nchar = sapply(rename_table$commonName, function(x){length(strsplit(x, "")[[1]])}))
+  nameLengths <- data.frame(name = names, nchar = sapply(names, function(x){length(strsplit(x, "")[[1]])}))
   
   if(!all(nameLengths$nchar < totalChar/nrow(nameLengths))){
     for(i in c(1:nrow(nameLengths))[nameLengths$nchar >= totalChar/nrow(nameLengths)]){
