@@ -359,6 +359,7 @@ reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parS
 ### Model comparison between more complex models with additional regulators or alterative reaction forms relative to reversible-MM using LRT and AICc ###
 
 reactionInfo$changeP <- NA
+reactionInfo$changeAIC <- NA
 
 for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$modification %in% c("", "rmCond"))]){ 
   rxn_eval <- reactionInfo[rx,]
@@ -369,17 +370,24 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
   }
   
   likDiff <- rxn_eval$ML - rxn_ref$ML
-  exp((AICmin−AICi)/2)
   
+  # calculate corrected AIC
+  rxn_eval$AICc <- 2*rxn_eval$npar - 2*rxn_eval$ML + (2*rxn_eval$npar*(rxn_eval$npar + 1))/(rxn_eval$ncond - rxn_eval$npar - 1)
+  rxn_ref$AICc <- 2*rxn_ref$npar - 2*rxn_ref$ML + (2*rxn_ref$npar*(rxn_ref$npar + 1))/(rxn_ref$ncond - rxn_ref$npar - 1)
+  
+  # determine the relative probability of a null or full model based on AIC
+  if(rxn_eval$AICc < rxn_ref$AICc){
+    ref_p <- exp((rxn_eval$AICc - rxn_ref$AICc)/2)
+    reactionInfo$changeAIC[rx] <- 1 - 1/(ref_p + 1)
+    }else{
+      alt_p <- exp((rxn_ref$AICc - rxn_eval$AICc)/2)
+      reactionInfo$changeAIC[rx] <- 1 - alt_p/(alt_p + 1)
+      }
   
   if(rxn_eval$npar == rxn_ref$npar){
-    
     reactionInfo$changeP[rx] <- 1/(exp(likDiff) + 1)
-    
   }else{
-    
     reactionInfo$changeP[rx] <- 1 - pchisq(2*likDiff, rxn_eval$npar - rxn_ref$npar)
-    
   }
 }
 
@@ -412,27 +420,30 @@ qStore[["CC_RM"]] <- qvalue(reactionInfo$changeP[reactionInfo$form == "cc"], pi0
 # comparisons between CC and RM are pathological because they are so similar, resulting in high p-values - remove from consideration
 reactionInfo <- reactionInfo[!(reactionInfo$form == "cc"),]
 
-### hypothetical metabolites with constrained hill coefficient vs. reversible-MM
+### hypothetical metabolites with constrained hill coefficient vs. reversible-MM (AIC)
 test_subset <- !is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% intersect(grep('metX', reactionInfo$modification), grep('ultra', reactionInfo$modification, invert = T))
-qStore[["hREG_RM"]] <- qvalue(reactionInfo$changeP[test_subset])
+qStore[["hREG_RM"]] <- qvalue(reactionInfo$changeAIC[test_subset])
+reactionInfo$Qvalue[test_subset] <- qStore[["hREG_RM"]]$q
 
+### hypothetical metabolites with an unconstrained hill coefficient (spike & slab prior) vs. both R-MM (AIC) and constrained hill (LRT)
+test_subset <- !is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% intersect(grep('metX', reactionInfo$modification), grep('ultra', reactionInfo$modification, invert = F))
+qStore[["hREGhill_RM"]] <- qvalue(reactionInfo$changeAIC[test_subset])
+qStore[["hREGhill_hREG"]] <- qvalue(reactionInfo$hillP[test_subset])
+# Q-values to note are those that have a significant effect relative to both MM and to a constrained hill coefficient
+reactionInfo$Qvalue[test_subset] <- mapply(function(x,y){max(x,y)}, x = qStore[["hREGhill_RM"]]$q, y = qStore[["hREGhill_hREG"]]$q)
 
-                                            
-qStore[["lREG"]] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% grep('metX', reactionInfo$modification, invert = T)])
+### literatue metabolites with constrained hill coefficient vs. reversible-MM
+test_subset <- !is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% intersect(grep('t_[0-9]{4}', reactionInfo$modification), grep('ultra', reactionInfo$modification, invert = T))
+qStore[["lREG_RM"]] <- qvalue(reactionInfo$changeP[test_subset])
+reactionInfo$Qvalue[test_subset] <- qStore[["lREG_RM"]]$q
 
-qStore[["HILL"]] <- qvalue(reactionInfo$hillP[!is.na(reactionInfo$hillP)])
+### literature metabolites with an unconstrained hill coefficient (spike & slab prior) vs. both R-MM (AIC) and constrained hill (LRT)
+test_subset <- !is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% intersect(grep('t_[0-9]{4}', reactionInfo$modification), grep('ultra', reactionInfo$modification, invert = F))
+qStore[["lREGhill_RM"]] <- qvalue(reactionInfo$changeP[test_subset])
+qStore[["lREGhill_lREG"]] <- qvalue(reactionInfo$hillP[test_subset])
+reactionInfo$Qvalue[test_subset] <- mapply(function(x,y){max(x,y)}, x = qStore[["lREGhill_RM"]]$q, y = qStore[["lREGhill_lREG"]]$q)
 
-reactionInfo$Qvalue <- reactionInfo[!is.na(reactionInfo$hillP)]
-
-
-
-reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
-
-
-
-
-reactionInfo$Qvalue <- NA
-reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
+### Assign a symbolic indicator of significance based on q-value
 
 signifCO <- data.frame(q_cutoff = c(0.1, 0.001, 0.00001), code = c("*", "**", "***"))
 
@@ -455,19 +466,24 @@ reactionInfo$Name[reactionInfo$modification %in% c('', 'rmCond') & reactionInfo$
 for(rxN in grep('act|inh', reactionInfo$modification)){
   
   regName <- substr(reactionInfo$modification[rxN], 1, 6)
-  rxRegs <- rxnList_form[[rxN]]$rxnFormData[rxnList_form[[rxN]]$rxnFormData$Type != "rct",]
+  rxRegs <- rxnList_form[[reactionInfo$rMech[rxN]]]$rxnFormData[rxnList_form[[reactionInfo$rMech[rxN]]]$rxnFormData$Type != "rct",]
   
   reactionInfo$Name[rxN] <- paste(sub('(^)([a-z])', '\\U\\2', rxRegs$Subtype[rxRegs$SubstrateID == regName], perl = T), 
-                                  ifelse(rxRegs$Type[rxRegs$SubstrateID == regName] == "act", "activation", "inhibition"),
-                                  "by", unname(rxnList_form[[rxN]]$metNames[names(rxnList_form[[rxN]]$metNames) == regName]))
-  
+                                  ifelse(rxRegs$Type[rxRegs$SubstrateID == regName] == "act", "activation", "inhibition"), 
+                                  ifelse(length(grep('ultra', reactionInfo$modification[rxN])) == 0, "", "(variable hill)"),
+                                  "by", unname(rxnList_form[[reactionInfo$rMech[rxN]]]$metNames[names(rxnList_form[[reactionInfo$rMech[rxN]]]$metNames) == regName]))
 }
-
+  
+  
 reactionInfo$Name[grep('rmCond', reactionInfo$modification)] <- sapply(reactionInfo$Name[grep('rmCond', reactionInfo$modification)], function(x){paste(x, "(zero flux reactions removed)")})
 
 reactionInfo$Name <- mapply(function(x,y){paste(x,y)}, x = reactionInfo$signifCode, y = reactionInfo$Name)
 
 
+paste(sub('(^)([a-z])', '\\U\\2', rxRegs$Subtype[rxRegs$SubstrateID == regName], perl = T),
+                                  ifelse(rxRegs$Type[rxRegs$SubstrateID == regName] == "act", "activation", "inhibition"),
+                                  "by", unname(rxnList_form[[rxN]]$metNames[names(rxnList_form[[rxN]]$metNames) == regName]))
+  
 
 ### Base reaction specific information ###
 
