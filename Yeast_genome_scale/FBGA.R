@@ -351,13 +351,16 @@ parSetInfo$ML <- sapply(param_set_list, function(x){max(x$lik)})
 
 reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(rxnList_form), function(x){substr(x, 1, 6)}),
                            form = sapply(names(rxnList_form), function(x){substr(x, 8, 9)}), modification = sapply(names(rxnList_form), function(x){sub(substr(x, 1, 10), '', x)}),
+                           ncond = sapply(rxnList_form, function(x){nrow(x$flux)}),
                            npar = sapply(rxnList_form, function(x){nrow(x$enzymeAbund) + nrow(x$rxnFormData) + sum(x$rxnFormData$Hill != 1) + ifelse(any(x$rxnFormData$SubstrateID == "t_metX"), npc, 0) + 1}))
 
-reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])})
+reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])}) # the maximum likelihood over all corresponding parameter sets
 
-reactionInfo$changeP <- NA # model comparison based upon AIC and LRT
+### Model comparison between more complex models with additional regulators or alterative reaction forms relative to reversible-MM using LRT and AICc ###
 
-for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$modification %in% c("", "rmCond"))]){
+reactionInfo$changeP <- NA
+
+for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$modification %in% c("", "rmCond"))]){ 
   rxn_eval <- reactionInfo[rx,]
   if(length(grep('rmCond', rxn_eval$modification)) == 0){
     rxn_ref <- reactionInfo[reactionInfo$reaction == rxn_eval$reaction & reactionInfo$form == "rm" & reactionInfo$modification == "",]
@@ -366,6 +369,8 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
   }
   
   likDiff <- rxn_eval$ML - rxn_ref$ML
+  exp((AICmin−AICi)/2)
+  
   
   if(rxn_eval$npar == rxn_ref$npar){
     
@@ -378,15 +383,53 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
   }
 }
 
-#hist(reactionInfo$BICdiff[abs(reactionInfo$BICdiff) < 1000], breaks = 50)
-#par_diff <- 8
-#plot(dchisq(2*seq(0, 50, by = 0.1), par_diff) ~ seq(0, 50, by = 0.1), type = "l")
+### Compare each reaction form including a non-1 hill coefficient to a reaction form where this is fixed ###
+
+reactionInfo$hillP <- NA
+
+for(rx in grep('ultra', reactionInfo$modification)){
+  rxn_eval <- reactionInfo[rx,]
+  rxn_ref <- reactionInfo[reactionInfo$rMech %in% sub('_ultra', '', rxn_eval$rMech),] # find equivalent without possible ultra-sensitivity
+  if(nrow(rxn_ref) == 0){
+    print(paste(rxn_eval$rMech, "is not paired with a non-ultrasensitive form")); next
+    }
+  likDiff <- rxn_eval$ML - rxn_ref$ML
+  
+  reactionInfo$hillP[rx] <- 1 - pchisq(2*likDiff, rxn_eval$npar - rxn_ref$npar)
+  }
+
+
 
 ### Identify reaction form modification which significantly improve the likelihood function ###
 ### comparisons are relative to reversible michaelis-menten kinetics ###
 
 library(qvalue)
-Qthresh <- 0.1
+qStore <- list()
+
+reactionInfo$Qvalue <- NA
+
+qStore[["CC_RM"]] <- qvalue(reactionInfo$changeP[reactionInfo$form == "cc"], pi0.method = "bootstrap")
+# comparisons between CC and RM are pathological because they are so similar, resulting in high p-values - remove from consideration
+reactionInfo <- reactionInfo[!(reactionInfo$form == "cc"),]
+
+### hypothetical metabolites with constrained hill coefficient vs. reversible-MM
+test_subset <- !is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% intersect(grep('metX', reactionInfo$modification), grep('ultra', reactionInfo$modification, invert = T))
+qStore[["hREG_RM"]] <- qvalue(reactionInfo$changeP[test_subset])
+
+
+                                            
+qStore[["lREG"]] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% grep('metX', reactionInfo$modification, invert = T)])
+
+qStore[["HILL"]] <- qvalue(reactionInfo$hillP[!is.na(reactionInfo$hillP)])
+
+reactionInfo$Qvalue <- reactionInfo[!is.na(reactionInfo$hillP)]
+
+
+
+reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
+
+
+
 
 reactionInfo$Qvalue <- NA
 reactionInfo$Qvalue[!is.na(reactionInfo$changeP)] <- qvalue(reactionInfo$changeP[!is.na(reactionInfo$changeP)])$q
