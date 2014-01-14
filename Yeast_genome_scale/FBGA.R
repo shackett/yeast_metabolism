@@ -135,7 +135,7 @@ if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapp
   warning('There is a problem with the order of the conditions. (check cond_mapping)')
 }
 
-#### Determine which reaction have valiad reaction mechanisms - all of them as of now ####
+#### Determine which reaction have valid reaction mechanisms - all of them as of now ####
 
 reactionForms <- sapply(rxnList, function(x){ifelse(!is.null(x$rxnForm), x$listEntry, NA)})  
 rxnList_form <- rxnList[names(rxnList) %in% reactionForms]
@@ -474,16 +474,12 @@ for(rxN in grep('act|inh', reactionInfo$modification)){
                                   "by", unname(rxnList_form[[reactionInfo$rMech[rxN]]]$metNames[names(rxnList_form[[reactionInfo$rMech[rxN]]]$metNames) == regName]))
 }
   
-  
 reactionInfo$Name[grep('rmCond', reactionInfo$modification)] <- sapply(reactionInfo$Name[grep('rmCond', reactionInfo$modification)], function(x){paste(x, "(zero flux reactions removed)")})
 
 reactionInfo$Name <- mapply(function(x,y){paste(x,y)}, x = reactionInfo$signifCode, y = reactionInfo$Name)
 
-
-paste(sub('(^)([a-z])', '\\U\\2', rxRegs$Subtype[rxRegs$SubstrateID == regName], perl = T),
-                                  ifelse(rxRegs$Type[rxRegs$SubstrateID == regName] == "act", "activation", "inhibition"),
-                                  "by", unname(rxnList_form[[rxN]]$metNames[names(rxnList_form[[rxN]]$metNames) == regName]))
-  
+reactionInfo$Name <- gsub('^ ', '', reactionInfo$Name)
+reactionInfo$Name <- gsub('  ', ' ', reactionInfo$Name)
 
 ### Base reaction specific information ###
 

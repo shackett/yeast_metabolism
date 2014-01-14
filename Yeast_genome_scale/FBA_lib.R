@@ -1149,8 +1149,11 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   reconstructedOcc <- reconstructedDraws - run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "t_metX"] %*% t(rep(1, nrow(releventPCs))) # convert from relative concentration to relative occupancy
   
-  allosteryStrength <- log2(1 + (2^reconstructedOcc) ^ (2^run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"] %*% t(rep(1, nrow(releventPCs))))) # 1 + ([A]/[Ka])^h
-  
+  if("h_allo" %in% run_rxn$kineticParPrior$rel_spec){
+    allosteryStrength <- log2(1 + (2^reconstructedOcc) ^ (2^run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"] %*% t(rep(1, nrow(releventPCs))))) # 1 + ([A]/[Ka])^h  
+  }else{
+    allosteryStrength <- log2(1 + (2^reconstructedOcc)) # 1 + ([A]/[Ka])
+  }
   
   ### Create a violin plot, with the MLE highlighted ###
   
@@ -1166,7 +1169,11 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   mle_pars <- par_markov_chain[which.max(par_likelihood$likelihood),]
   mle_RA <- mle_pars[run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs)
   mle_occ <- mle_RA - mle_pars[run_rxn$kineticParPrior$rel_spec == "t_metX"]
-  mle_strength <- log2(1 + (2^mle_occ) ^ (2^mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"]))
+  if("h_allo" %in% run_rxn$kineticParPrior$rel_spec){
+    mle_strength <- log2(1 + (2^mle_occ) ^ (2^mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"]))
+  }else{
+    mle_strength <- log2(1 + (2^mle_occ))
+  }
   mle_info <- data.frame(PCconds, value = c(mle_occ), allosetryStrength = c(mle_strength))
   
   
@@ -1181,19 +1188,21 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   ### Show distribution of hill coefficients ###
   
-  hillDF <- data.frame(hill = run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"])
-  
-  alloPrior <- run_rxn$kineticParPrior[run_rxn$kineticParPrior$rel_spec == "h_allo",]
-  allo_binwidth <- 0.05
-  nrand <- 10000
-  SpSldensity <- data.frame(hill = c(rnorm(nrand*(1-alloPrior$par_3), alloPrior$par_1, alloPrior$par_2), rep(0, nrand*alloPrior$par_3))) # generate the expected null from the spike and slab prior
-  
-  hypoMetPlots$Hill <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.5) +
-    stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.5) +
-    geom_vline(x = 2^mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2, alpha = 0.5) +
-    scale_x_continuous("Hill coefficient", limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
-    barplot_theme + ggtitle("Hill coefficient posterior samples")
-  
+  if(any(run_rxn$kineticPars$SpeciesType == "hillCoefficient")){
+    
+    hillDF <- data.frame(hill = run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"])
+    
+    alloPrior <- run_rxn$kineticParPrior[run_rxn$kineticParPrior$rel_spec == "h_allo",]
+    allo_binwidth <- 0.05
+    nrand <- 10000
+    SpSldensity <- data.frame(hill = c(rnorm(nrand*(1-alloPrior$par_3), alloPrior$par_1, alloPrior$par_2), rep(0, nrand*alloPrior$par_3))) # generate the expected null from the spike and slab prior
+    
+    hypoMetPlots$Hill <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.5) +
+      stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.5) +
+      geom_vline(x = 2^mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2, alpha = 0.5) +
+      scale_x_continuous("Hill coefficient", limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
+      barplot_theme + ggtitle("Hill coefficient posterior samples")
+  }
   
   ### What measured metabolites most resemble these trends ###
   
@@ -1242,7 +1251,7 @@ hillPlot <- function(run_rxn){
   ### the MLE ###
   
   hillDF <- data.frame(hill = par_markov_chain[,run_rxn$kineticParPrior$SpeciesType == "hillCoefficient"])
-  hill_MLE <- hill[which.max(par_likelihood$likelihood)]
+  hill_MLE <- hillDF$hill[which.max(par_likelihood$likelihood)]
   
   alloPrior <- run_rxn$kineticParPrior[run_rxn$kineticParPrior$rel_spec == "h_allo",]
   allo_binwidth <- 0.05
@@ -1432,7 +1441,7 @@ pathwayPlots <- function(pathway){
   reactions <- rxToPW$rID[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathway]]
   
   rxInfo_subset <- reactionInfo[reactionInfo$reaction %in% reactions,]
-  rxInfo_subset <- rxInfo_subset[(rxInfo_subset$Qvalue < 0.01 | is.na(rxInfo_subset$Qvalue)) & c(1:nrow(rxInfo_subset)) %in% grep('rmCond', rxInfo_subset$modification, invert = T),]
+  rxInfo_subset <- rxInfo_subset[(rxInfo_subset$Qvalue < 0.1 | is.na(rxInfo_subset$Qvalue)) & c(1:nrow(rxInfo_subset)) %in% grep('rmCond', rxInfo_subset$modification, invert = T),]
   
   # overwrite reaction text size based upon number of reactions
   barplot_theme <- barplot_theme + theme(axis.text.x = element_text(size = min(15 + 600/nrow(rxInfo_subset), 60), color = "black", hjust = 1))
@@ -1501,8 +1510,8 @@ pathwayPlots <- function(pathway){
       
     }
     
-    plotDat$rxnMech <- factor(plotDat$rxnMech, levels = plotDat$rxnMech)
-    plotDat$display <- factor(plotDat$display, levels = plotDat$display)
+    plotDat$rxnMech <- factor(plotDat$rxnMech, levels = unique(plotDat$rxnMech))
+    plotDat$display <- factor(plotDat$display, levels = unique(plotDat$display))
     plotDat_melt <- melt(plotDat, id.vars = c("rxnMech", "reaction", "display"))
     
     #### Define plotting method ####
