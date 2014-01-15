@@ -16,7 +16,7 @@ shinyUI(pageWithSidebar(
     
     # Allow for saving pathway plots and reaction plots
     textInput('pw_filename', "Pathway Filename"),
-    checkboxInput('pw_save', "Save pathway plot"),
+    actionButton('pw_save', "Save pathway plot"),
     
     
     # Select the reaction within this pathway which is to be considered
@@ -35,11 +35,13 @@ shinyUI(pageWithSidebar(
     
     # Allow for saving pathway plots and reaction plots
     textInput('rxn_filename', "Reaction Filename"),
-    checkboxInput('rxn_save', "Save reaction plot")
+    actionButton('rxn_save', "Save reaction plot")
     
     ),
     
   mainPanel(
+    #h3(textOutput("test")),
+    
     plotOutput("PW", height = 1000),
     
     plotOutput("RXinfo", height = 400),

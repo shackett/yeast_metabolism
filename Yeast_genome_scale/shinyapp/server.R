@@ -18,18 +18,13 @@ library(gridExtra) # grid of ggplot plots
 # pathway_plot_list - plots showing information (performance) at a pathway level
 # shiny_flux_data - rxMechanism specific plots
 
-test <- F
+test <- T
 if(test == T){
-  load("shinyapp/shinySubData.Rdata")
+  load("shinyapp/shinySubData.Rdata") # this is a reduced environment for development purposes
 }else{
-  load("shinyapp/shinyData.Rdata")
+  load("shinyapp/shinyData.Rdata") # this is the full environment
 }
 
-#pathwaySet
-#rxToPW
-#reactionInfo
-#pathway_plot_list
-#shiny_flux_data
 
 
 shinyServer(function(input, output) {
@@ -55,12 +50,15 @@ shinyServer(function(input, output) {
   
   chosenPWplots <- reactive({pathway_plot_list[[pathways_selected()]][names(pathway_plot_list[[pathways_selected()]]) %in% input$pathway_plots]})
   
+  pw_plot_track <- 0
   output$PW <- renderPlot({
     if(length(chosenPWplots) != 0){
       pwsubList <- chosenPWplots()
       do.call(grid.arrange,  pwsubList)
       
-      if(input$pw_save){
+      if(input$pw_save != pw_plot_track){ # incrimenting pw_save indicates that plots should be saved
+        pw_plot_track <- input$pw_save
+        
         name <- paste0("rOCAplots/", input$pw_filename, ".pdf")
         pdf(file = name, height = 15, width = 15)
         do.call(grid.arrange,  pwsubList)
@@ -93,19 +91,27 @@ shinyServer(function(input, output) {
     textplot(shiny_flux_data[[currentRx()]]$reactionInfo, cex = 3, valign = "top", halign = "left")
     })
   
+  #output$test <- reactive({length(chosenRXplots())})
+  
+  rxn_plot_track <- 0
   output$RX <- renderPlot({
+  
     if(length(RXplots) != 0){
       rxsubList <- chosenRXplots()
-      rxsubList$ncol = column_number()
+      rxsubList$ncol = ifelse(length(chosenRXplots()) == 1, 1, column_number())
       
       do.call(grid.arrange,  rxsubList)
       
-      if(input$rxn_save){
+      if(input$rxn_save != rxn_plot_track){ # incrimenting rxn_save indicates that a plot should be saved
+        rxn_plot_track <- input$rxn_save
+        
+        figDimensions <- as.numeric(ifelse(length(chosenRXplots()) == 1, 15, 25))
         
         name <- paste0("rOCAplots/", input$rxn_filename, ".pdf")
-        pdf(file = name, height = 25, width = 25)
+        pdf(file = name, height = figDimensions, width = figDimensions)
         do.call(grid.arrange,  rxsubList)
         dev.off()
+       
         }
       
     }else{
