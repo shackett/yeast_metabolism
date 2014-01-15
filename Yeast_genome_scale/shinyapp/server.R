@@ -91,9 +91,8 @@ shinyServer(function(input, output) {
     textplot(shiny_flux_data[[currentRx()]]$reactionInfo, cex = 3, valign = "top", halign = "left")
     })
   
-  #output$test <- reactive({length(chosenRXplots())})
   
-  rxn_plot_track <- 0
+  
   output$RX <- renderPlot({
   
     if(length(RXplots) != 0){
@@ -102,23 +101,38 @@ shinyServer(function(input, output) {
       
       do.call(grid.arrange,  rxsubList)
       
-      if(input$rxn_save != rxn_plot_track){ # incrimenting rxn_save indicates that a plot should be saved
-        rxn_plot_track <- input$rxn_save
-        
-        figDimensions <- as.numeric(ifelse(length(chosenRXplots()) == 1, 15, 25))
-        
-        name <- paste0("rOCAplots/", input$rxn_filename, ".pdf")
-        pdf(file = name, height = figDimensions, width = figDimensions)
-        do.call(grid.arrange,  rxsubList)
-        dev.off()
-       
-        }
-      
     }else{
       return(NULL) 
     }
   })
   
+  output$test <- reactive({input$rxn_save})
+  rx_plotted <- 0
+  
+  observe({
+    if(input$rxn_save == rx_plotted){
+      return()
+    }else{
+      rx_plotted <- rx_plotted + 1
+      isolate({
+      
+      rxsubList <- chosenRXplots()
+      rxsubList$ncol = ifelse(length(chosenRXplots()) == 1, 1, column_number())
+  
+      figDimensions <- as.numeric(ifelse(length(chosenRXplots()) == 1, 15, 25))
+      
+      name <- paste0("rOCAplots/", input$rxn_filename, ".pdf")
+      pdf(file = name, height = figDimensions, width = figDimensions)
+      do.call(grid.arrange,  rxsubList)
+      dev.off()
+    })
+    }
+  })
+  
+  output$test <- reactive({rx_plotted})
   
   
 })
+
+  
+  
