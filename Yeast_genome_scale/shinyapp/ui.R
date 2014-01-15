@@ -40,13 +40,9 @@ shinyUI(pageWithSidebar(
     ),
     
   mainPanel(
-    #h3(textOutput("indicator")),
-    
-    #h3(textOutput("test")),
-    
     plotOutput("PW", height = 1000),
     
-    plotOutput("RXinfo", height = 250),
+    plotOutput("RXinfo", height = 400),
     
     plotOutput("RX", height = 1000)
   )

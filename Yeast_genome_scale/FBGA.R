@@ -641,14 +641,15 @@ for(pw in pathwaySet$display){
   pathway_plot_list[[pw]] <- pathwayPlots(pw)
   }
 
-# order reactions according to the fit of the best reaction form (currently using DotProduct)
-
-
-
-
 #### Save lists which will be processed by Shiny app ####
 
 save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinyData.Rdata")
+
+# generate a minute version of shinyData that will load quickly when the App is being modified
+reactionInfo <- reactionInfo[1:20,]
+shiny_flux_data <- shiny_flux_data[names(shiny_flux_data) %in% reactionInfo$rMech]
+save(pathwaySet, rxToPW, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinySubData.Rdata")
+
 
 #### Save parameter estimates for further global analyses ####
 

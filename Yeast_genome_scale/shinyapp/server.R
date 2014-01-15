@@ -18,8 +18,12 @@ library(gridExtra) # grid of ggplot plots
 # pathway_plot_list - plots showing information (performance) at a pathway level
 # shiny_flux_data - rxMechanism specific plots
 
-load("shinyapp/shinyData.Rdata")
-
+test <- F
+if(test == T){
+  load("shinyapp/shinySubData.Rdata")
+}else{
+  load("shinyapp/shinyData.Rdata")
+}
 
 #pathwaySet
 #rxToPW
@@ -38,7 +42,7 @@ shinyServer(function(input, output) {
   pathways_selected <- reactive({input$pathway})
   
   # reactions available
-  reactions_available <- reactive({rxToPW$reactionName[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathways_selected()]]})
+  reactions_available <- reactive({sort(rxToPW$reactionName[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathways_selected()]])})
   output$reactions_available <- renderUI({selectInput("reaction_chosen", "Reaction:", as.list(reactions_available()))})
   
   #viewType = reactive({ifelse(input$reaction_chosen == "PATHWAY INFORMATION", "PW", "RX")})
@@ -47,7 +51,7 @@ shinyServer(function(input, output) {
   
   PWplots <- reactive({names(pathway_plot_list[[pathways_selected()]])})
   
-  output$pw_check <- renderUI({checkboxGroupInput("pathway_plots", "Pathway plots to choose", choices = as.list(PWplots()))})
+  output$pw_check <- renderUI({selectInput("pathway_plots", "Pathway plots to choose", choices = as.list(PWplots()))})
   
   chosenPWplots <- reactive({pathway_plot_list[[pathways_selected()]][names(pathway_plot_list[[pathways_selected()]]) %in% input$pathway_plots]})
   
@@ -99,7 +103,7 @@ shinyServer(function(input, output) {
       if(input$rxn_save){
         
         name <- paste0("rOCAplots/", input$rxn_filename, ".pdf")
-        pdf(file = name, height = 15, width = 15)
+        pdf(file = name, height = 25, width = 25)
         do.call(grid.arrange,  rxsubList)
         dev.off()
         }
