@@ -44,21 +44,26 @@ shinyServer(function(input, output) {
   
   ### If a pathway is chosen ###
   
-  PWplots <- reactive({names(pathway_plot_list[[pathways_selected()]])})
+  PWplots <- reactive({names(pathway_plot_list[[pathways_selected()]])}) # which pathway is selected
   
-  output$pw_check <- renderUI({selectInput("pathway_plots", "Pathway plots to choose", choices = as.list(PWplots()))})
+  output$pw_check <- renderUI({selectInput("pathway_plots", "Pathway plots to choose", choices = as.list(PWplots()))}) # pass which pathway plots are available to UI
   
-  chosenPWplots <- reactive({pathway_plot_list[[pathways_selected()]][names(pathway_plot_list[[pathways_selected()]]) %in% input$pathway_plots]})
+  chosenPWplots <- reactive({pathway_plot_list[[pathways_selected()]][names(pathway_plot_list[[pathways_selected()]]) %in% input$pathway_plots]}) # which pathway plots is selected (always just one)
+  
+  # Update the pathway-level plot that is displayed
   
   output$PW <- renderPlot({
     if(length(chosenPWplots) != 0){
       pwsubList <- chosenPWplots()
-      do.call(grid.arrange,  pwsubList)
+      do.call(grid.arrange,  pwsubList) # grid.arrange is used in case future updates result in a variable number of displayed plots
       
     }else{
       return(NULL) 
     }
   })
+  
+  # If pw_save is triggered, the counter incriments by one and by virtue of changing executes the else statement
+  # this saves a ggplot object with a pathway-level summary
   
   observe({
     if(input$pw_save == 0){
@@ -79,25 +84,27 @@ shinyServer(function(input, output) {
   
   ### If a reaction is chosen ###
   
-  rID = reactive({rxToPW$rID[rxToPW$reactionName == input$reaction_chosen][1]})
-  subtypeChoices <- reactive({reactionInfo$Name[reactionInfo$reaction == rID()]})
+  rID = reactive({rxToPW$rID[rxToPW$reactionName == input$reaction_chosen][1]}) # which reaction is active
+  subtypeChoices <- reactive({reactionInfo$Name[reactionInfo$reaction == rID()]}) # which reaction mechanisms are available
   
-  output$subforms_available <- renderUI({selectInput("subform_chosen", "Subtype:", as.list(subtypeChoices()))})
-  currentRx <- reactive({reactionInfo$rMech[reactionInfo$reaction == rID()][reactionInfo$Name[reactionInfo$reaction == rID()] == input$subform_chosen]})
+  output$subforms_available <- renderUI({selectInput("subform_chosen", "Subtype:", as.list(subtypeChoices()))}) # pass which reaction mechanisms are available to UI
+  currentRx <- reactive({reactionInfo$rMech[reactionInfo$reaction == rID()][reactionInfo$Name[reactionInfo$reaction == rID()] == input$subform_chosen]}) # which reaction mechanism is active
   
-  RXplots <- reactive({names(shiny_flux_data[[currentRx()]]$plotChoices)})
+  RXplots <- reactive({names(shiny_flux_data[[currentRx()]]$plotChoices)}) # which plots can be chosen for the reaction form of interest
   
-  output$rx_check <- renderUI({checkboxGroupInput("reaction_plots", "Reaction plots to choose", choices = as.list(RXplots()))})
+  output$rx_check <- renderUI({checkboxGroupInput("reaction_plots", "Reaction plots to choose", choices = as.list(RXplots()))}) # pass which plots are available to UI
   
-  chosenRXplots <- reactive({shiny_flux_data[[currentRx()]]$plotChoices[names(shiny_flux_data[[currentRx()]]$plotChoices) %in% input$reaction_plots]})
+  chosenRXplots <- reactive({shiny_flux_data[[currentRx()]]$plotChoices[names(shiny_flux_data[[currentRx()]]$plotChoices) %in% input$reaction_plots]}) # a subset of plots to be shown for a reaction form
   
-  column_number <- reactive({as.numeric(input$col_num)})
+  column_number <- reactive({as.numeric(input$col_num)}) # how many columns should reaction-level figures be displayed in (if only 1 figure is shown it will be 1 column)
+  
+  # Display information - stoichiometry, pathway, enzymes ... for the reaction of interest
   
   output$RXinfo <- renderPlot({
     textplot(shiny_flux_data[[currentRx()]]$reactionInfo, cex = 3, valign = "top", halign = "left")
   })
   
-  
+  # Update the rxn-level plot(s) shown
   
   output$RX <- renderPlot({
     
@@ -111,6 +118,10 @@ shinyServer(function(input, output) {
       return(NULL) 
     }
   })
+  
+  # If rxn_save is triggered, the counter incriments by one and by virtue of changing executes the else statement
+  # this saves a ggplot object with a rxn-level summary.  Either a 15x15 plot is generated to look nice as a single plot or 
+  # a 25x25 layout of multiple plots is formed for a summary
   
   observe({
     if(input$rxn_save == 0){
