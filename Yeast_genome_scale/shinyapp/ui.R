@@ -40,7 +40,6 @@ shinyUI(pageWithSidebar(
     ),
     
   mainPanel(
-    #h3(textOutput("test")),
     
     plotOutput("PW", height = 1000),
     

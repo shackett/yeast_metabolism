@@ -50,23 +50,29 @@ shinyServer(function(input, output) {
   
   chosenPWplots <- reactive({pathway_plot_list[[pathways_selected()]][names(pathway_plot_list[[pathways_selected()]]) %in% input$pathway_plots]})
   
-  pw_plot_track <- 0
   output$PW <- renderPlot({
     if(length(chosenPWplots) != 0){
       pwsubList <- chosenPWplots()
       do.call(grid.arrange,  pwsubList)
       
-      if(input$pw_save != pw_plot_track){ # incrimenting pw_save indicates that plots should be saved
-        pw_plot_track <- input$pw_save
+    }else{
+      return(NULL) 
+    }
+  })
+  
+  observe({
+    if(input$pw_save == 0){
+      return()
+    }else{
+      isolate({
+        
+        pwsubList <- chosenPWplots()
         
         name <- paste0("rOCAplots/", input$pw_filename, ".pdf")
         pdf(file = name, height = 15, width = 15)
         do.call(grid.arrange,  pwsubList)
         dev.off()
-        }
-      
-    }else{
-      return(NULL) 
+      })
     }
   })
   
@@ -89,12 +95,12 @@ shinyServer(function(input, output) {
   
   output$RXinfo <- renderPlot({
     textplot(shiny_flux_data[[currentRx()]]$reactionInfo, cex = 3, valign = "top", halign = "left")
-    })
+  })
   
   
   
   output$RX <- renderPlot({
-  
+    
     if(length(RXplots) != 0){
       rxsubList <- chosenRXplots()
       rxsubList$ncol = ifelse(length(chosenRXplots()) == 1, 1, column_number())
@@ -106,33 +112,35 @@ shinyServer(function(input, output) {
     }
   })
   
-  output$test <- reactive({input$rxn_save})
-  rx_plotted <- 0
-  
   observe({
-    if(input$rxn_save == rx_plotted){
+    if(input$rxn_save == 0){
       return()
     }else{
-      rx_plotted <- rx_plotted + 1
       isolate({
-      
-      rxsubList <- chosenRXplots()
-      rxsubList$ncol = ifelse(length(chosenRXplots()) == 1, 1, column_number())
-  
-      figDimensions <- as.numeric(ifelse(length(chosenRXplots()) == 1, 15, 25))
-      
-      name <- paste0("rOCAplots/", input$rxn_filename, ".pdf")
-      pdf(file = name, height = figDimensions, width = figDimensions)
-      do.call(grid.arrange,  rxsubList)
-      dev.off()
+        
+        rxsubList <- chosenRXplots()
+        rxsubList$ncol = ifelse(length(chosenRXplots()) == 1, 1, column_number())
+        
+        figDimensions <- as.numeric(ifelse(length(chosenRXplots()) == 1, 15, 25))
+        
+        name <- paste0("rOCAplots/", input$rxn_filename, ".pdf")
+        pdf(file = name, height = figDimensions, width = figDimensions)
+        
+        if(length(chosenRXplots()) != 0){
+          do.call(grid.arrange,  rxsubList)
+        }else{
+          textplot("No plots selected")
+        }
+        dev.off()
+        
+              
     })
-    }
-  })
-  
-  output$test <- reactive({rx_plotted})
-  
-  
+  }
 })
 
-  
-  
+
+
+
+})
+
+
