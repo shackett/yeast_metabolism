@@ -92,6 +92,8 @@ for(i in 1:length(yifanConc[,1])){
       }
   }
 
+yifanConc$c_lim_scaling[yifanConc$Compound == "Alanine"] <- 0 # low-ball estimate because measured difference is not physiological - makes rate of metabolic washout feasible
+
 yifanConc$c_lim_conc <- yifanConc$Glucose * 2^yifanConc$c_lim_scaling / 1000 #concentation in M
 
 write.table(yifanConc[!is.na(yifanConc$c_lim_conc),], file = "../yeast_absolute_concentration_chemo.txt", sep = "\t", quote = F, col.names = TRUE, row.names = F)
