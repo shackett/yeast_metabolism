@@ -7,6 +7,7 @@ library(data.table)
 library(reshape2)
 library(RColorBrewer)
 library(stringr)
+library(grid)
 
 source("FBA_lib.R")
 
@@ -31,7 +32,7 @@ if(QPorLP == "QP"){
 modeGurobi = 'python'
 pythonMode = 'simple' # simple,thdyn, dir or ll (loopless)
 FVA = 'T' # Should flux variblility analysis be performed
-useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -271,19 +272,19 @@ for(i in 1:n_c){
   if(chemostatInfo$Limitation[i] %in% c("C", "P", "N")){treatment_par[[chemostatInfo$ChemostatCond[i]]][["auxotrophies"]] <- NA}
   
   #define observed fluxes per culture volume #scaled to intracellular volume later
-  biomass_match <- data.frame(specie = comp_by_cond$compositionFile$MetName, AltName = comp_by_cond$compositionFile$AltName,change = unname(-1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$ChemostatCond[i]]*chemostatInfo$actualDR[i]))
+  biomass_match <- data.frame(specie = comp_by_cond$compositionFile$MetName, AltName = comp_by_cond$compositionFile$AltName,change = unname(-1*comp_by_cond$cultureMolarity[,colnames(comp_by_cond$cultureMolarity) == chemostatInfo$ChemostatCond[i]]*chemostatInfo$actualDR[i]), index = comp_by_cond$compositionFile$index)
   biomass_list <- list()
   
   for(component in unique(comp_by_cond$compositionFile$varCategory)){
     principal_costs <- biomass_match[comp_by_cond$compositionFile$varCategory %in% component,]
     
     if(component == "Maintenance ATP hydrolysis"){
-      total_costs <- principal_costs
+      total_costs <- principal_costs[,colnames(principal_costs) != "index"]
       }else{
         #costs of monomer assimilation incorporated into biomass flux
-        energetic_costs <- as.matrix(comp_by_cond$biomassExtensionE[comp_by_cond$biomassExtensionE$name %in% principal_costs$AltName,-1])
+        energetic_costs <- as.matrix(comp_by_cond$biomassExtensionE[principal_costs$index,-1])
         energetic_costs_aggregate <- t(principal_costs$change) %*% energetic_costs; colnames(energetic_costs_aggregate) <- colnames(comp_by_cond$biomassExtensionE)[-1]
-        total_costs <- rbind(principal_costs, data.frame(specie = colnames(energetic_costs_aggregate), AltName = colnames(energetic_costs_aggregate), change = t(unname(energetic_costs_aggregate)))[energetic_costs_aggregate != 0,])
+        total_costs <- rbind(principal_costs[,colnames(principal_costs) != "index"], data.frame(specie = colnames(energetic_costs_aggregate), AltName = colnames(energetic_costs_aggregate), change = t(unname(energetic_costs_aggregate)))[energetic_costs_aggregate != 0,])
       }
     biomass_list[[component]]$exchange = total_costs
     
@@ -835,6 +836,11 @@ if(QPorLP == "QP"){
         
         fva_summary <- rbind(fva_summary, fva_sum)
         
+        fva_sum$value[grep('comp', fva_sum$asID)] <- sapply(grep('comp', fva_sum$asID), function(x){
+          x = data.frame(ID = sub(' comp', '', fva_sum$asID[x]), flux = fva_sum$value[x])
+          x[1,2]/fluxComp * abs(treatment_par[[names(treatment_par)[treatment]]]$"boundaryFlux"[[x[1,1]]]$exchange$change[1])
+        })
+        
       }
     }
     
@@ -905,7 +911,16 @@ if(QPorLP == "QP"){
     growth_rate$L1[treatment] <- sum(solvedModel$x*qpModel$obj)
     growth_rate$L2[treatment] <- sum(t(solvedModel$x) %*% qpModel$Q %*% t(t(solvedModel$x)))
     
+    # adjust composition fluxes to remove glucose uptake rate and restore units
+    treatment_par[[names(treatment_par)[treatment]]]$boundaryFlux
     
+    collapsedFlux[grep('composition', names(collapsedFlux))] <- sapply(grep('composition', names(collapsedFlux)), function(x){
+      x <- collapsedFlux[x]
+      x/fluxComp * abs(treatment_par[[names(treatment_par)[treatment]]]$"boundaryFlux"[[sub(' composition', '', names(x))]]$exchange$change[1])
+      })
+    
+    
+    # save summaries of flux carried and deviations between allowable and experimentally-measured fluxes
     flux_vectors[[names(treatment_par)[treatment]]]$"flux" <- collapsedFlux
     flux_vectors[[names(treatment_par)[treatment]]]$"constraints" <- constrainedFlux
     flux_vectors[[names(treatment_par)[treatment]]]$"residual" <- residualFlux
@@ -1012,6 +1027,7 @@ ggplot(residual_flux_stack[!is.na(residual_flux_stack$sd),], aes(x = factor(cond
 ggsave("flux_residuals.pdf", width = 18, height = 20)
   
 
+
 ### for now only look at reactions which carry flux in >= 80% of conditions
 #rxNames <- rxNames[rowSums(fluxMat_per_cellVol == 0) <= 5,]
 #fluxMat_per_cellVol <- fluxMat_per_cellVol[rowSums(fluxMat_per_cellVol == 0) <= 5,]
@@ -1022,17 +1038,17 @@ ggsave("flux_residuals.pdf", width = 18, height = 20)
 
 ### observed RQ ###
 
--1*fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "carbon dioxide [extracellular] boundary"] / fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "oxygen [extracellular] boundary"]
+#-1*fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "carbon dioxide [extracellular] boundary"] / fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "oxygen [extracellular] boundary"]
 
-carbon_dioxide_ex <- fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "carbon dioxide [extracellular] boundary"]
-small_mol_excretion <- apply(fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) %in% c("ethanol [extracellular] boundary", "acetate [extracellular] boundary"),], 2, sum)
-oxyen_used <- fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "oxygen [extracellular] boundary_bookkeeping",]
+#carbon_dioxide_ex <- fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "carbon dioxide [extracellular] boundary"]
+#small_mol_excretion <- apply(fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) %in% c("ethanol [extracellular] boundary", "acetate [extracellular] boundary"),], 2, sum)
+#oxyen_used <- fluxMat_per_cellVol[rownames(fluxMat_per_cellVol) == "oxygen [extracellular] boundary_bookkeeping",]
 
-qplot(y = -1*carbon_dioxide_ex, x = small_mol_excretion, color = chemostatInfo$Limitation) +
-  geom_abline(intercept = 0, slope = 1)
+#qplot(y = -1*carbon_dioxide_ex, x = small_mol_excretion, color = chemostatInfo$Limitation) +
+#  geom_abline(intercept = 0, slope = 1)
 
-qplot(y = oxyen_used, x = -1*carbon_dioxide_ex, color = chemostatInfo$Limitation) +
-  geom_abline(intercept = 0, slope = 1)
+#qplot(y = oxyen_used, x = -1*carbon_dioxide_ex, color = chemostatInfo$Limitation) +
+#  geom_abline(intercept = 0, slope = 1)
 
 
 
@@ -1086,6 +1102,8 @@ std_flux_all <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd)*ife
 
 heatmap.2(std_flux_all[smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
 heatmap.2(std_flux_all[!smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
+
+write.output(std_flux_rxnName_withL1[smooth_flux_Fstat$valid_flux[grep('boundary|composition', rownames(std_flux_rxnName), invert = T)],], "Flux_analysis/fluxCarriedHMsmooth.tsv")
 
 
 

@@ -281,7 +281,7 @@ tc_g_per_cell <- (carbFrac$fraction * chemostatInfo$DWperCell)
 TC_minusTRE <- tc_g_per_cell - trehalose_g_per_cell
 TC_SD_minusTRE <- sqrt((tc_g_per_cell * (sqrt(carbFrac$assayVariance)/carbFrac$fraction))^2 - (trehalose_cv * trehalose_g_per_cell)^2)
 
-CV_table[,"sugar polymer flux" := TC_SD_minusTRE/TC_minusTRE,]
+CV_table[,"sugar polymer flux" := unlist(TC_SD_minusTRE/TC_minusTRE),]
 
 carbRelAbunds <- compositionFile[compositionFile$Class %in% c("Cell Wall Carbohydrates", "Storage Carbohydrates"),]
 carbWeightFrac <- (carbRelAbunds$weightPerUn*-1)/sum(carbRelAbunds$weightPerUn*-1)
@@ -507,6 +507,12 @@ maintVec <- c(1, -1, -1); names(maintVec) <- c("ATP [cytoplasm]", "ADP [cytoplas
 maintMatrix <- maintVec %*% t(maintFlux/chemostatInfo$actualDR) #divide out the dilution rate so that when culture concentration is multiplied by DR in FBA_run_full_reco.R, this adjustment is canceled leaving flux per hr
 rownames(maintMatrix) <- names(maintVec)
 
+comp_by_cond$moles_per_cell <- rbind(comp_by_cond$moles_per_cell, maintMatrix)
+
+added_cmpds <- data.frame(MetName = rownames(maintMatrix), StoiCoef = NA, AltName = rownames(maintMatrix), Class = "Maintenance ATP hydrolysis", Abbreviated = rownames(maintMatrix), Polymerization_Cost = NA, MW = NA, weightPerUn = NA, index = nrow(compositionFile) + 1:3)
+compositionFile = rbind(compositionFile, added_cmpds)
+
+
 # energetic flux in order to polymerization monomers
 composition_part <- NULL
 for(i in 1:length(compositionFile[,1])){
@@ -551,11 +557,6 @@ composition_part <- composition_part[order(composition_part$index),colnames(comp
 ### integrate these costs of polymerization directly into FBA rather than smooshing them together
 ### save composition_part to comp_by_cond before output
 
-
-comp_by_cond$moles_per_cell <- rbind(comp_by_cond$moles_per_cell, maintMatrix)
-
-added_cmpds <- data.frame(MetName = rownames(maintMatrix), StoiCoef = NA, AltName = rownames(maintMatrix), Class = "Maintenance ATP hydrolysis", Abbreviated = rownames(maintMatrix), Polymerization_Cost = NA, MW = NA, weightPerUn = NA, index = nrow(compositionFile) + 1:3)
-compositionFile_Extended = rbind(compositionFile, added_cmpds)
 #write.table(compositionFile_Extended, file = "../Yeast_comp_energy.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
 
 
@@ -566,12 +567,12 @@ compositionFile_Extended = rbind(compositionFile, added_cmpds)
 colSums(comp_by_cond$grams_per_cell, na.rm = TRUE) / (chemostatInfo$medcellVol * 10^-15) / 10  #grams per 100mL of macromolecules - chunky but reasonable
 
 # determine the fluxes into macromolecule biosynthesis and energy per volume
-comp_by_cond$intacellularMolarity = (comp_by_cond$moles_per_cell)/(t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$medcellVol * 10^-15)
+comp_by_cond$intacellularMolarity = (comp_by_cond$moles_per_cell)/(t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$medcellVol * 10^-15)
 
 
-comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$actualDR) #moles/mL intracellular volume -hr
+comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$actualDR) #moles/mL intracellular volume -hr
 
-comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$VolFrac_mean/1000 #moles/L culture
+comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$VolFrac_mean/1000 #moles/L culture
 
 
 
@@ -648,7 +649,7 @@ mediaSummary$density <- sapply(1:nrow(mediaSummary), function(x){
 
 
 #grams per L of anabolic components
-cellularComponents <- comp_by_cond$cultureMolarity[compositionFile_Extended$Class != "Maintenance ATP hydrolysis",] * as.numeric(compositionFile_Extended$MW[compositionFile_Extended$Class != "Maintenance ATP hydrolysis"]) %*% t(rep(1, ncol(comp_by_cond$cultureMolarity[compositionFile_Extended$Class != "Maintenance ATP hydrolysis",])))
+cellularComponents <- comp_by_cond$cultureMolarity[compositionFile$Class != "Maintenance ATP hydrolysis",] * as.numeric(compositionFile$MW[compositionFile$Class != "Maintenance ATP hydrolysis"]) %*% t(rep(1, ncol(comp_by_cond$cultureMolarity[compositionFile$Class != "Maintenance ATP hydrolysis",])))
 cellularDF <- melt(t(cellularComponents))
 colnames(cellularDF) <- c("condition", "metabolite", "density")
 cellularDF$specie <- sapply(cellularDF$metabolite, function(x){
@@ -682,25 +683,25 @@ ggsave("speciesUtilization.pdf", height = 20, width = 14)
 #class_comp_plot + geom_bar(colour = "black", stat = "identity")
 
 ### for matching biomass fluxes which species should be combined into a single variance category ####
-compositionFile_Extended$varCategory <- NA
-compositionFile_Extended$varCategory[compositionFile_Extended$Class == "Amino Acid"] <- "AA flux"
-compositionFile_Extended$varCategory[grep('Carbohydrates', compositionFile_Extended$Class)] <- "sugar polymer flux"
-compositionFile_Extended$varCategory[grep('^d[A-Z]TP', compositionFile_Extended$MetName)] <- "dNTP flux"
-compositionFile_Extended$varCategory[grep('^[A-Z]TP', compositionFile_Extended$MetName)] <- "NTP flux"
-compositionFile_Extended$varCategory[grep('Sulfate', compositionFile_Extended$MetName)] <- "sulfate flux"
-compositionFile_Extended$varCategory[grep('Maintenance ATP hydrolysis', compositionFile_Extended$Class)] <- "Maintenance ATP hydrolysis"
-compositionFile_Extended$varCategory[compositionFile_Extended$MetName == "glycerol"] <- "glycerol washout"
-compositionFile_Extended$varCategory[compositionFile_Extended$MetName == "polyphosphate"] <- "polyphosphate flux"
-compositionFile_Extended$varCategory[compositionFile_Extended$Class == "Fatty Acids"] <- compositionFile_Extended$MetName[compositionFile_Extended$Class == "Fatty Acids"]
+compositionFile$varCategory <- NA
+compositionFile$varCategory[compositionFile$Class == "Amino Acid"] <- "AA flux"
+compositionFile$varCategory[grep('Carbohydrates', compositionFile$Class)] <- "sugar polymer flux"
+compositionFile$varCategory[grep('^d[A-Z]TP', compositionFile$MetName)] <- "dNTP flux"
+compositionFile$varCategory[grep('^[A-Z]TP', compositionFile$MetName)] <- "NTP flux"
+compositionFile$varCategory[grep('Sulfate', compositionFile$MetName)] <- "sulfate flux"
+compositionFile$varCategory[grep('Maintenance ATP hydrolysis', compositionFile$Class)] <- "Maintenance ATP hydrolysis"
+compositionFile$varCategory[compositionFile$MetName == "polyphosphate"] <- "polyphosphate flux"
+compositionFile$varCategory[compositionFile$Class == "Soluble metabolites"] <- compositionFile$MetName[compositionFile$Class == "Soluble metabolites"]
+compositionFile$varCategory[compositionFile$Class == "Fatty Acids"] <- compositionFile$MetName[compositionFile$Class == "Fatty Acids"]
 
 # Specify whether fluxes are drained off of the periphery of metabolism or  tracking an internal reaction or combination of reactions
 # fatty acid incorporation was previously specified the latter way but 
-compositionFile_Extended$FluxType <- "Boundary"
+compositionFile$FluxType <- "Boundary"
 
 
 ### Final output -> FBA_run ####
 
-comp_by_cond$compositionFile <- compositionFile_Extended
+comp_by_cond$compositionFile <- compositionFile
 comp_by_cond$biomassExtensionE <- composition_part
 save(comp_by_cond, chemostatInfo, mediaSummary, file = "boundaryFluxes.Rdata")
 
@@ -715,7 +716,7 @@ assimFlux[,CV := NA]
 
 for(a_cond_spec in 1:nrow(assimFlux)){
   # pull the coefficient of variation of a species in a condition
-  assimFlux$CV[a_cond_spec] <- median(comp_by_cond$CV_table[condition == assimFlux$Condition[a_cond_spec],get(unique(compositionFile_Extended$varCategory[compositionFile_Extended$Class == assimFlux$Category[a_cond_spec]])),])
+  assimFlux$CV[a_cond_spec] <- median(comp_by_cond$CV_table[condition == assimFlux$Condition[a_cond_spec],get(unique(compositionFile$varCategory[compositionFile$Class == assimFlux$Category[a_cond_spec]])),])
   
 }
 assimFlux$Category[grep('Carbohydrates', assimFlux$Category)] <- "Carbohydrates"
@@ -744,7 +745,7 @@ setcolorder(upexFlux, c("Category", "Condition", "type", "Flux", "UB", "CV"))
 boundaryFluxes <- rbind(assimFlux, upexFlux)
 boundaryFluxes$Condition <- factor(boundaryFluxes$Condition, levels = unique(boundaryFluxes$Condition))
 
-barplot_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "white", color = "black"), legend.position = "none",
+barplot_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 25, face = "bold"), strip.text = element_text(size = 28), panel.background = element_rect(fill = "white", color = "black"), legend.position = "none",
   panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.text.x = element_text(angle = 90), strip.background = element_rect(fill = "darkgoldenrod1", color = "black"),
   axis.text = element_text(color = "black"), panel.margin = unit(0.5, "lines"))
 
@@ -760,10 +761,10 @@ for(a_plot in unique(boundaryFluxes$type)){
   flux_subset$Limitation <- factor(substr(flux_subset$Condition, 1, 1), levels = c("P", "C", "N", "L", "U"))
   
   ggplot(flux_subset, aes(x = Condition, y = Flux, ymin = CImin, ymax = CImax, fill = Limitation)) + geom_bar(stat="identity") + geom_errorbar() +
-    facet_grid(Category ~ ., scales = "free_y") + scale_y_continuous("Flux (moles / hour / mL cellular volume)", expand = c(0.02,0)) + expand_limits(y = 0) +
-    scale_fill_brewer(palette = "Set1") + barplot_theme
+    facet_wrap(~ Category, scales = "free_y", ncol = ifelse(a_plot == "assimilation", 2, 1)) + scale_y_continuous("Flux (moles / hour / mL cellular volume)", expand = c(0.02,0)) + expand_limits(y = 0) +
+    scale_fill_brewer(palette = "Set2") + barplot_theme
   
-  ggsave(file = paste0("summary_", a_plot, ".pdf"), width = 10, height = 3 + length(levels(flux_subset$Category))*3)
+  ggsave(file = paste0("summary_", a_plot, ".pdf"), width = ifelse(a_plot == "assimilation", 16, 10), height = 3 + ifelse(a_plot == "assimilation", length(levels(flux_subset$Category))/2, length(levels(flux_subset$Category)))*3)
   
   }
 
