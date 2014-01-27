@@ -7,6 +7,7 @@ library(ggplot2)
 library(gplots)
 library(reshape2)
 library(data.table)
+library(grid)
 
 scatter_facet_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), 
       legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 0.5), axis.text.x = element_text(angle = 90),
@@ -55,12 +56,6 @@ class_composition <- data.frame(Category = names(class_composition[names(class_c
 class_composition$CellComposition <- "Default"
 class_composition <- class_composition[!is.na(class_composition$Abundance),]
 
-pie_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "white"), legend.position = "right", 
-  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(3, "line"), axis.text = element_blank(), axis.title = element_blank()) 
-
-
-class_comp_plot <- ggplot(class_composition, aes(y = Abundance, factor(CellComposition), fill = factor(Category))) + pie_theme
-class_comp_plot + geom_bar(stat = "identity") + coord_polar(theta = "y") + scale_fill_discrete(name = "Class")
 
 class_comp_sep <- compositionFile[compositionFile$Class != "Energy Balance" & !is.na(compositionFile$weightPerUn),]
 class_comp_sep$Abundance <- class_comp_sep$weightPerUn/sum(class_comp_sep$weightPerUn)
@@ -71,7 +66,7 @@ for(i in unique(class_comp_sep$Class)){
   }
 
 pie_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "white"), legend.position = "right", 
-  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(3, "line"), axis.text = element_blank(), axis.title = element_blank(), line = element_line(size = 1)) 
+  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), axis.text = element_blank(), axis.title = element_blank(), line = element_line(size = 1)) 
 
 class_comp_plot <- ggplot(class_comp_sep, aes(y = Abundance, factor(CellComposition), fill = factor(Class))) + pie_theme + scale_fill_brewer(name = "Class", palette = "Set1")
 class_comp_plot + geom_bar(colour = "black", stat = "identity") + coord_polar(theta = "y")
@@ -224,9 +219,33 @@ rnaWeightFrac <- (rnaRelAbunds$weightPerUn*-1)/sum(rnaRelAbunds$weightPerUn*-1)
 comp_by_cond$moles_per_cell[compositionFile$MetName %in% c("ATP", "UTP", "CTP", "GTP"), chmatch(RNA_subset$Condition, CV_table$condition)] <-
   t(t(t((RNA_subset$Fitted_Fraction/100 * chemostatInfo_subset$DWperCell))) %*% t(rnaWeightFrac/rnaRelAbunds$MW))
 
+
+##### Stand-alone concentrations of metabolites #####
+# for high abundance metabolites or directly specified ones fluxes should account 
+# for them not being flux-balanced due to washout of the accumulating pool
+# trehalose was measured by MS and in bulk with other carbohydrates - MS is used and this signal is subtracted 
+# from total carbohydrates to yield Mannan + Glucan + Glycogen signal
+
+# load absolute concentration of metabolites (in M:moles/L)
+metabolite_concentrations <- read.delim("../Yeast_genome_scale/flux_cache/tab_boer_abs.txt") # for [M]
+load("../Yeast_genome_scale/flux_cache/metaboliteTables.RData") # for SD of log2([M])
+load("../Yeast_genome_scale/flux_cache/reconstructionWithCustom.Rdata") # for correspondence between metabolite identities and model
+
+# metabolites with a median concentration of greater than 5mM and manually-defined abundant metabolites which are also anti-correlated with growth-rate
+#sort(apply(metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))], 1, median))
+
+abs_metabolite_concentrations <- metabolite_concentrations[apply(metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))], 1, median) > 0.005 | metabolite_concentrations$Metabolite %in% c("glutathione", "glutathione disulfide", "trehalose/sucrose"),]
+abs_metabolite_SD <- remapped_SD[rownames(remapped_SD) %in% abs_metabolite_concentrations$Metabolite,] * log(2) * abs_metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))] # SD(x) = SD(log2(x)) * log(2) * x
+
+abs_metabolite_concentrations$modelName <- 
+ 
+corrFile
+
+
 ##### Stand-alone abundance of fatty-acids, carbohydrate and glycerol ######
 ## expressed as fraction of dry weight
 
+read.delim('Metabolites/yeast_absolute_concentration_chemo.txt')
 
 ## carbohydrate
 
@@ -239,8 +258,9 @@ carbWeightFrac <- (carbRelAbunds$weightPerUn*-1)/sum(carbRelAbunds$weightPerUn*-
 
 comp_by_cond$moles_per_cell[compositionFile$Class %in% c("Cell Wall Carbohydrates", "Storage Carbohydrates"),] <- t(t(t((carbFrac$fraction * chemostatInfo$DWperCell))) %*% t(carbWeightFrac/carbRelAbunds$MW))
 
-## glycerol
 
+## glycerol
+metabolite_concentrations
 glycerolFrac <- read.table('BulkComposition/glycfrac_data.txt',sep='\t', header = T)
 glycerolFrac <- glycerolFrac[chmatch(chemostatInfo$composition_data, glycerolFrac$condition),]
 CV_table[,"glycerol washout" := sqrt(glycerolFrac$assayVariance)/glycerolFrac$fraction,]
@@ -376,8 +396,8 @@ class_sum_fraction_melt$DR <- sapply(as.character(class_sum_fraction_melt$Condit
 
 barplot_theme <- theme(text = element_text(size = 40, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_blank(), legend.position = "top", 
                        panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.ticks.x = element_blank(), axis.text = element_text(size = 30, color = "black"), 
-                       axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"), legend.key.width = unit(3, "line"),
-                       strip.background = element_rect(fill = "darkgoldenrod1"), panel.margin = unit(2, "lines")) 
+                       axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"),
+                       strip.background = element_rect(fill = "darkgoldenrod1")) 
 
 cbPalette <- c("#56B4E9", "#D55E00", "#E69F00", "#009E73", "#F0E442", "#999999", "#CC79A7")
 
@@ -407,7 +427,7 @@ comp_by_cond$moles_per_cell[compositionFile$Class != "Energy Balance",] <- comp_
 # calculate the maintenance flux from dry weight and polymerization costs from molarity
 
 # maintenance flux - relative to DW
-maintFlux <- 0.001 * colSums(comp_by_cond$grams_per_cell) #1 mmole per gDW/hr
+maintFlux <- 0.001 * chemostatInfo$DWperCell #1 mmole per gDW/hr
 maintVec <- c(1, -1, -1); names(maintVec) <- c("ATP [cytoplasm]", "ADP [cytoplasm]", "phosphate [cytoplasm]")
 
 maintMatrix <- maintVec %*% t(maintFlux/chemostatInfo$actualDR) #divide out the dilution rate so that when culture concentration is multiplied by DR in FBA_run_full_reco.R, this adjustment is canceled leaving flux per hr
@@ -472,8 +492,7 @@ colSums(comp_by_cond$grams_per_cell, na.rm = TRUE) / (chemostatInfo$medcellVol *
 comp_by_cond$intacellularMolarity = (comp_by_cond$moles_per_cell)/(t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$medcellVol * 10^-15)
 
 
-
-comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$actualDR) #moles/L-hr 
+comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$actualDR) #moles/mL intracellular volume -hr
 
 comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, length(compositionFile_Extended[,1])))) %*% chemostatInfo$VolFrac_mean/1000 #moles/L culture
 
@@ -574,7 +593,7 @@ jointCompSummary[,DR := chemostatInfo$DRgoal[chemostatInfo$NMR_name == condition
 jointCompSummary$type <- factor(jointCompSummary$type, levels = c("uptake", "excretion", "biomass"))
 
 barplot_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "white"), legend.position = "bottom", 
-  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), legend.key.width = unit(3, "line"), axis.text.x = element_text(angle = 90), strip.background = element_rect(fill = "darkgoldenrod1"))
+  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.text.x = element_text(angle = 90), strip.background = element_rect(fill = "darkgoldenrod1"))
 
 
 class_comp_plot <- ggplot(jointCompSummary, aes(y = density, x = type, fill = factor(specie))) + barplot_theme + facet_grid(Limitation ~ DR, scales = "free_y") + scale_fill_discrete(name = "Class", guide = guide_legend(nrow = 4))
@@ -607,6 +626,72 @@ compositionFile_Extended$FluxType <- "Boundary"
 comp_by_cond$compositionFile <- compositionFile_Extended
 comp_by_cond$biomassExtensionE <- composition_part
 save(comp_by_cond, chemostatInfo, mediaSummary, file = "boundaryFluxes.Rdata")
+
+
+### Data summaries for publication ###
+
+assimFlux <- comp_by_cond$anabolicFlux[!(comp_by_cond$compositionFile$Class %in% c("Misc", "Maintenance ATP hydrolysis")),] #moles per mL intracelllular volume per hr 
+
+assimFlux <- data.table(melt(data.frame(Category = comp_by_cond$compositionFile$Class[!(comp_by_cond$compositionFile$Class %in% c("Misc", "Maintenance ATP hydrolysis"))], assimFlux), id.vars = "Category", variable.name = "Condition", value.name = "Flux"))
+assimFlux <- assimFlux[,list(Flux = sum(Flux)), by = c("Category", "Condition")]
+assimFlux[,CV := NA]
+
+for(a_cond_spec in 1:nrow(assimFlux)){
+  # pull the coefficient of variation of a species in a condition
+  assimFlux$CV[a_cond_spec] <- median(comp_by_cond$CV_table[condition == assimFlux$Condition[a_cond_spec],get(unique(compositionFile_Extended$varCategory[compositionFile_Extended$Class == assimFlux$Category[a_cond_spec]])),])
+  
+}
+assimFlux$Category[grep('Carbohydrates', assimFlux$Category)] <- "Carbohydrates"
+assimFlux <- assimFlux[,list(Flux = sum(Flux), CV = median(CV)), by = c("Category", "Condition")]
+assimFlux$Category[assimFlux$Category == "Amino Acid"] <- "Amino Acids"
+assimFlux$Category[assimFlux$Category == "Nucleic Acid"] <- "Nucleic Acids"
+
+assimFlux$type <- "assimilation"
+assimFlux$UB <- NA
+setcolorder(assimFlux, c("Category", "Condition", "type", "Flux", "UB", "CV"))
+
+
+upexFlux <- data.table(mediaSummary)
+upexFlux$DR <- chemostatInfo$actualDR[chmatch(upexFlux$condition, chemostatInfo$ChemostatCond)]; upexFlux$VolFrac <- chemostatInfo$VolFrac_mean[chmatch(upexFlux$condition, chemostatInfo$ChemostatCond)]
+upexFlux <- upexFlux[,list(Flux = change*DR/VolFrac*1000, UB = ub*DR/VolFrac*1000, CV = sd/change), by = c("condition", "specie", "type")]
+
+upexFlux$specie <- speciesOfInterest$NMRname[chmatch(upexFlux$specie, speciesOfInterest$modelName)]
+upexFlux$specie[is.na(upexFlux$specie)] <- "Phosphate" 
+upexFlux$CV[upexFlux$specie == "Glucose" & upexFlux$condition == "N0.30"] <- NA
+
+
+upexFlux$UB[upexFlux$UB == Inf] <- NA
+setnames(upexFlux, c("specie", "condition"), c("Category", "Condition"))
+setcolorder(upexFlux, c("Category", "Condition", "type", "Flux", "UB", "CV"))
+
+boundaryFluxes <- rbind(assimFlux, upexFlux)
+boundaryFluxes$Condition <- factor(boundaryFluxes$Condition, levels = unique(boundaryFluxes$Condition))
+
+barplot_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "white", color = "black"), legend.position = "none",
+  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.text.x = element_text(angle = 90), strip.background = element_rect(fill = "darkgoldenrod1", color = "black"),
+  axis.text = element_text(color = "black"), panel.margin = unit(0.5, "lines"))
+
+for(a_plot in unique(boundaryFluxes$type)){
+  
+  flux_subset <- boundaryFluxes[type == a_plot,]
+  flux_median <- flux_subset[,list(medFlux = median(Flux)), by = "Category"]
+  
+  flux_subset$Category <- factor(flux_subset$Category, levels = flux_median$Category[order(flux_median$medFlux, decreasing = T)])  
+  flux_subset[,CImin := Flux - Flux*CV,]; flux_subset$CImin[flux_subset$CImin < 0] <- 0
+  flux_subset[,CImax := Flux + Flux*CV,]
+  
+  flux_subset$Limitation <- factor(substr(flux_subset$Condition, 1, 1), levels = c("P", "C", "N", "L", "U"))
+  
+  ggplot(flux_subset, aes(x = Condition, y = Flux, ymin = CImin, ymax = CImax, fill = Limitation)) + geom_bar(stat="identity") + geom_errorbar() +
+    facet_grid(Category ~ ., scales = "free_y") + scale_y_continuous("Flux (moles / hour / mL cellular volume)", expand = c(0.02,0)) + expand_limits(y = 0) +
+    scale_fill_brewer(palette = "Set1") + barplot_theme
+  
+  ggsave(file = paste0("summary_", a_plot, ".pdf"), width = 10, height = 3 + length(levels(flux_subset$Category))*3)
+  
+  }
+
+
+
 
 # Table of measured % DW
 
