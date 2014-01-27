@@ -40,16 +40,16 @@ compComp <- compComp[,c(TRUE, TRUE, colSums(compComp[,-c(1:2)]) != 0)]
 atomicMasses <- data.frame(element = c("C", "H", "N", "O", "P", "R", "S"), mass = c(12.0107, 1.00794, 14.00674, 15.9994, 30.973761, 0, 32.066))
 atomicMasses <- atomicMasses[atomicMasses$element %in% colnames(compComp[,-c(1,2)]),]
 
-compositionFile$MW <- t(t(compComp[,-c(1,2)])) %*% t(t(c(atomicMasses[,2])))
+compositionFile$MW <- c(t(t(compComp[,-c(1,2)])) %*% t(t(c(atomicMasses[,2]))))
 compositionFile$weightPerUn <- as.numeric(compositionFile$StoiCoef) * compositionFile$MW
 #compositionFile$weight_per_t[compositionFile$Class == "Energy Balance"] <- NA
 
 if(any(compositionFile$MW == 0)){
-  print("incompatible MW")  
+  stop("incompatible MW")  
   }
 
 
-### What is the dry-weight fraction of macromolecules in a conventional objective function ###
+### What is the dry-weight fraction of macromolecules in a conventional objective function ####
 
 class_composition <- sapply(unique(compositionFile$Class), function(x){sum(compositionFile$weightPerUn[compositionFile$Class == x])}) * -1
 class_composition <- data.frame(Category = names(class_composition[names(class_composition) != "Energy Balance"]), Abundance = unname(class_composition[names(class_composition) != "Energy Balance"]))
@@ -76,9 +76,6 @@ ggsave(file = "default_composition.pdf", height = 15, width = 15)
 
 
 ########### Chemostat specific information ###########
-
-
-chemostatInfo_bu <- read.table("BulkComposition/chemostatDRmisc.tsv", sep = "\t", header = TRUE) #VolFrac_mean - uL cellular vol per mL media
 
 # Load all chemostat conditions
 chemostatInfo <- read.table("chemostatInformation/ListOfChemostats_augmented.txt", sep = "\t", header = T)
@@ -237,30 +234,62 @@ load("../Yeast_genome_scale/flux_cache/reconstructionWithCustom.Rdata") # for co
 abs_metabolite_concentrations <- metabolite_concentrations[apply(metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))], 1, median) > 0.005 | metabolite_concentrations$Metabolite %in% c("glutathione", "glutathione disulfide", "trehalose/sucrose"),]
 abs_metabolite_SD <- remapped_SD[rownames(remapped_SD) %in% abs_metabolite_concentrations$Metabolite,] * log(2) * abs_metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))] # SD(x) = SD(log2(x)) * log(2) * x
 
-abs_metabolite_concentrations$modelName <- 
- 
-corrFile
+abs_metabolite_concentrations$tID[abs_metabolite_concentrations$Metabolite == "trehalose/sucrose"] <- corrFile$SpeciesType[grep('^trehalose', corrFile$SpeciesName)][1]
+
+IDmisdefined <- grep('^t_[0-9]{4}$', abs_metabolite_concentrations$tID, invert = T)
+if(length(IDmisdefined) != 0){
+  stop(paste0("ID is misdefined: ", paste(abs_metabolite_concentrations$tID[IDmisdefined], collapse = " & "), " -> manually overwrite with appropriate single tIDs"))
+  }
+
+# mitochondrial: alanine, glutamate and aspartate based on localization of enzymes it is ambiguous where transaminations will occur, but treating pools as mitochondrial will minimize
+# possible side-effects from mito->cyto transport reactions
+# cytoplasmic: all else
+
+abs_metabolite_concentrations$modelName <- NA
+abs_metabolite_concentrations$modelName[abs_metabolite_concentrations$Metabolite %in% c("alanine", "aspartate", "glutamate")] <- 
+  corrFile$SpeciesName[corrFile$Compartment == "c_11"][chmatch(abs_metabolite_concentrations$tID[abs_metabolite_concentrations$Metabolite %in% c("alanine", "aspartate", "glutamate")], 
+                                                               corrFile$SpeciesType[corrFile$Compartment == "c_11"])]
+
+abs_metabolite_concentrations$modelName[is.na(abs_metabolite_concentrations$modelName)] <- 
+  corrFile$SpeciesName[corrFile$Compartment == "c_03"][chmatch(abs_metabolite_concentrations$tID[is.na(abs_metabolite_concentrations$modelName)], 
+                                                               corrFile$SpeciesType[corrFile$Compartment == "c_03"])]
+
+
 
 
 ##### Stand-alone abundance of fatty-acids, carbohydrate and glycerol ######
 ## expressed as fraction of dry weight
 
-read.delim('Metabolites/yeast_absolute_concentration_chemo.txt')
-
 ## carbohydrate
 
 carbFrac <- read.table('BulkComposition/TCfrac_data.txt',sep='\t', header = T)
 carbFrac <- carbFrac[chmatch(chemostatInfo$composition_data, carbFrac$conditions),]
-CV_table[,"sugar polymer flux" := sqrt(carbFrac$assayVariance)/carbFrac$fraction,]
+
+# subtract trehalose concentration (measured by MS) from measured TC
+# align TC and [trehalose] based upon grams per cell
+
+trehalose_g_per_cell <- abs_metabolite_concentrations[abs_metabolite_concentrations$modelName == "trehalose [cytoplasm]", grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))] *
+  342.2965 * chemostatInfo$medcellVol * 10^-15 # convert to grams per cell
+trehalose_g_per_cell <- trehalose_g_per_cell[chmatch(names(trehalose_g_per_cell), chemostatInfo$ChemostatCond)]
+
+trehalose_cv <- abs_metabolite_SD[abs_metabolite_concentrations$modelName == "trehalose [cytoplasm]",]/abs_metabolite_concentrations[abs_metabolite_concentrations$modelName == "trehalose [cytoplasm]", grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))]
+trehalose_cv <- trehalose_cv[chmatch(names(trehalose_cv), chemostatInfo$ChemostatCond)]
+
+tc_g_per_cell <- (carbFrac$fraction * chemostatInfo$DWperCell)
+
+TC_minusTRE <- tc_g_per_cell - trehalose_g_per_cell
+TC_SD_minusTRE <- sqrt((tc_g_per_cell * (sqrt(carbFrac$assayVariance)/carbFrac$fraction))^2 - (trehalose_cv * trehalose_g_per_cell)^2)
+
+CV_table[,"sugar polymer flux" := TC_SD_minusTRE/TC_minusTRE,]
 
 carbRelAbunds <- compositionFile[compositionFile$Class %in% c("Cell Wall Carbohydrates", "Storage Carbohydrates"),]
 carbWeightFrac <- (carbRelAbunds$weightPerUn*-1)/sum(carbRelAbunds$weightPerUn*-1)
 
-comp_by_cond$moles_per_cell[compositionFile$Class %in% c("Cell Wall Carbohydrates", "Storage Carbohydrates"),] <- t(t(t((carbFrac$fraction * chemostatInfo$DWperCell))) %*% t(carbWeightFrac/carbRelAbunds$MW))
+comp_by_cond$moles_per_cell[compositionFile$Class %in% c("Cell Wall Carbohydrates", "Storage Carbohydrates"),] <- t(t(TC_minusTRE) %*% t(carbWeightFrac/carbRelAbunds$MW))
 
 
 ## glycerol
-metabolite_concentrations
+
 glycerolFrac <- read.table('BulkComposition/glycfrac_data.txt',sep='\t', header = T)
 glycerolFrac <- glycerolFrac[chmatch(chemostatInfo$composition_data, glycerolFrac$condition),]
 CV_table[,"glycerol washout" := sqrt(glycerolFrac$assayVariance)/glycerolFrac$fraction,]
@@ -303,6 +332,40 @@ for(FA in compositionFile[compositionFile$Class == "Fatty Acids",]$MetName){
   CV_table[,eval(FA) := a_FA$CV]
   
   }
+
+## Revisit washout of soluble metabolites with treatmet similarly to fatty acids ##
+# programatically append added metabolites to compositionFile
+
+compositionFile_solubleAppend <- data.frame(MetName = abs_metabolite_concentrations$modelName, StoiCoef = NA, AltName = abs_metabolite_concentrations$modelName, Class = "Soluble metabolites", Abbreviated = abs_metabolite_concentrations$modelName, Polymerization_Cost = NA, MW = NA, weightPerUn = NA)
+
+solubleMet_molFormula <- modelMetComp[chmatch(compositionFile_solubleAppend$AltName, modelMetComp$name),]
+solubleMet_molFormula <- apply(solubleMet_molFormula[,-c(1,2)], c(1,2), as.numeric)
+if(any(is.na(solubleMet_molFormula))){stop("molecular formula is not defined for 1+ soluble metabolites")}
+
+solubleMet_molFormula <- solubleMet_molFormula[,colSums(solubleMet_molFormula) != 0]
+compositionFile_solubleAppend$MW <- c(solubleMet_molFormula %*% t(t(atomicMasses$mass[chmatch(colnames(solubleMet_molFormula), atomicMasses$element)])))
+
+soluble_met_info <- matrix(NA, ncol = nrow(chemostatInfo), nrow = nrow(compositionFile_solubleAppend))
+rownames(soluble_met_info) <- compositionFile_solubleAppend$AltName; colnames(soluble_met_info) <- chemostatInfo$ChemostatCond
+
+comp_by_cond$grams_per_cell <- rbind(comp_by_cond$grams_per_cell, soluble_met_info)
+compositionFile <- rbind(compositionFile, compositionFile_solubleAppend)
+
+# fill in metabolite moles per cell and coefficient of variation
+for(MET_num in 1:nrow(compositionFile_solubleAppend)){
+  
+  metSummary <- data.frame(cond = colnames(abs_metabolite_SD), molar = unlist(abs_metabolite_concentrations[MET_num,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))]), SD = unlist(abs_metabolite_SD[MET_num,]))
+  metSummary <- metSummary[chmatch(metSummary$cond, chemostatInfo$ChemostatCond),]
+  
+  soluble_met_info[MET_num,] <- metSummary$molar * chemostatInfo$medcellVol * 10^-15
+  
+  CV_table[,eval(compositionFile_solubleAppend$MetName[MET_num]) := metSummary$SD/metSummary$molar]
+  
+  }
+
+comp_by_cond$moles_per_cell <- rbind(comp_by_cond$moles_per_cell, soluble_met_info)
+
+
 
 
 
@@ -360,6 +423,8 @@ class_sum_melt$SE[class_sum_melt$Class == "Glycerol"] <- CV_table$"glycerol wash
 class_sum_melt$SE[class_sum_melt$Class == "Nucleic Acid"] <- CV_table$"NTP flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_melt$SE[class_sum_melt$Class == "Polyphosphates"] <- CV_table$"polyphosphate flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_melt$SE[class_sum_melt$Class == "Fatty Acids"] <- apply(CV_table[,compositionFile[compositionFile$Class == "Fatty Acids",]$MetName,with = F], 1, mean)[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Fatty Acids"]), CV_table$condition)]
+class_sum_melt$SE[class_sum_melt$Class == "Soluble metabolites"] <- apply(CV_table[,compositionFile[compositionFile$Class == "Soluble metabolites",]$MetName,with = F], 1, mean)[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Soluble metabolites"]), CV_table$condition)]
+class_sum_melt$SE <- unlist(class_sum_melt$SE)
 
 class_sum_melt <- class_sum_melt[!is.na(class_sum_melt$SE),]
 class_sum_melt$lb <- class_sum_melt$cumsum - class_sum_melt$SE*class_sum_melt$Abundance
@@ -382,6 +447,8 @@ class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Glycerol"] <- CV_ta
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Nucleic Acid"] <- CV_table$"NTP flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Polyphosphates"] <- CV_table$"polyphosphate flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Fatty Acids"] <- apply(CV_table[,compositionFile[compositionFile$Class == "Fatty Acids",]$MetName,with = F], 1, mean)[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Fatty Acids"]), CV_table$condition)]
+class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Soluble metabolites"] <- apply(CV_table[,compositionFile[compositionFile$Class == "Soluble metabolites",]$MetName,with = F], 1, mean)[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Soluble metabolites"]), CV_table$condition)]
+class_sum_fraction_melt$SE <- unlist(class_sum_fraction_melt$SE)
 
 class_sum_fraction_melt <- class_sum_fraction_melt[!is.na(class_sum_fraction_melt$SE),]
 class_sum_fraction_melt$lb <- class_sum_fraction_melt$cumsum - class_sum_fraction_melt$SE*class_sum_fraction_melt$Abundance
@@ -399,7 +466,8 @@ barplot_theme <- theme(text = element_text(size = 40, face = "bold"), title = el
                        axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"),
                        strip.background = element_rect(fill = "darkgoldenrod1")) 
 
-cbPalette <- c("#56B4E9", "#D55E00", "#E69F00", "#009E73", "#F0E442", "#999999", "#CC79A7")
+cbPalette <- c("#56B4E9", "#D55E00", "#E69F00", "#009E73", "#F0E442", "#999999", "#CC79A7", "#000000")
+weightStackDF <- factor(weightStackDF$Class)
 
 ggplot() + geom_bar(data = weightStackDF, aes(y = Abundance, x = DR, fill = factor(Class)), colour = "black", stat = "identity") + scale_y_continuous("pg per cell +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette, guide = guide_legend(nrow = 2)) +
   geom_errorbar(data = class_sum_melt, aes(x = DR, ymin = lb, ymax = ub), color = "WHITE") + barplot_theme + facet_grid(~ Limitation) + ggtitle("Total macromolecules and composition greatly varies across growth conditions")
