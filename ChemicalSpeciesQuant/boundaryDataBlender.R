@@ -42,6 +42,7 @@ atomicMasses <- atomicMasses[atomicMasses$element %in% colnames(compComp[,-c(1,2
 
 compositionFile$MW <- c(t(t(compComp[,-c(1,2)])) %*% t(t(c(atomicMasses[,2]))))
 compositionFile$weightPerUn <- as.numeric(compositionFile$StoiCoef) * compositionFile$MW
+compositionFile$index <- 1:nrow(compositionFile)
 #compositionFile$weight_per_t[compositionFile$Class == "Energy Balance"] <- NA
 
 if(any(compositionFile$MW == 0)){
@@ -292,9 +293,9 @@ comp_by_cond$moles_per_cell[compositionFile$Class %in% c("Cell Wall Carbohydrate
 
 glycerolFrac <- read.table('BulkComposition/glycfrac_data.txt',sep='\t', header = T)
 glycerolFrac <- glycerolFrac[chmatch(chemostatInfo$composition_data, glycerolFrac$condition),]
-CV_table[,"glycerol washout" := sqrt(glycerolFrac$assayVariance)/glycerolFrac$fraction,]
+CV_table[,"glycerol [cytoplasm]" := sqrt(glycerolFrac$assayVariance)/glycerolFrac$fraction,]
 
-comp_by_cond$moles_per_cell[compositionFile$MetName == "glycerol",] <- t(t(t((glycerolFrac$fraction * chemostatInfo$DWperCell))) %*% t(1/compositionFile$MW[compositionFile$MetName == "glycerol"]))
+comp_by_cond$moles_per_cell[compositionFile$MetName == "glycerol [cytoplasm]",] <- t(t(t((glycerolFrac$fraction * chemostatInfo$DWperCell))) %*% t(1/compositionFile$MW[compositionFile$MetName == "glycerol [cytoplasm]"]))
 
 ## polyphosphate production ##
 
@@ -336,7 +337,7 @@ for(FA in compositionFile[compositionFile$Class == "Fatty Acids",]$MetName){
 ## Revisit washout of soluble metabolites with treatmet similarly to fatty acids ##
 # programatically append added metabolites to compositionFile
 
-compositionFile_solubleAppend <- data.frame(MetName = abs_metabolite_concentrations$modelName, StoiCoef = NA, AltName = abs_metabolite_concentrations$modelName, Class = "Soluble metabolites", Abbreviated = abs_metabolite_concentrations$modelName, Polymerization_Cost = NA, MW = NA, weightPerUn = NA)
+compositionFile_solubleAppend <- data.frame(MetName = abs_metabolite_concentrations$modelName, StoiCoef = NA, AltName = abs_metabolite_concentrations$modelName, Class = "Soluble metabolites", Abbreviated = abs_metabolite_concentrations$modelName, Polymerization_Cost = NA, MW = NA, weightPerUn = NA, index = nrow(compositionFile) + 1:nrow(abs_metabolite_concentrations))
 
 solubleMet_molFormula <- modelMetComp[chmatch(compositionFile_solubleAppend$AltName, modelMetComp$name),]
 solubleMet_molFormula <- apply(solubleMet_molFormula[,-c(1,2)], c(1,2), as.numeric)
@@ -379,7 +380,9 @@ weightSummary <- comp_by_cond$grams_per_cell[rowSums(!is.na(comp_by_cond$grams_p
 weightSummary <- weightSummary * 10^12 #convert from moles to pmoles
 summaryInfo <- compositionFile[rowSums(!is.na(comp_by_cond$grams_per_cell)) != 0,]
 
-weightSummary <- rbind(weightSummary, sapply(cond_dryweight - colSums(weightSummary, na.rm = TRUE), function(x){max(x, 0)})) # determine residual dry weight by subtracting measured components
+weightSummary <- rbind(weightSummary, cond_dryweight - colSums(weightSummary, na.rm = TRUE)) # determine residual dry weight by subtracting measured components
+
+#weightSummary <- rbind(weightSummary, sapply(cond_dryweight - colSums(weightSummary, na.rm = TRUE), function(x){max(x, 0)})) # determine residual dry weight by subtracting measured components
 rownames(weightSummary)[length(weightSummary[,1])] <- "Residual"
 summaryInfo <- summaryInfo[,colnames(summaryInfo) %in% c("MetName", "Class", "Abbreviated")]
 summaryInfo <- rbind(summaryInfo, c("Residual", "Residual dry weight", "Residual"))
@@ -403,13 +406,17 @@ weightStackDF$fraction <- sapply(1:length(weightStackDF[,1]), function(x){
   weightStackDF$Abundance[x]/sum(weightStackDF$Abundance[weightStackDF$Condition == weightStackDF$Condition[x]], na.rm = TRUE)
   })
 
-weightStackDF$Class <- factor(weightStackDF$Class)
+# hide residual dry weight
+weightStackDF <- weightStackDF[weightStackDF$Class != "Residual dry weight",] 
+
+weightStackDF$Class <- factor(weightStackDF$Class)#, levels = c(unique(weightStackDF$Class)[unique(weightStackDF$Class) != "Residual dry weight"], "Residual dry weight"))
 
 #### Confidence intervals for pg per cell ###
 
 weightStackDF <- weightStackDF[grep('p0.05H', weightStackDF$Condition, invert = T),]
 weightStackDF$Limitation <- factor(toupper(sapply(as.character(weightStackDF$Condition), function(x){strsplit(x, split = '')[[1]][1]})), levels = c("P", "C", "N", "L", "U"))
 weightStackDF$DR <- sapply(as.character(weightStackDF$Condition), function(x){paste(strsplit(x, split = '')[[1]][-1], collapse = "")})
+
 
 class_sum_wpc <- acast(weightStackDF, formula = Class ~ Condition, sum, value.var = "Abundance")
 cumsum_height <- apply(class_sum_wpc, 2, cumsum)
@@ -419,7 +426,6 @@ class_sum_melt$SE <- NA
 
 class_sum_melt$SE[class_sum_melt$Class == "Amino Acid"] <- CV_table$"AA flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_melt$SE[class_sum_melt$Class == "Carbohydrates"] <- CV_table$"sugar polymer flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
-class_sum_melt$SE[class_sum_melt$Class == "Glycerol"] <- CV_table$"glycerol washout"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_melt$SE[class_sum_melt$Class == "Nucleic Acid"] <- CV_table$"NTP flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_melt$SE[class_sum_melt$Class == "Polyphosphates"] <- CV_table$"polyphosphate flux"[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_melt$SE[class_sum_melt$Class == "Fatty Acids"] <- apply(CV_table[,compositionFile[compositionFile$Class == "Fatty Acids",]$MetName,with = F], 1, mean)[chmatch(as.character(class_sum_melt$Condition[class_sum_melt$Class == "Fatty Acids"]), CV_table$condition)]
@@ -443,7 +449,6 @@ class_sum_fraction_melt$SE <- NA
 
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Amino Acid"] <- CV_table$"AA flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Carbohydrates"] <- CV_table$"sugar polymer flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
-class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Glycerol"] <- CV_table$"glycerol washout"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Nucleic Acid"] <- CV_table$"NTP flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Polyphosphates"] <- CV_table$"polyphosphate flux"[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Amino Acid"]), CV_table$condition)]
 class_sum_fraction_melt$SE[class_sum_fraction_melt$Class == "Fatty Acids"] <- apply(CV_table[,compositionFile[compositionFile$Class == "Fatty Acids",]$MetName,with = F], 1, mean)[chmatch(as.character(class_sum_fraction_melt$Condition[class_sum_fraction_melt$Class == "Fatty Acids"]), CV_table$condition)]
@@ -466,10 +471,10 @@ barplot_theme <- theme(text = element_text(size = 40, face = "bold"), title = el
                        axis.text.x = element_text(size = 20, angle = 70, vjust = 0.5, colour = "BLACK"),
                        strip.background = element_rect(fill = "darkgoldenrod1")) 
 
-cbPalette <- c("#56B4E9", "#D55E00", "#E69F00", "#009E73", "#F0E442", "#999999", "#CC79A7", "#000000")
-weightStackDF <- factor(weightStackDF$Class)
+cbPalette <- c("#56B4E9", "#D55E00", "#E69F00", "#009E73", "#F0E442", "#999999", "#CC79A7")
 
-ggplot() + geom_bar(data = weightStackDF, aes(y = Abundance, x = DR, fill = factor(Class)), colour = "black", stat = "identity") + scale_y_continuous("pg per cell +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette, guide = guide_legend(nrow = 2)) +
+
+ggplot() + geom_bar(data = weightStackDF, aes(y = Abundance, x = DR, fill = Class), colour = "black", stat = "identity") + scale_y_continuous("pg per cell +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette, guide = guide_legend(nrow = 2)) +
   geom_errorbar(data = class_sum_melt, aes(x = DR, ymin = lb, ymax = ub), color = "WHITE") + barplot_theme + facet_grid(~ Limitation) + ggtitle("Total macromolecules and composition greatly varies across growth conditions")
 ggsave(file = "condition_composition.pdf", height = 12, width = 20)
 
@@ -479,7 +484,8 @@ ggplot() + geom_bar(data = weightStackDF, aes(y = fraction, x = DR, fill = facto
 ggsave(file = "facet_composition.pdf", height = 32, width = 20)
 
 
-ggplot() + geom_bar(data = weightStackDF[!is.na(weightStackDF$Abundance),], aes(y = fraction, x = DR, fill = factor(Class), position = "fill"), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0)) + scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette, guide = guide_legend(nrow = 2)) +
+ggplot() + geom_bar(data = weightStackDF[!is.na(weightStackDF$Abundance),], aes(y = fraction, x = DR, fill = factor(Class), position = "fill"), stat = "identity") + scale_y_continuous("Fraction of dry weight +/- se", expand = c(0,0), breaks = seq(0,1, by = 0.2)) + 
+  scale_x_discrete("Dilution Rate") + scale_fill_manual(name = "Class", values = cbPalette, guide = guide_legend(nrow = 2)) +
   geom_errorbar(data = class_sum_fraction_melt, aes(x = DR, ymin = lb, ymax = ub), color = "white") + barplot_theme + facet_grid( ~ Limitation, scale = "free") + ggtitle("Fractional composition of macromolecules across growth conditions")
 ggsave(file = "fractional_composition.pdf", height = 14, width = 25)
 
@@ -509,34 +515,38 @@ for(i in 1:length(compositionFile[,1])){
   poly_stoi <- strsplit(poly_stoi, '->')[[1]]
   reactants <- strsplit(poly_stoi[1], '\\+')[[1]]
   products <- strsplit(poly_stoi[2], '\\+')[[1]]
-  for(reactant in reactants){
-    reactant <- sub('^ ', '', reactant)
-    reactant <- sub(' $', '', reactant)
-    
-    reactantSpec <- ifelse(length(grep('[0-9]\\.*[0-9]*', reactant)) == 0, reactant, regmatches(reactant, regexpr('[0-9]\\.*[0-9]*', reactant), invert = TRUE)[[1]][2])
-    reactantSpec <- sub('^ ', '', reactantSpec)
-    reactantStoi <- ifelse(length(grep('[0-9]\\.*[0-9]*', reactant)) == 0, 1, regmatches(reactant, regexpr('[0-9]\\.*[0-9]*', reactant)))
-    
-    composition_part <- rbind(composition_part, data.frame(name = compositionFile$AltName[i], compound = reactantSpec, stoi = as.numeric(reactantStoi)))
-    }
-  for(product in products){
-    product <- sub('^ ', '', product)
-    product <- sub(' $', '', product)
-    
-    productSpec <- ifelse(length(grep('[0-9]\\.*[0-9]*', product)) == 0, product, regmatches(product, regexpr('[0-9]\\.*[0-9]*', product), invert = TRUE)[[1]][2])
-    productSpec <- sub('^ ', '', productSpec)
-    productStoi <- ifelse(length(grep('[0-9]\\.*[0-9]*', product)) == 0, 1, regmatches(product, regexpr('[0-9]\\.*[0-9]*', product)))
-    
-    composition_part <- rbind(composition_part, data.frame(name = compositionFile$AltName[i], compound = productSpec, stoi = -1*as.numeric(productStoi)))
+  
+  if(!all(is.na(reactants))){
+    for(reactant in reactants){
+      reactant <- sub('^ ', '', reactant)
+      reactant <- sub(' $', '', reactant)
+      
+      reactantSpec <- ifelse(length(grep('[0-9]\\.*[0-9]*', reactant)) == 0, reactant, regmatches(reactant, regexpr('[0-9]\\.*[0-9]*', reactant), invert = TRUE)[[1]][2])
+      reactantSpec <- sub('^ ', '', reactantSpec)
+      reactantStoi <- ifelse(length(grep('[0-9]\\.*[0-9]*', reactant)) == 0, 1, regmatches(reactant, regexpr('[0-9]\\.*[0-9]*', reactant)))
+      
+      composition_part <- rbind(composition_part, data.frame(name = compositionFile$AltName[i], compound = reactantSpec, stoi = as.numeric(reactantStoi), index = compositionFile$index[i]))
+    }}
+  
+  if(!all(is.na(products))){
+    for(product in products){
+      product <- sub('^ ', '', product)
+      product <- sub(' $', '', product)
+      
+      productSpec <- ifelse(length(grep('[0-9]\\.*[0-9]*', product)) == 0, product, regmatches(product, regexpr('[0-9]\\.*[0-9]*', product), invert = TRUE)[[1]][2])
+      productSpec <- sub('^ ', '', productSpec)
+      productStoi <- ifelse(length(grep('[0-9]\\.*[0-9]*', product)) == 0, 1, regmatches(product, regexpr('[0-9]\\.*[0-9]*', product)))
+      
+      composition_part <- rbind(composition_part, data.frame(name = compositionFile$AltName[i], compound = productSpec, stoi = -1*as.numeric(productStoi), index = compositionFile$index[i]))
+    }}
+  
+  if(all(is.na(products)) & all(is.na(reactants))){
+    composition_part <- rbind(composition_part, data.frame(name = compositionFile$AltName[i], compound = "H2O [cytoplasm]", stoi = 0, index = compositionFile$index[i]))
     }
   }
 
-composition_part <- dcast(composition_part, formula = name ~ compound, sum, value.var = "stoi")
-composition_part <- composition_part[,colnames(composition_part) != "NA"]
-
-composition_part$name <- factor(composition_part$name, levels = compositionFile$AltName)
-composition_part <- composition_part[order(composition_part$name),]
-composition_part$name <- as.character(composition_part$name)
+composition_part <- dcast(composition_part, formula = name + index ~ compound, sum, value.var = "stoi")
+composition_part <- composition_part[order(composition_part$index),colnames(composition_part) != 'index'] # energetic component of each biomass component is directly aligned to flux
 
 ### integrate these costs of polymerization directly into FBA rather than smooshing them together
 ### save composition_part to comp_by_cond before output
@@ -544,9 +554,8 @@ composition_part$name <- as.character(composition_part$name)
 
 comp_by_cond$moles_per_cell <- rbind(comp_by_cond$moles_per_cell, maintMatrix)
 
-### rewrite compositionFile so that added species in polymerization cost have appropriate names in FBA model
-added_cmpds <- data.frame(MetName = rownames(maintMatrix), StoiCoef = NA, AltName = rownames(maintMatrix), Class = "Maintenance ATP hydrolysis", Abbreviated = rownames(maintMatrix), Polymerization_Cost = NA, MW = NA, weightPerUn = NA)
-compositionFile_Extended = data.frame(t(cbind(t(compositionFile), t(added_cmpds))))
+added_cmpds <- data.frame(MetName = rownames(maintMatrix), StoiCoef = NA, AltName = rownames(maintMatrix), Class = "Maintenance ATP hydrolysis", Abbreviated = rownames(maintMatrix), Polymerization_Cost = NA, MW = NA, weightPerUn = NA, index = nrow(compositionFile) + 1:3)
+compositionFile_Extended = rbind(compositionFile, added_cmpds)
 #write.table(compositionFile_Extended, file = "../Yeast_comp_energy.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
 
 
