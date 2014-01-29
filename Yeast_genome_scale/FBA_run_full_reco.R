@@ -32,7 +32,7 @@ if(QPorLP == "QP"){
 modeGurobi = 'python'
 pythonMode = 'simple' # simple,thdyn, dir or ll (loopless)
 FVA = 'T' # Should flux variblility analysis be performed
-useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -321,6 +321,7 @@ boundary_met <- NULL
 for(x in 1:length(sources)){
   boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
   }
+if(nrow(boundary_met) != length(sources)){stop("A valid match was not found for all sources")}
 
 
 ## extract the IDs of excreted metabolites ##
@@ -334,6 +335,7 @@ excreted_met <- NULL
 for(x in 1:length(excreted)){
   excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
   }
+if(nrow(excreted_met) != length(excreted)){stop("A valid match was not found for all excreted metabolties")}
 
 
 ## extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass ##
@@ -344,9 +346,13 @@ resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, c
 
 comp_met <- NULL
 for(x in 1:length(sinks)){
-  comp_met <- rbind(comp_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "cytoplasm"],])
+  if(nrow(resource_matches[[x]]) == 1){
+    comp_met <- rbind(comp_met, resource_matches[[x]])
+    }else{
+      comp_met <- rbind(comp_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "cytoplasm"],])
+    }
   }
-
+if(nrow(comp_met) != length(sinks)){stop("A valid match was not found for all sinks")}
 
 
 ## freely exchanging metabolites through extracellular compartment ##
@@ -359,9 +365,11 @@ freeExchange_met <- NULL
 for(x in 1:length(free_flux)){
   freeExchange_met <- rbind(freeExchange_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
   }
+if(nrow(freeExchange_met) != length(free_flux)){stop("A valid match was not found for all freebee metabolites")}
 
 
 ##  a list of reactions corresponding to a measured fluxes is formed ## 
+## this method is not fully implemented but could be used to include MFA, KFP ... fluxes
 
 interalFluxes <- read.delim("companionFiles/internalFluxMatches.csv", sep = ",")
 interal_flux_list <- list()
@@ -758,10 +766,13 @@ if(QPorLP == "QP"){
     for(biomassSpec in names(treatment_par[[treatment]]$boundaryFlux)){
       ## overwrite diagonal elements of Q with precision (inverse variance) ##
       matchedSpecies$Precision[matchedSpecies$reaction == paste(biomassSpec, "composition")] <- (1/(treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$SD*fluxComp))^2
+      biomassSpec_regex <- gsub('\\[', '\\\\[', biomassSpec)
+      biomassSpec_regex <- gsub('\\]', '\\\\]', biomassSpec_regex)
       
       if(biomassSpec %in% unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Boundary"])){
         ### overwrite stoichiometry for each biomass reaction to reflect the actual portions consumed such that the expected flux is equal to fluxComp ##
-        for(biomassSpecRx in names(biomassConv)[grep(paste('^', biomassSpec, sep = ""), names(biomassConv))]){
+        
+        for(biomassSpecRx in names(biomassConv)[grep(paste0('^', biomassSpec_regex), names(biomassConv))]){
           
           comp_replacement <- data.frame(treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$exchange, biomassConv[[biomassSpecRx]])
           
@@ -771,7 +782,7 @@ if(QPorLP == "QP"){
       
       if(biomassSpec %in% unique(comp_by_cond$compositionFile$varCategory[comp_by_cond$compositionFile$FluxType == "Internal"])){
         ### overwrite internal fluxes ##
-        for(biomassSpecRx in names(biomassConv)[grep(paste('^', biomassSpec, sep = ""), names(biomassConv))]){
+        for(biomassSpecRx in names(biomassConv)[grep(paste('^', biomassSpec_regex, sep = ""), names(biomassConv))]){
           
           comp_replacement <- internalRxSplit[internalRxSplit$reaction %in% paste(biomassSpec, "composition"),]
           comp_replacement$change <- treatment_par[[treatment]]$boundaryFlux[[biomassSpec]]$exchange$change * ifelse(comp_replacement$direction == "F", 1, -1) / fluxComp
@@ -819,27 +830,37 @@ if(QPorLP == "QP"){
         
         modelOut = FVA_read(pythout)
         
-        fva_sum <- modelOut[,grep('FVA[min|max]|asID|offset', colnames(modelOut))]
+        fva_sum <- modelOut[,grep('FVA[min|max]|asID|offset|runStatus', colnames(modelOut))]
         
         ## add offset back in
-        fva_sum[,grep('FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('FVA[min|max]', colnames(fva_sum))] + t(t(ifelse(!is.na(fva_sum$offset), fva_sum$offset, 0))) %*% rep(1, length(grep('FVA[min|max]', colnames(fva_sum))))
+        fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] + t(t(ifelse(!is.na(fva_sum$offset), fva_sum$offset, 0))) %*% rep(1, length(grep('^FVA[min|max]', colnames(fva_sum))))
         ## remove flux elevation factor
-        fva_sum[,grep('FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('FVA[min|max]', colnames(fva_sum))]/flux_elevation_factor
+        fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))]/flux_elevation_factor
         fva_sum <- fva_sum[,colnames(fva_sum) != "offset"]
         fva_sum <- data.table(melt(fva_sum, id.vars = "asID"))
         
+        fva_sum[,dataType := 
+          if(length(grep('^FVA[min|max]', variable)) != 0){"optim"}else if(length(grep('^runStatus', variable)) != 0){"status"}
+          , by = variable]
+        
+        levels(fva_sum$variable) <- sub('[A-Za-z.]+FVA', 'FVA', levels(fva_sum$variable))
+        
+        fva_sum <- data.table(dcast(fva_sum, "asID + variable ~ dataType", value.var = "value"))
+        fva_sum$optim <- as.numeric(fva_sum$optim)
+        
+        fva_sum[ , dataType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
         fva_sum[, boundType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
         fva_sum[, logLikelihood:= strsplit(as.character(variable), split = "_")[[1]][2], by = variable]
         fva_sum[, relLikelihood:= round(as.numeric(logLikelihood) - max(as.numeric(logLikelihood)), 5), by = logLikelihood]
         fva_sum$treatment = treatment
-        fva_sum = fva_sum[,list(treatment, asID, boundType, relLikelihood, value),]
+        fva_sum = fva_sum[,list(treatment, asID, boundType, relLikelihood, optim, status),]
         
-        fva_summary <- rbind(fva_summary, fva_sum)
-        
-        fva_sum$value[grep('comp', fva_sum$asID)] <- sapply(grep('comp', fva_sum$asID), function(x){
-          x = data.frame(ID = sub(' comp', '', fva_sum$asID[x]), flux = fva_sum$value[x])
+        fva_sum$optim[grep('comp', fva_sum$asID)] <- sapply(grep('comp', fva_sum$asID), function(x){
+          x = data.frame(ID = sub(' comp', '', fva_sum$asID[x]), flux = fva_sum$optim[x])
           x[1,2]/fluxComp * abs(treatment_par[[names(treatment_par)[treatment]]]$"boundaryFlux"[[x[1,1]]]$exchange$change[1])
         })
+        
+        fva_summary <- rbind(fva_summary, fva_sum)
         
       }
     }
@@ -970,7 +991,7 @@ if(QPorLP == "QP"){
 #reaction_info('r_0249')
 #rxnFile[rxnFile$ReactionID == "r_0005",]
 #trackedMet = '^NAD\\(\\+\\)'
-#trackMetConversion('^phosphate', T)
+#trackMetConversion('^trehalose', F)
 #trackMetConversion('Gly\\-tRNA\\(Gly\\)', T)
 
 ########### Mass balance of individual conditions ####### 
@@ -1109,18 +1130,18 @@ write.output(std_flux_rxnName_withL1[smooth_flux_Fstat$valid_flux[grep('boundary
 
 #### Summarize data for further analysis ####
 
-
 flux_summary <- list()
 flux_summary$IDs = rxNames
 flux_summary$cellularFluxes = fluxMat_per_cellVol[,cond_order_check(colnames(fluxMat_per_cellVol))] # save cellular fluxes and verify correct ordering
 
 
 #### summarize flux variability analysis fluxes
+fva_summary_bu <- fva_summary
+
+
 fva_summary_df <- acast(fva_summary, formula = "asID ~ treatment ~ boundType", value.var = "value")
 cell_dens_scaling <- array(rep(chemostatInfo$VolFrac_mean[1:n_c], each = nrow(fva_summary_df)), dim = dim(fva_summary_df)) # scale flux-per-L culture/h, to flux-per-mL intracellular volume/h
 fva_summary_df <- fva_summary_df/cell_dens_scaling
-
-
 
 #### Determine which reactions' fluxes are sufficiently constrained to merit further analysis
 
@@ -1148,15 +1169,16 @@ flux_constrained <- ifelse((!is.na(abs(median_fva_gap$med_fva_gap)) & abs(median
 ggplot(median_fva_gap, aes(x = abs(med_fva_gap), fill = ifelse(flux_constrained, "red", "blue"))) + geom_bar(width = 0.05) + scale_fill_identity() + scale_x_continuous("median[maximum flux - minimum flux / sup|max, min|]") + ggtitle("Flux variability at solution, scaled by magnitude")
 
 flux_summary$fva_summary_df = fva_summary_df[flux_constrained,,]
-colnames(flux_summary$fva_summary_df) <- colnames(fluxMat_per_cellVol)[cond_order_check(colnames(fluxMat_per_cellVol))]
+colnames(fva_summary_df) <- colnames(flux_summary$fva_summary_df) <- colnames(fluxMat_per_cellVol)[cond_order_check(colnames(fluxMat_per_cellVol))]
 
 
 # verify comparable fluxes between standard QP and FVA approaches
 
-sharedRx <- grep('^r_[0-9]{4}', intersect(flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux], rownames(flux_summary$fva_summary_df)), value = T)
+sharedRx <- grep('^r_[0-9]{4}', flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux], value = T)
+#sharedRx <- grep('^r_[0-9]{4}', intersect(flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux], rownames(flux_summary$fva_summary_df)), value = T)
 
 standard_QP <- flux_summary$cellularFluxes[flux_summary$IDs$reactionID %in% sharedRx,]; rownames(standard_QP) <- sharedRx
-fva_QP <- flux_summary$fva_summary_df[rownames(flux_summary$fva_summary_df) %in% sharedRx,,]
+fva_QP <- fva_summary_df[rownames(fva_summary_df) %in% sharedRx,,]
 
 SQPmelt <- melt(standard_QP); colnames(SQPmelt) <- c("rID", "condition", "flux"); SQPmelt$model = "standardQP"
 FVAQPmelt <- melt(fva_QP); colnames(FVAQPmelt) <- c("rID", "condition", "model", "flux")
@@ -1220,7 +1242,7 @@ scatter_theme <- barplot_theme <- theme(text = element_text(size = 20, face = "b
   panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank(), strip.background = element_rect(fill = "cornsilk"), strip.text = element_text(colour = "blue1")) 
 
 
-ggplot(rxnsMelt, aes(x = factor(Condition), y = Flux)) + geom_point(size = 3, col = "coral1")+  facet_wrap( ~ Rxn, ncol = 2, scale = "free_y") + scatter_theme + scale_x_discrete("Condition") + scale_y_continuous("Flux Carried") + ggtitle("Flux through random reactions")
+ggplot(rxnsMelt, aes(x = factor(Condition), y = Flux)) + geom_point(size = 3, col = "coral1") +  facet_wrap( ~ Rxn, ncol = 2, scale = "free_y") + scatter_theme + scale_x_discrete("Condition") + scale_y_continuous("Flux Carried") + ggtitle("Flux through random reactions")
 
 
 

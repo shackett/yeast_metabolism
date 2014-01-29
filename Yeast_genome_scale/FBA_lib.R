@@ -348,7 +348,7 @@ gene_pathways <- function(kegg_enzyme_dict){
 
 
 
-trackMetConversion <- function(trackedMet, allRxns = FALSE){
+trackMetConversion <- function(trackedMet, allRxns = T){
   
   ## for a metabolite of interest, seperate reactions which carry flux consuming or producing it into each compartment and display a summary ##
    if(allRxns){
@@ -356,7 +356,7 @@ trackMetConversion <- function(trackedMet, allRxns = FALSE){
     }else{
     flux <- collapsedFlux[collapsedFlux != 0]
     }
-  
+   
   reducedStoi <- matrix(0, ncol = length(flux), nrow = nrow(stoiMat))
   rownames(reducedStoi) <- rownames(stoiMat)
   colnames(reducedStoi) <- names(flux)
@@ -367,7 +367,7 @@ trackMetConversion <- function(trackedMet, allRxns = FALSE){
   
   boundaryStoi <- qpModel$A[,sapply(names(flux)[is.na(index_match)], function(x){(1:nrow(Sinfo))[Sinfo$reaction == x & Sinfo$direction == "F"][1]})]
   boundaryStoi <- boundaryStoi[(rownames(boundaryStoi) %in% rownames(stoiMat)),] #remove bookkeeping flux
-  reducedStoi[,is.na(index_match)] <- as.matrix(boundaryStoi)
+  reducedStoi[chmatch(rownames(boundaryStoi), rownames(reducedStoi)),is.na(index_match)] <- as.matrix(boundaryStoi)
   
   metNames <- metIDtoSpec(rownames(reducedStoi))
   
@@ -550,6 +550,8 @@ FVA_read <- function(pythout){
   solvedModel = list()
   modelOut <- data.frame(param = sapply(pythout[idxS:idxE],function(x){strsplit(x,'\t')[[1]][1]}))
   modelOut$value <- as.numeric(sapply(pythout[idxS:idxE],function(x){strsplit(x,'\t')[[1]][2]}))
+  modelOut$runStatus <- sapply(pythout[idxS:idxE],function(x){sub('status_', '', strsplit(x,'\t')[[1]][3])}) # extract optimization status codes for FVA
+  
   solvedModel$x <- modelOut$value[ modelOut$param %in% colnames(qpModel$A)]
   print(1)
   modelOut$Type <- sapply(modelOut$param,function(x){
@@ -613,6 +615,7 @@ FVA_read <- function(pythout){
   
   modelOut = reshape(modelOut,idvar = c('asID','asType'),timevar='Type',drop =c('param'),direction ='wide')
   colnames(modelOut) <- gsub('value\\.','',colnames(modelOut))
+  modelOut <- modelOut[,colSums(!is.na(modelOut)) != 0] # remove optimization status codes for fluxes which were not posed as an individual optimizaiton problem
   
   modelOut$rxnNet <- (sapply(modelOut$rxnF,function(x){max(c(x,0),na.rm=T)})
                       -sapply(modelOut$rxnR,function(x){max(c(x,0),na.rm=T)}) +
@@ -977,6 +980,7 @@ cond_order_check <- function(query){
 species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   require(data.table)
+  require(ggplot2)
   
   #generate a list of four plots:
   #1: Flux predicted from FBA ~ GR
@@ -988,7 +992,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   scatter_theme <- theme(text = element_text(size = 50, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
       panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
-      legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"))
+      legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"))
 
   
   flux <- run_rxn$flux
@@ -1032,7 +1036,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
                     panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
-                    legend.key.size = unit(3, "line"), legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
+                    legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
   
   flux_plot_FBA <- data.frame(METHOD = "FBA", FLUX = (flux$FVAmin + flux$FVAmax)/2, LB = flux$FVAmin, UB = flux$FVAmax, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$DR)
   flux_plot_PAR <- data.frame(METHOD = "PAR", FLUX = flux_fit$fitted_flux$fitted, LB = flux_fit$fitted_flux$fitted - 2*flux_fit$fitted_flux$SD, UB = flux_fit$fitted_flux$fitted + 2*flux_fit$fitted_flux$SD, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$DR)
@@ -1197,11 +1201,13 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
     nrand <- 10000
     SpSldensity <- data.frame(hill = c(rnorm(nrand*(1-alloPrior$par_3), alloPrior$par_1, alloPrior$par_2), rep(0, nrand*alloPrior$par_3))) # generate the expected null from the spike and slab prior
     
-    hypoMetPlots$Hill <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.5) +
-      stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.5) +
+    hypoMetPlots$Hill <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.7) +
+      stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.7) +
       geom_vline(x = 2^mle_pars[run_rxn$kineticParPrior$rel_spec == "h_allo"], size = 2, alpha = 0.5) +
+      geom_text(aes(x = 0, y = 9.8, label = 'Posterior distribution', color = "RED"), hjust = 0, size = 8) +
+      geom_text(aes(x = 0, y = 9, label = 'Prior / expectation', color = "BLUE"), hjust = 0, size = 8) +
       scale_x_continuous("Hill coefficient", limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
-      barplot_theme + ggtitle("Hill coefficient posterior samples")
+      barplot_theme + ggtitle("Hill coefficient posterior samples") + scale_color_identity() + scale_fill_identity() + scale_size_identity()
   }
   
   ### What measured metabolites most resemble these trends ###
@@ -1220,9 +1226,11 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   subsetRange <- t(apply(PCsimilaritySubset, 1, range))
   
   specCorrQuantiles_m$yadj <- mapply(function(x,y){subsetRange[rownames(subsetRange) == x][2] - diff(subsetRange[rownames(subsetRange) == x])/10*y}, x = specCorrQuantiles_m$variable, y = specCorrQuantiles_m$y)
+  specCorrQuantiles_m$variable <- factor(specCorrQuantiles_m$variable, levels = rownames(specCorrQuantiles))
   
   similarGeneMelt <- data.table(melt(cbind(PCconds, t(PCsimilaritySubset)), id.vars = colnames(PCconds)))
   similarGeneMelt$Limitation <- factor(similarGeneMelt$Limitation, levels = unique(chemostatInfo$Limitation))
+  similarGeneMelt$variable <- factor(similarGeneMelt$variable, levels = rownames(specCorrQuantiles))
   
   hypoMetPlots$candidateMetabolites <- ggplot() + geom_path(data = similarGeneMelt, aes(x = DR, y = value, col = Limitation, size = 2, group = Limitation)) + facet_wrap(~ variable, scale = "free_y", ncol = 2) +
     geom_text(data = specCorrQuantiles_m, aes(x = 1, y = yadj, label = text), hjust = 0) +
@@ -1261,9 +1269,10 @@ hillPlot <- function(run_rxn){
   hillPlot <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.5) +
     stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.5) +
     geom_vline(x = 2^hill_MLE, size = 2, alpha = 0.5) +
+    geom_text(aes(x = 0, y = 9.8, label = 'Posterior distribution', color = "RED"), hjust = 0, size = 8) +
+    geom_text(aes(x = 0, y = 9, label = 'Prior / expectation', color = "BLUE"), hjust = 0, size = 8) +
     scale_x_continuous("Hill coefficient", limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
-    barplot_theme + ggtitle("Hill coefficient posterior samples")
-  
+    barplot_theme + ggtitle("Hill coefficient posterior samples") + scale_color_identity() + scale_fill_identity() + scale_size_identity()
   
   return(hillPlot)
   
@@ -1431,7 +1440,11 @@ pathwayPlots <- function(pathway){
   
   barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
                          panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, color = "black", hjust = 1), axis.line = element_blank(),
-                         strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"), axis.text.y = element_text(size = 6, color = "black"))
+                         strip.background = element_rect(fill = "cornflowerblue"), axis.text.y = element_text(size = 6, color = "black"))
+  
+  #barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+  #                       panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, color = "black", hjust = 1), axis.line = element_blank(),
+  #                       strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"), axis.text.y = element_text(size = 6, color = "black"))
   
   
   #### Generate plots which show how well the optimization is performing according to different metrics ####
@@ -1444,7 +1457,7 @@ pathwayPlots <- function(pathway){
   rxInfo_subset <- rxInfo_subset[(rxInfo_subset$Qvalue < 0.1 | is.na(rxInfo_subset$Qvalue)) & c(1:nrow(rxInfo_subset)) %in% grep('rmCond', rxInfo_subset$modification, invert = T),]
   
   # overwrite reaction text size based upon number of reactions
-  barplot_theme <- barplot_theme + theme(axis.text.x = element_text(size = min(15 + 600/nrow(rxInfo_subset), 60), color = "black", hjust = 1))
+  barplot_theme <- barplot_theme + theme(axis.text.y = element_text(size = min(8 + 80/nrow(rxInfo_subset), 24), color = "black", hjust = 1))
   # when nrow = 100, font ~ 20, when nrow = 20, font ~ 40
   
   Corr <- data.table(rxn_fits[rxn_fits$rxn %in% rxInfo_subset$rMech,])
@@ -1524,18 +1537,20 @@ pathwayPlots <- function(pathway){
       plotDat_melt$rxnType[intersect(grep('act', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = F))] <- "+ Activator (proposed)"
       plotDat_melt$rxnType[intersect(grep('inh', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = F))] <- "+ Inhibitor (proposed)"
       
-      rxn_colors <- data.frame(levels = c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)"),
-                               colors = c("limegreen", "firebrick1", "dodgerblue3", "coral", "deepskyblue"))
+      rxn_colors <- c("limegreen", "firebrick1", "dodgerblue3", "coral", "deepskyblue")
+      names(rxn_colors) <- c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)")
+      
+      #rxn_colors <- data.frame(levels = c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)"),
+      #                         colors = c("limegreen", "firebrick1", "dodgerblue3", "coral", "deepskyblue"))
       
       plotDat_melt$rxnType <- factor(plotDat_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)"))
-      
       
       if(plotType == "SpCorr"){
       
       compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) 
       compPlot <- compPlot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
         scale_y_continuous(expression("Spearman correlation between "~ V^FBA ~ "&" ~ V^PAR), expand = c(0,0)) + 
-        scale_fill_manual("Prediction Method", labels = rxn_colors$levels, values = rxn_colors$colors) + coord_flip() + expand_limits(y = 1)
+        scale_fill_manual("Prediction Method", values = rxn_colors) + coord_flip() + expand_limits(y = 1)
       
       }
       
@@ -1543,7 +1558,7 @@ pathwayPlots <- function(pathway){
         
         compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType))
         compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Unit dot product", expand = c(0,0), limits = c(0,1)) + scale_fill_manual("Prediction Method", labels = rxn_colors$levels, values = rxn_colors$colors) +
+          scale_y_continuous(name = "Unit dot product", expand = c(0,0), limits = c(0,1)) + scale_fill_manual("Prediction Method", values = rxn_colors) +
           ggtitle(expression("Unit dot product:" ~ sum(frac(V^FBA, symbol("|")~V^FBA~symbol("|"))~"*"~frac(V^PAR, symbol("|")~V^PAR~symbol("|"))))) + coord_flip()
         
       }
@@ -1552,7 +1567,7 @@ pathwayPlots <- function(pathway){
         
         compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = 90 - value, fill = rxnType))
         compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Angle", expand = c(0,0), limits = c(0,90), breaks = seq(0,90, by = 10), labels = rev(seq(0,90, by = 10))) + scale_fill_manual("Prediction Method", labels = rxn_colors$levels, values = rxn_colors$colors) +
+          scale_y_continuous(name = "Angle", expand = c(0,0), limits = c(0,90), breaks = seq(0,90, by = 10), labels = rev(seq(0,90, by = 10))) + scale_fill_manual("Prediction Method", values = rxn_colors) +
           ggtitle(expression("Angle between "~ V^FBA ~ "&" ~ V^PAR)) + coord_flip()
         
       }
@@ -1561,7 +1576,7 @@ pathwayPlots <- function(pathway){
         
         compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType))
         compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Confidence Interval Overlap", expand = c(0,0), limits = c(0,1)) + scale_fill_manual("Prediction Method", labels = rxn_colors$levels, values = rxn_colors$colors) + coord_flip()
+          scale_y_continuous(name = "Confidence Interval Overlap", expand = c(0,0), limits = c(0,1)) + scale_fill_manual("Prediction Method", values = rxn_colors) + coord_flip()
         
       }
     }
@@ -1692,7 +1707,7 @@ reactionProperties <-  function(){
   all_species <- data.frame(2^met_abund, 2^enzyme_abund)
   all_species_expanded <- array(unlist(all_species[,chmatch(colnames(mcmc_partials), colnames(all_species))]), dim = dim(mcmc_partials))
   
-  # calculate elastici ties from partial derivatives * S/F
+  # calculate elasticities from partial derivatives * S/F
   
   mcmc_elasticity <- mcmc_partials * (all_species_expanded/flux_expanded)
   
@@ -1740,6 +1755,8 @@ reactionProperties <-  function(){
   
   we_summary <- we_melt[,list(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
                               UH = boxplot.stats(physiological_leverage)$stats[4], UB = boxplot.stats(physiological_leverage)$stats[5]), by = c("specie", "condition")]
+  we_summary$Limitation = factor(substr(we_summary$condition, 1, 1), levels = c("P", "C", "N", "L", "U"))
+  we_summary$DR = factor(sub('[A-Z]', '', we_summary$condition))
   we_summary$condition <- factor(we_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% we_summary$condition])
   
   output_plots$we_summary <- we_summary
@@ -1753,7 +1770,8 @@ reactionProperties <-  function(){
   ML_summary$Type[ML_summary$specie %in% colnames(enzyme_abund)] <- "enzyme"
   
   ML_summary$Type[is.na(ML_summary$Type)] <- run_rxn$rxnSummary$rxnFormData$Subtype[chmatch(run_rxn$kineticPars$rel_spec[chmatch(as.character(ML_summary$specie[is.na(ML_summary$Type)]), run_rxn$kineticPars$formatted)], run_rxn$rxnSummary$rxnFormData$SubstrateID)]
-  ML_summary$reaction = arxn  
+  ML_summary$reaction = arxn
+  
   ML_summary$condition <- factor(ML_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% ML_summary$condition])
   
   output_plots$ML_summary = ML_summary
@@ -1768,7 +1786,7 @@ reactionPropertiesPlots <- function(reaction_plots){
   
   # Plot output from reactionProperties.  This was split into two functions, because when trying to return plots from reactionProperties, MASSIVE pdfs were generated without a clear cause #
   
-  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "top", 
+  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "none", 
                          panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
                          axis.text = element_text(color = "black"), strip.background = element_rect(fill = "cornsilk1"), strip.text = element_text(color = "darkblue"))
   
@@ -1786,7 +1804,7 @@ reactionPropertiesPlots <- function(reaction_plots){
   output_plots$"Metabolic Leverage" <- ggplot(reaction_plots$we_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
     geom_boxplot(stat = "identity") + expand_limits(y=c(0,1)) + boxplot_theme +
     scale_y_continuous("Metabolic Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
-    scale_fill_discrete("Specie")
+    scale_fill_discrete() + facet_wrap(~ specie, ncol = 2)
   
   return(output_plots)
   
@@ -1956,12 +1974,12 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   MLsummary <- MLsummary[order(MLsummary$rxn, MLsummary$rxnType, MLsummary$Type),]
   MLsummary$reaction <- factor(MLsummary$reaction, levels = unique(MLsummary$reaction))
   
-  TypeColors <- data.frame(class = levels(MLsummary$Type), color = c("firebrick1", "blue2", "chartreuse3", "darkorange", "gray90"))
-  
+  TypeColors <- c("firebrick1", "blue2", "chartreuse3", "darkorange", "gray90")
+  names(TypeColors) <- levels(MLsummary$Type)
   
   ggplot(MLsummary, aes(x = reaction, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
     barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
-    scale_fill_manual(values = TypeColors$color, labels = TypeColors$class)
+    scale_fill_manual(values = TypeColors)
   ggsave("Figures/metabolicLeverage_variance.pdf", height = 8, width = 12)
   
   
@@ -2011,12 +2029,13 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   MLsummary <- MLsummary[order(MLsummary$rxn, MLsummary$rxnType, MLsummary$Type),]
   MLsummary$reaction <- factor(MLsummary$reaction, levels = unique(MLsummary$reaction))
   
-  TypeColors <- data.frame(class = levels(MLsummary$Type), color = c("firebrick1", "blue2", "chartreuse3", "darkorange", "gray90"))
+  TypeColors <- c("firebrick1", "blue2", "chartreuse3", "darkorange", "gray90")
+  names(TypeColors) <- levels(MLsummary$Type)
   
   
   ggplot(MLsummary, aes(x = reaction, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
     barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
-    scale_fill_manual(values = TypeColors$color, labels = TypeColors$class)
+    scale_fill_manual(values = TypeColors)
   ggsave("Figures/metabolicLeverage_intervalOverlap.pdf", height = 8, width = 12)
   
 }
