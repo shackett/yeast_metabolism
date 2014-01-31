@@ -830,7 +830,7 @@ if(QPorLP == "QP"){
         
         modelOut = FVA_read(pythout)
         
-        fva_sum <- modelOut[,grep('FVA[min|max]|asID|offset|runStatus', colnames(modelOut))]
+        fva_sum <- modelOut[,grep('FVA[min|max]|asID|offset|runStatus|violation', colnames(modelOut))]
         
         ## add offset back in
         fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] + t(t(ifelse(!is.na(fva_sum$offset), fva_sum$offset, 0))) %*% rep(1, length(grep('^FVA[min|max]', colnames(fva_sum))))
@@ -840,7 +840,7 @@ if(QPorLP == "QP"){
         fva_sum <- data.table(melt(fva_sum, id.vars = "asID"))
         
         fva_sum[,dataType := 
-          if(length(grep('^FVA[min|max]', variable)) != 0){"optim"}else if(length(grep('^runStatus', variable)) != 0){"status"}
+          if(length(grep('^FVA[min|max]', variable)) != 0){"optim"}else if(length(grep('^runStatus', variable)) != 0){"status"}else if(length(grep('^violation', variable)) != 0){"violation"}
           , by = variable]
         
         levels(fva_sum$variable) <- sub('[A-Za-z.]+FVA', 'FVA', levels(fva_sum$variable))
@@ -848,12 +848,12 @@ if(QPorLP == "QP"){
         fva_sum <- data.table(dcast(fva_sum, "asID + variable ~ dataType", value.var = "value"))
         fva_sum$optim <- as.numeric(fva_sum$optim)
         
-        fva_sum[ , dataType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
+        fva_sum[, dataType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
         fva_sum[, boundType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
         fva_sum[, logLikelihood:= strsplit(as.character(variable), split = "_")[[1]][2], by = variable]
         fva_sum[, relLikelihood:= round(as.numeric(logLikelihood) - max(as.numeric(logLikelihood)), 5), by = logLikelihood]
         fva_sum$treatment = treatment
-        fva_sum = fva_sum[,list(treatment, asID, boundType, relLikelihood, optim, status),]
+        fva_sum = fva_sum[,list(treatment, asID, boundType, relLikelihood, optim, status, violation),]
         
         fva_sum$optim[grep('comp', fva_sum$asID)] <- sapply(grep('comp', fva_sum$asID), function(x){
           x = data.frame(ID = sub(' comp', '', fva_sum$asID[x]), flux = fva_sum$optim[x])
@@ -1136,14 +1136,24 @@ flux_summary$cellularFluxes = fluxMat_per_cellVol[,cond_order_check(colnames(flu
 
 
 #### summarize flux variability analysis fluxes
-fva_summary_bu <- fva_summary
+fva_summary_bu -> fva_summary
+fva_summary$optim[!(fva_summary$status %in% c(2))] <- NA # FVA results from optimization which did not find an optimal or suboptimal solution 
 
+fva_dt <- data.table(fva_summary)
+fva_dt_summary <- fva_dt[,list(diff = optim[boundType == "FVAmax"] - optim[boundType == "FVAmin"], avgFlux = (abs(optim[boundType == "FVAmax"]) + abs(optim[boundType == "FVAmin"]))/2, viol = max(violation)), by = c("treatment", "asID")]
+fva_dt_summary <- fva_dt_summary[!is.na(diff) & asID %in% flux_summary$IDs$reactionID,,]
+fva_dt_summary[,fractionDeparture := diff/avgFlux,]
+byrxSummary <- fva_dt_summary[,list(departure = median(fractionDeparture)), by = "asID"]
 
-fva_summary_df <- acast(fva_summary, formula = "asID ~ treatment ~ boundType", value.var = "value")
+ggplot(fva_dt_summary, aes(x = log10(as.numeric(viol)), y = fractionDeparture)) + geom_point()
+
+fva_summary_df <- acast(fva_summary, formula = "asID ~ treatment ~ boundType", value.var = "optim")
 cell_dens_scaling <- array(rep(chemostatInfo$VolFrac_mean[1:n_c], each = nrow(fva_summary_df)), dim = dim(fva_summary_df)) # scale flux-per-L culture/h, to flux-per-mL intracellular volume/h
 fva_summary_df <- fva_summary_df/cell_dens_scaling
 
 #### Determine which reactions' fluxes are sufficiently constrained to merit further analysis
+
+fva_summary_df <- fva_summary_df[rownames(fva_summary_df) %in% flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux],,]
 
 median_fva_gap <- data.frame(reaction = names(fva_summary_df[,1,1]), med_fva_gap = apply(fva_summary_df, 1, function(x){
   x <- as.data.frame(x)

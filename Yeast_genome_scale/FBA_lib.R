@@ -551,6 +551,7 @@ FVA_read <- function(pythout){
   modelOut <- data.frame(param = sapply(pythout[idxS:idxE],function(x){strsplit(x,'\t')[[1]][1]}))
   modelOut$value <- as.numeric(sapply(pythout[idxS:idxE],function(x){strsplit(x,'\t')[[1]][2]}))
   modelOut$runStatus <- sapply(pythout[idxS:idxE],function(x){sub('status_', '', strsplit(x,'\t')[[1]][3])}) # extract optimization status codes for FVA
+  modelOut$violation <- as.numeric(sapply(pythout[idxS:idxE],function(x){sub('viol_', '', strsplit(x,'\t')[[1]][4])}))
   
   solvedModel$x <- modelOut$value[ modelOut$param %in% colnames(qpModel$A)]
   print(1)
@@ -615,7 +616,7 @@ FVA_read <- function(pythout){
   
   modelOut = reshape(modelOut,idvar = c('asID','asType'),timevar='Type',drop =c('param'),direction ='wide')
   colnames(modelOut) <- gsub('value\\.','',colnames(modelOut))
-  modelOut <- modelOut[,colSums(!is.na(modelOut)) != 0] # remove optimization status codes for fluxes which were not posed as an individual optimizaiton problem
+  modelOut <- modelOut[,colSums(!(is.na(modelOut)|modelOut=="") ) != 0] # remove optimization status codes for fluxes which were not posed as an individual optimizaiton problem
   
   modelOut$rxnNet <- (sapply(modelOut$rxnF,function(x){max(c(x,0),na.rm=T)})
                       -sapply(modelOut$rxnR,function(x){max(c(x,0),na.rm=T)}) +

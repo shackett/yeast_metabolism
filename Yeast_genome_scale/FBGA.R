@@ -8,6 +8,7 @@ library(data.table)
 library(nnls) #for non-negative regression used to fit kinetic parameters
 library(ggplot2)
 library(gplots)
+library(grid)
 source("FBA_lib.R")
 
 options(stringsAsFactors = FALSE)
@@ -616,7 +617,11 @@ for(arxn in reactionInfo$rMech){
   MLdata <- rbind(MLdata, reaction_plots$ML_summary)
   shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reactionPropertiesPlots(reaction_plots))
   
-  #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <- param_compare()
+  #param_dist <- param_compare()
+  #ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
+  #ggsave(shiny_flux_data[[arxn]]$plotChoices$Likelihood, file = paste0("tmp/", arxn, "_likViolin.pdf"), width = 16, height = 10)
+           
+  #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <-  param_compare() # these plots makes the resulting list huge, but they are awesome ...
   
   if(which(reactionInfo$rMech == arxn) %% 10 == 0){
     print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
@@ -646,9 +651,9 @@ for(pw in pathwaySet$display){
 save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinyData.Rdata")
 
 # generate a minute version of shinyData that will load quickly when the App is being modified
-reactionInfo <- reactionInfo[1:20,]
-shiny_flux_data <- shiny_flux_data[names(shiny_flux_data) %in% reactionInfo$rMech]
-save(pathwaySet, rxToPW, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinySubData.Rdata")
+#reactionInfo <- reactionInfo[1:20,]
+#shiny_flux_data <- shiny_flux_data[names(shiny_flux_data) %in% reactionInfo$rMech]
+#save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinySubData.Rdata")
 
 
 #### Save parameter estimates for further global analyses ####
