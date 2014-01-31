@@ -472,7 +472,7 @@ trackMetConversion <- function(trackedMet, allRxns = T){
 ##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
 
 
-FVA_setup <- function(useCluster){
+FVA_setup <- function(aModel, useCluster){
 
   ### Setup a model that can be used to run Gurobi through python - specifically implementing flux variability analysis ###
   
@@ -486,7 +486,7 @@ FVA_setup <- function(useCluster){
   if (useCluster != 'load'){
     
     # 10 vec + 4 row/col names = 14 single rows
-    lenPyt <- 15 + nrow(qpModel$A) + nrow(qpModel$Q)
+    lenPyt <- 15 + nrow(aModel$A) + nrow(aModel$Q)
     
     pythonDat <- vector(mode="character",length=lenPyt)
     pos =1
@@ -496,35 +496,42 @@ FVA_setup <- function(useCluster){
     pythonDat[pos] = paste(c('FVA',FVA),collapse='\t')
     pos <- pos+1
     
-    for(i in 1:nrow(qpModel$A)){
-      pythonDat[pos] = paste(c('A',qpModel$A[i,]),collapse='\t')
+    for(i in 1:nrow(aModel$A)){
+      pythonDat[pos] = paste(c('A',aModel$A[i,]),collapse='\t')
       pos <- pos+1
     }
-    pythonDat[pos] = paste(c('rownamesA',rownames(qpModel$A)),collapse='\t')
+    pythonDat[pos] = paste(c('rownamesA',rownames(aModel$A)),collapse='\t')
     pos <- pos+1
-    pythonDat[pos] = paste(c('colnamesA',colnames(qpModel$A)),collapse='\t')
+    pythonDat[pos] = paste(c('colnamesA',colnames(aModel$A)),collapse='\t')
     pos <- pos+1
     
-    for(i in 1:nrow(qpModel$Q)){
-      pythonDat[pos] = paste(c('Q',qpModel$Q[i,]),collapse='\t')
+    for(i in 1:nrow(aModel$Q)){
+      pythonDat[pos] = paste(c('Q',aModel$Q[i,]),collapse='\t')
       pos <- pos+1
     }
-    pythonDat[pos] = paste(c('rownamesQ',rownames(qpModel$Q)),collapse='\t')
+    pythonDat[pos] = paste(c('rownamesQ',rownames(aModel$Q)),collapse='\t')
     pos <- pos+1
-    pythonDat[pos] = paste(c('colnamesQ',colnames(qpModel$Q)),collapse='\t')
+    pythonDat[pos] = paste(c('colnamesQ',colnames(aModel$Q)),collapse='\t')
     pos <- pos+1
     
-    pythonDat[pos] = paste(c('rhs',qpModel$rhs),collapse='\t')
+    pythonDat[pos] = paste(c('rhs',aModel$rhs),collapse='\t')
     pos <- pos+1
-    pythonDat[pos] = paste(c('sense',qpModel$sense),collapse='\t')
+    pythonDat[pos] = paste(c('sense',aModel$sense),collapse='\t')
     pos <- pos+1
-    pythonDat[pos] = paste(c('lb',qpModel$lb),collapse='\t')
+    pythonDat[pos] = paste(c('lb',aModel$lb),collapse='\t')
     pos <- pos+1
-    pythonDat[pos] = paste(c('ub',qpModel$ub),collapse='\t')
+    pythonDat[pos] = paste(c('ub',aModel$ub),collapse='\t')
     pos <- pos+1
-    pythonDat[pos] = paste(c('obj',qpModel$obj),collapse='\t')
+    pythonDat[pos] = paste(c('obj',aModel$obj),collapse='\t')
   }  
   
+  if(!file.exists("./Gurobi_python")){
+    dir.create("./Gurobi_python")
+  }
+  if(!file.exists("./Gurobi_python/test_files")){
+    dir.create("./Gurobi_python/test_files")
+  }
+    
   if (useCluster == 'write'){
     write(pythonDat,file=paste('./Gurobi_python/test_files/pythonDat_',treatment,'.txt',sep=''),sep='\t')
     pythout = NULL
