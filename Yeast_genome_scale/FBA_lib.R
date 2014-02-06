@@ -1341,11 +1341,10 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   # point estimate of flux(M, E, par)
   
   flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
-  flux_fit$fitted <- enzyme_activity %*% flux_fit$X
   
   # determine the sd of the fitted measures
   
-  nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$X; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+  nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
   
   all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
   
@@ -1407,22 +1406,20 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   if(all(avg_flux < 0)){
     
     nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, enzyme_abund)), -1*avg_flux)
-    nnls_fitted <- as.matrix(data.frame(NNLSmetab, enzyme_abund)) %*% nnls_fit$X
-    tpred <- avg_flux - nnls_fitted
+    tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
   
-    fit_summary$nnlsPearson <- cor(-1*nnls_fitted, avg_flux, method = "pearson")
-    fit_summary$nnlsSpearman <- cor(-1*nnls_fitted, avg_flux, method = "spearman")
+    fit_summary$nnlsPearson <- cor(-1*nnls_fit$fitted, avg_flux, method = "pearson")
+    fit_summary$nnlsSpearman <- cor(-1*nnls_fit$fitted, avg_flux, method = "spearman")
     
   }else{
     
     nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, enzyme_abund)), avg_flux)
-    nnls_fitted <- as.matrix(data.frame(NNLSmetab, enzyme_abund)) %*% nnls_fit$X
-    tpred <- avg_flux - nnls_fitted
+    tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
     
-    fit_summary$nnlsPearson <- cor(nnls_fitted, avg_flux, method = "pearson")
-    fit_summary$nnlsSpearman <- cor(nnls_fitted, avg_flux, method = "spearman")
+    fit_summary$nnlsPearson <- cor(nnls_fit$fitted, avg_flux, method = "pearson")
+    fit_summary$nnlsSpearman <- cor(nnls_fit$fitted, avg_flux, method = "spearman")
   
   }
    
@@ -1688,7 +1685,7 @@ reactionProperties <-  function(){
     # Calculate Vmax as during standard fitting
     
     flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
-    nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$X; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+    nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
     
     # Setup all species in linear-space
     

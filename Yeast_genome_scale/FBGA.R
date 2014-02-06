@@ -433,7 +433,7 @@ qStore[["hREGhill_hREG"]] <- qvalue(reactionInfo$hillP[test_subset])
 # Q-values to note are those that have a significant effect relative to both MM and to a constrained hill coefficient
 reactionInfo$Qvalue[test_subset] <- mapply(function(x,y){max(x,y)}, x = qStore[["hREGhill_RM"]]$q, y = qStore[["hREGhill_hREG"]]$q)
 
-### literatue metabolites with constrained hill coefficient vs. reversible-MM
+### literature metabolites with constrained hill coefficient vs. reversible-MM
 test_subset <- !is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% intersect(grep('t_[0-9]{4}', reactionInfo$modification), grep('ultra', reactionInfo$modification, invert = T))
 qStore[["lREG_RM"]] <- qvalue(reactionInfo$changeP[test_subset])
 reactionInfo$Qvalue[test_subset] <- qStore[["lREG_RM"]]$q
@@ -588,6 +588,11 @@ for(arxn in reactionInfo$rMech){
                              dotProduct = sum(flux_fit$fitted_flux$fitted/sqrt(sum((flux_fit$fitted_flux$fitted)^2)) * (run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2/sqrt(sum(((run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2)^2))))
   vector_match$angle <- acos(vector_match$dotProduct) * 180/pi
   
+  flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0]))
+  
+  run_rxn$rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0]))
+  run_rxn$flux
+  
   # Preformance based on fraction of FVA intervals captured by parameteric 95% CI #
   fluxIntervals <- data.frame(VLB = run_rxn$flux$FVAmin, VUB = run_rxn$flux$FVAmax, PLB = flux_fit$fitted_flux$fitted - 2*flux_fit$fitted_flux$SD, PUB = flux_fit$fitted_flux$fitted + 2*flux_fit$fitted_flux$SD)
   fluxOverlap <- (mapply(function(VUB, PUB){min(VUB, PUB)}, VUB = fluxIntervals$VUB, PUB = fluxIntervals$PUB) - mapply(function(VLB, PLB){max(VLB, PLB)}, VLB = fluxIntervals$VLB, PLB = fluxIntervals$PLB))/
@@ -604,7 +609,6 @@ for(arxn in reactionInfo$rMech){
   shiny_flux_data[[arxn]]$plotChoices$Likelihood <- likViolin(par_likelihood, run_summary$markov_pars) # Log-likelihoods of each markov chain
   
   species_plots <- species_plot(run_rxn, flux_fit, chemostatInfo)
-  
   shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, shiny_flux_data[[arxn]]$plotChoices)
   
   if("t_metX" %in% run_rxn$kineticPars$modelName){
@@ -637,29 +641,7 @@ for(arxn in reactionInfo$rMech){
 #    }
 #  }
 
-
-# significant or default reaction forms
-
-pathway_plot_list <- list()
-for(pw in pathwaySet$display){
-  # iterate through pathways and plot pathway-level figures
-  pathway_plot_list[[pw]] <- pathwayPlots(pw)
-  }
-
-#### Save lists which will be processed by Shiny app ####
-
-save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinyData.Rdata")
-
-# generate a minute version of shinyData that will load quickly when the App is being modified
-#reactionInfo <- reactionInfo[1:20,]
-#shiny_flux_data <- shiny_flux_data[names(shiny_flux_data) %in% reactionInfo$rMech]
-#save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinySubData.Rdata")
-
-
-#### Save parameter estimates for further global analyses ####
-
-save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
-
+1
 
 
 

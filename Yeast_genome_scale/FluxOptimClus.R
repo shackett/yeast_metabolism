@@ -318,7 +318,7 @@ for(rxN in 1:length(rxnList_form)){
   
   # If bounds are exactly equal, then introduce a minute spread so a range can be calculated ###
   
-  flux$FVAmax[flux$FVAmax == flux$FVAmin] <- flux$FVAmax[flux$FVAmax == flux$FVAmin] + flux$FVAmax[flux$FVAmax == flux$FVAmin]*10^-4
+  flux$FVAmax[flux$FVAmax == flux$FVAmin] <- flux$FVAmax[flux$FVAmax == flux$FVAmin] + abs(flux$FVAmax[flux$FVAmax == flux$FVAmin]*10^-4)
   
   # Metabolite SD and correlation specified so that they can be passed to v(mets, par)
   
