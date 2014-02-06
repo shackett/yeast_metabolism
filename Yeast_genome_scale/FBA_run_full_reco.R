@@ -33,7 +33,7 @@ FVA = 'T' # Should flux variblility analysis be performed
 FVAreduced = 'T' # If FVA is performed should it only be performed on reactions which carried non-zero flux in some condition during QP
 # this requires that the script be run twice - once to generate "rawFlux" and again to use this set of reactions to defined the reduced
 # reaction stoichiometry
-useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -924,91 +924,91 @@ if(QPorLP == "QP"){
     
     composition_balance <- rbind(composition_balance, ele_df)
     
-  
-  ### Determine a range of feasible fluxes using python-gurobi based Flux variability analysis ###
-  if (modeGurobi == 'python'){
     
-    ### output will depend on useCluster:
-    ### write: create files in Gurobi_python/test_files to run using qp_fba_clust.py
-    ### load: read pythout.txt files containing solved FVA models
-    ### otherwise... run locally: prohibitively slow for FVA
-    
-    # to submit all treatments to the que use "cetus_script.sh XXfolderXX" - where XXfolderXX is relative to the login directory
-    # e.g. cetus_script.sh FBA/FBA_python/pythonVA
-    
-    # reduce FVA to the union of reactions carrying flux via standard QP - read previous reactions
-    
-    if(FVAreduced){
-      if(file.exists('flux_cache/fluxCarriedSimple.tsv')){
-        rx_with_flux <- rownames(read.delim('flux_cache/fluxCarriedSimple.tsv'))
-        
-        if( all(names(collapsedFlux)[collapsedFlux != 0] %in% rx_with_flux) ){
+    ### Determine a range of feasible fluxes using python-gurobi based Flux variability analysis ###
+    if (modeGurobi == 'python'){
+      
+      ### output will depend on useCluster:
+      ### write: create files in Gurobi_python/test_files to run using qp_fba_clust.py
+      ### load: read pythout.txt files containing solved FVA models
+      ### otherwise... run locally: prohibitively slow for FVA
+      
+      # to submit all treatments to the que use "cetus_script.sh XXfolderXX" - where XXfolderXX is relative to the login directory
+      # e.g. cetus_script.sh FBA/FBA_python/pythonVA
+      
+      # reduce FVA to the union of reactions carrying flux via standard QP - read previous reactions
+      
+      if(FVAreduced){
+        if(file.exists('flux_cache/fluxCarriedSimple.tsv')){
+          rx_with_flux <- rownames(read.delim('flux_cache/fluxCarriedSimple.tsv'))
           
-          validRx <- Sinfo$reaction %in% rx_with_flux
-          validMets <- rowSums(qpModel$A[,validRx] != 0) != 0
-          
-          reduced_qpModel <- list()
-          reduced_qpModel$A <- qpModel$A[validMets,validRx]
-          reduced_qpModel$rhs <- qpModel$rhs[validMets]
-          reduced_qpModel$sense <- qpModel$sense[validMets]
-          reduced_qpModel$lb <- qpModel$lb[validRx]
-          reduced_qpModel$ub <- qpModel$ub[validRx]
-          reduced_qpModel$Q <- qpModel$Q[validRx,validRx]
-          reduced_qpModel$obj <- qpModel$obj[validRx]
-          
-          solved_reduced_Model <- gurobi(reduced_qpModel, qpparams) #solve with barrier algorithm
-          
-          pythout = FVA_setup(reduced_qpModel, useCluster)
-          
+          if( all(names(collapsedFlux)[collapsedFlux != 0] %in% rx_with_flux) ){
+            
+            validRx <- Sinfo$reaction %in% rx_with_flux
+            validMets <- rowSums(qpModel$A[,validRx] != 0) != 0
+            
+            reduced_qpModel <- list()
+            reduced_qpModel$A <- qpModel$A[validMets,validRx]
+            reduced_qpModel$rhs <- qpModel$rhs[validMets]
+            reduced_qpModel$sense <- qpModel$sense[validMets]
+            reduced_qpModel$lb <- qpModel$lb[validRx]
+            reduced_qpModel$ub <- qpModel$ub[validRx]
+            reduced_qpModel$Q <- qpModel$Q[validRx,validRx]
+            reduced_qpModel$obj <- qpModel$obj[validRx]
+            
+            solved_reduced_Model <- gurobi(reduced_qpModel, qpparams) #solve with barrier algorithm
+            
+            pythout = FVA_setup(reduced_qpModel, useCluster)
+            
+          }else{
+            warning("\'fluxCarriedSimple.tsv\' is out of data, rerun after it is generated (finishing running script and it probably will be)")
+          }
         }else{
-          warning("\'fluxCarriedSimple.tsv\' is out of data, rerun after it is generated (finishing running script and it probably will be)")
+          warning("FVA files will not be generated until \'fluxCarriedSimple.tsv\' has been generated (finishing running script and it probably will be)")
         }
+        
       }else{
-        warning("FVA files will not be generated until \'fluxCarriedSimple.tsv\' has been generated (finishing running script and it probably will be)")
+        pythout = FVA_setup(qpModel, useCluster)
       }
       
-    }else{
-      pythout = FVA_setup(qpModel, useCluster)
+      if(is.null(pythout)){print(paste(treatment, "Gurobi files prepared for cluster use", collapse = " "))}else{
+        
+        modelOut = FVA_read(pythout)
+        
+        fva_sum <- modelOut[,grep('FVA[min|max]|asID|offset|runStatus|violation', colnames(modelOut))]
+        
+        ## add offset back in
+        fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] + t(t(ifelse(!is.na(fva_sum$offset), fva_sum$offset, 0))) %*% rep(1, length(grep('^FVA[min|max]', colnames(fva_sum))))
+        ## remove flux elevation factor
+        fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))]/flux_elevation_factor
+        fva_sum <- fva_sum[,colnames(fva_sum) != "offset"]
+        fva_sum <- data.table(melt(fva_sum, id.vars = "asID"))
+        
+        fva_sum[,dataType := 
+                  if(length(grep('^FVA[min|max]', variable)) != 0){"optim"}else if(length(grep('^runStatus', variable)) != 0){"status"}else if(length(grep('^violation', variable)) != 0){"violation"}
+                , by = variable]
+        
+        levels(fva_sum$variable) <- sub('[A-Za-z.]+FVA', 'FVA', levels(fva_sum$variable))
+        
+        fva_sum <- data.table(dcast(fva_sum, "asID + variable ~ dataType", value.var = "value"))
+        fva_sum$optim <- as.numeric(fva_sum$optim)
+        
+        fva_sum[, dataType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
+        fva_sum[, boundType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
+        fva_sum[, logLikelihood:= strsplit(as.character(variable), split = "_")[[1]][2], by = variable]
+        fva_sum[, relLikelihood:= round(as.numeric(logLikelihood) - max(as.numeric(logLikelihood)), 5), by = logLikelihood]
+        fva_sum$treatment = treatment
+        fva_sum = fva_sum[,list(treatment, asID, boundType, relLikelihood, optim, status, violation),]
+        
+        fva_sum$optim[grep('comp', fva_sum$asID)] <- sapply(grep('comp', fva_sum$asID), function(x){
+          x = data.frame(ID = sub(' comp', '', fva_sum$asID[x]), flux = fva_sum$optim[x])
+          x[1,2]/fluxComp * abs(treatment_par[[names(treatment_par)[treatment]]]$"boundaryFlux"[[x[1,1]]]$exchange$change[1])
+        })
+        
+        fva_summary <- rbind(fva_summary, fva_sum)
+        
+      }
     }
-    
-    if(is.null(pythout)){print(paste(treatment, "Gurobi files prepared for cluster use", collapse = " "))}else{
-      
-      modelOut = FVA_read(pythout)
-      
-      fva_sum <- modelOut[,grep('FVA[min|max]|asID|offset|runStatus|violation', colnames(modelOut))]
-      
-      ## add offset back in
-      fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] + t(t(ifelse(!is.na(fva_sum$offset), fva_sum$offset, 0))) %*% rep(1, length(grep('^FVA[min|max]', colnames(fva_sum))))
-      ## remove flux elevation factor
-      fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))] <- fva_sum[,grep('^FVA[min|max]', colnames(fva_sum))]/flux_elevation_factor
-      fva_sum <- fva_sum[,colnames(fva_sum) != "offset"]
-      fva_sum <- data.table(melt(fva_sum, id.vars = "asID"))
-      
-      fva_sum[,dataType := 
-                if(length(grep('^FVA[min|max]', variable)) != 0){"optim"}else if(length(grep('^runStatus', variable)) != 0){"status"}else if(length(grep('^violation', variable)) != 0){"violation"}
-              , by = variable]
-      
-      levels(fva_sum$variable) <- sub('[A-Za-z.]+FVA', 'FVA', levels(fva_sum$variable))
-      
-      fva_sum <- data.table(dcast(fva_sum, "asID + variable ~ dataType", value.var = "value"))
-      fva_sum$optim <- as.numeric(fva_sum$optim)
-      
-      fva_sum[, dataType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
-      fva_sum[, boundType:= strsplit(as.character(variable), split = "_")[[1]][1], by = variable]
-      fva_sum[, logLikelihood:= strsplit(as.character(variable), split = "_")[[1]][2], by = variable]
-      fva_sum[, relLikelihood:= round(as.numeric(logLikelihood) - max(as.numeric(logLikelihood)), 5), by = logLikelihood]
-      fva_sum$treatment = treatment
-      fva_sum = fva_sum[,list(treatment, asID, boundType, relLikelihood, optim, status, violation),]
-      
-      fva_sum$optim[grep('comp', fva_sum$asID)] <- sapply(grep('comp', fva_sum$asID), function(x){
-        x = data.frame(ID = sub(' comp', '', fva_sum$asID[x]), flux = fva_sum$optim[x])
-        x[1,2]/fluxComp * abs(treatment_par[[names(treatment_par)[treatment]]]$"boundaryFlux"[[x[1,1]]]$exchange$change[1])
-      })
-      
-      fva_summary <- rbind(fva_summary, fva_sum)
-      
-    }
-  }
   }
 } 
 
@@ -1113,7 +1113,7 @@ std_flux_rxnName <- std_flux_rxnName[grep('boundary|composition', rownames(std_f
 # add a column for the L1 penalty and write to a data.frame
 std_flux_rxnName_withL1 = data.frame(L1penalty = -3*prot_penalty[chmatch(substr(rownames(std_flux_rxnName), 1, 6), names(prot_penalty))], std_flux_rxnName)
 rownames(std_flux_rxnName_withL1) = rownames(std_flux_rxnName)
-write.output(std_flux_rxnName_withL1, "Flux_analysis/fluxCarriedHM.tsv")
+write.output(std_flux_rxnName_withL1, "flux_cache/fluxCarriedHM.tsv")
 
 rawFlux <- fluxMat
 rownames(rawFlux) <- rxNames$reactionID
@@ -1152,7 +1152,7 @@ std_flux_all <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd)*ife
 heatmap.2(std_flux_all[smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
 heatmap.2(std_flux_all[!smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
 
-write.output(std_flux_rxnName_withL1[smooth_flux_Fstat$valid_flux[grep('boundary|composition', rownames(std_flux_rxnName), invert = T)],], "Flux_analysis/fluxCarriedHMsmooth.tsv")
+write.output(std_flux_rxnName_withL1[smooth_flux_Fstat$valid_flux[grep('boundary|composition', rownames(std_flux_rxnName), invert = T)],], "flux_cache/fluxCarriedHMsmooth.tsv")
 
 
 
@@ -1165,15 +1165,15 @@ flux_summary$cellularFluxes = fluxMat_per_cellVol[,cond_order_check(colnames(flu
 
 #### summarize flux variability analysis fluxes
 fva_summary_bu -> fva_summary
-fva_summary$optim[!(fva_summary$status %in% c(2))] <- NA # FVA results from optimization which did not find an optimal or suboptimal solution 
+table(fva_summary$status) # 2 = optimal, 13 = suboptimal
+fva_summary$optim[!(fva_summary$status %in% c(2,13))] <- NA # FVA results from optimization which did not find an optimal or suboptimal solution 
 
 fva_dt <- data.table(fva_summary)
 fva_dt_summary <- fva_dt[,list(diff = optim[boundType == "FVAmax"] - optim[boundType == "FVAmin"], avgFlux = (abs(optim[boundType == "FVAmax"]) + abs(optim[boundType == "FVAmin"]))/2, viol = max(violation)), by = c("treatment", "asID")]
 fva_dt_summary <- fva_dt_summary[!is.na(diff) & asID %in% flux_summary$IDs$reactionID,,]
 fva_dt_summary[,fractionDeparture := diff/avgFlux,]
-byrxSummary <- fva_dt_summary[,list(departure = median(fractionDeparture)), by = "asID"]
+byrxSummary <- fva_dt_summary[,list(departure = median(fractionDeparture), weighted_departure = sum((fractionDeparture * avgFlux)/sum(avgFlux))), by = "asID"]
 
-ggplot(fva_dt_summary, aes(x = log10(as.numeric(viol)), y = fractionDeparture)) + geom_point()
 
 fva_summary_df <- acast(fva_summary, formula = "asID ~ treatment ~ boundType", value.var = "optim")
 cell_dens_scaling <- array(rep(chemostatInfo$VolFrac_mean[1:n_c], each = nrow(fva_summary_df)), dim = dim(fva_summary_df)) # scale flux-per-L culture/h, to flux-per-mL intracellular volume/h
@@ -1181,39 +1181,21 @@ fva_summary_df <- fva_summary_df/cell_dens_scaling
 
 #### Determine which reactions' fluxes are sufficiently constrained to merit further analysis
 
-fva_summary_df <- fva_summary_df[rownames(fva_summary_df) %in% flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux],,]
+constrained_rxns <- byrxSummary[departure < 0.3 | weighted_departure < 0.2, asID]
+byrxSummary$plot_color <- ifelse(byrxSummary$asID %in% constrained_rxns, "RED", "BLUE")
+ggplot(byrxSummary, aes(x = departure, y = weighted_departure, color = plot_color)) + geom_point() + 
+  scale_color_identity() + scale_x_continuous("median[maximum flux - minimum flux / sup|max, min|]") + scale_y_continuous("median[maximum flux - minimum flux / sup|max, min|] - weighted by flux magnitude") +
+  ggtitle("Flux variability at solution, scaled by magnitude")
 
-median_fva_gap <- data.frame(reaction = names(fva_summary_df[,1,1]), med_fva_gap = apply(fva_summary_df, 1, function(x){
-  x <- as.data.frame(x)
-  median((x$FVAmax - x$FVAmin)/mapply(function(i,j){max(abs(i), abs(j))}, i = x$FVAmax, j = x$FVAmin), na.rm = T) #median{(max - min)/sup|max,min|}, also 10% quantile of same set
-  }), weighted_med_fva_gap = apply(fva_summary_df, 1, function(x){
-  # also take the weighted mean to identify cases where most reactions have low flux (but weakly constrained) and a subset of conditions have high relatively invariant flux
-  x <- as.data.frame(x)
-  x <- x[is.finite(x$FVAmax) & is.finite(x$FVAmin),]
-  
-  if(nrow(x) < 20){
-    return(NA) # 
-    }else{
-      flux_mag <- mapply(function(i,j){max(abs(i), abs(j))}, i = x$FVAmax, j = x$FVAmin)
-      sum((x$FVAmax - x$FVAmin)/sum(flux_mag))
-      }
-  }))
 
-median_fva_gap[is.na(median_fva_gap$weighted_med_fva_gap),]
-table(!is.na(abs(median_fva_gap$med_fva_gap)) & abs(median_fva_gap$med_fva_gap) < 0.3, !is.na(abs(median_fva_gap$weighted_med_fva_gap)) & abs(median_fva_gap$weighted_med_fva_gap) < 0.2)
-
-flux_constrained <- ifelse((!is.na(abs(median_fva_gap$med_fva_gap)) & abs(median_fva_gap$med_fva_gap) < 0.3) | (!is.na(abs(median_fva_gap$weighted_med_fva_gap)) & abs(median_fva_gap$weighted_med_fva_gap) < 0.2), T, F)
-
-ggplot(median_fva_gap, aes(x = abs(med_fva_gap), fill = ifelse(flux_constrained, "red", "blue"))) + geom_bar(width = 0.05) + scale_fill_identity() + scale_x_continuous("median[maximum flux - minimum flux / sup|max, min|]") + ggtitle("Flux variability at solution, scaled by magnitude")
-
-flux_summary$fva_summary_df = fva_summary_df[flux_constrained,,]
+fva_summary_df <- fva_summary_df[rownames(fva_summary_df) %in% intersect(constrained_rxns, flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux]),,]
+flux_summary$fva_summary_df = fva_summary_df
 colnames(fva_summary_df) <- colnames(flux_summary$fva_summary_df) <- colnames(fluxMat_per_cellVol)[cond_order_check(colnames(fluxMat_per_cellVol))]
 
 
 # verify comparable fluxes between standard QP and FVA approaches
 
-sharedRx <- grep('^r_[0-9]{4}', flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux], value = T)
-#sharedRx <- grep('^r_[0-9]{4}', intersect(flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux], rownames(flux_summary$fva_summary_df)), value = T)
+sharedRx <- grep('^r_[0-9]{4}', intersect(flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux], rownames(flux_summary$fva_summary_df)), value = T)
 
 standard_QP <- flux_summary$cellularFluxes[flux_summary$IDs$reactionID %in% sharedRx,]; rownames(standard_QP) <- sharedRx
 fva_QP <- fva_summary_df[rownames(fva_summary_df) %in% sharedRx,,]
@@ -1236,13 +1218,13 @@ colnames(total_flux_cast) <- toupper(colnames(total_flux_cast))
 
 # Dealing with some infinite fluxes (very few) introduced through FVA #
 
-invalid_flux <- melt(apply(total_flux_cast[,,names(total_flux_cast[1,1,]) != "standardQP"], c(1,2), function(x){any(is.infinite(x))}))
+invalid_flux <- melt(apply(total_flux_cast[,,names(total_flux_cast[1,1,]) != "standardQP"], c(1,2), function(x){any(is.na(x))}))
 invalid_flux <- invalid_flux[invalid_flux$value,]
 
 for(i in 1:nrow(invalid_flux)){
   
   fva_rep <- total_flux_cast[rownames(total_flux_cast) == invalid_flux[i,1], colnames(total_flux_cast) == invalid_flux[i,2],]
-  fva_rep[!is.finite(fva_rep)] <- fva_rep[names(fva_rep) == "standardQP"]
+  fva_rep[is.na(fva_rep)] <- fva_rep[names(fva_rep) == "standardQP"]
   
   #fva_rep[grep('max', names(fva_rep))][is.infinite(fva_rep[grep('max', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * 10
   #fva_rep[grep('min', names(fva_rep))][is.infinite(fva_rep[grep('min', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * -10

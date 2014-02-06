@@ -1162,7 +1162,7 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   reconstructedOcc <- reconstructedDraws - run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "t_metX"] %*% t(rep(1, nrow(releventPCs))) # convert from relative concentration to relative occupancy
   
   if("h_allo" %in% run_rxn$kineticParPrior$rel_spec){
-    allosteryStrength <- log2(1 + (2^reconstructedOcc) ^ (2^run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"] %*% t(rep(1, nrow(releventPCs))))) # 1 + ([A]/[Ka])^h  
+    allosteryStrength <- log2(1 + (2^reconstructedOcc) ^ (2^run_rxn$markovChain[,run_rxn$kineticParPrior$rel_spec == "h_allo"] %*% t(rep(1, nrow(releventPCs))))) # 1 + ([A]/[Ka])^h
   }else{
     allosteryStrength <- log2(1 + (2^reconstructedOcc)) # 1 + ([A]/[Ka])
   }
@@ -1187,11 +1187,6 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
     mle_strength <- log2(1 + (2^mle_occ))
   }
   mle_info <- data.frame(PCconds, value = c(mle_occ), allosetryStrength = c(mle_strength))
-  
-  
-  hypoMetPlots$Occupancy <- ggplot() + geom_violin(data = PCreco_melt, aes(x = name, y = value, fill = factor(Limitation))) + scale_y_continuous(expression(log[2]~frac("[M]", K[M])), limits = c(-1,1)*max(abs(PCreco_melt$value))) + 
-    geom_point(data = mle_info, aes(x = name, y = value), size = 2) + scale_fill_brewer(palette = "Pastel1") + 
-    ggtitle(paste("Profile of ", mod_type, " effecting flux", sep = "")) + boxplot_theme 
   
   hypoMetPlots$AlloStrength <- ggplot() + geom_violin(data = PCreco_melt, aes(x = name, y = allosteryStrength, fill = factor(Limitation))) + scale_y_continuous(expression(log[2]~1 + bgroup("[", frac("[M]", K[M]), "]")^h)) +
     geom_point(data = mle_info, aes(x = name, y = allosetryStrength), size = 2) + scale_fill_brewer(palette = "Pastel1") +
@@ -1346,10 +1341,11 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   # point estimate of flux(M, E, par)
   
   flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
+  flux_fit$fitted <- enzyme_activity %*% flux_fit$X
   
   # determine the sd of the fitted measures
   
-  nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+  nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$X; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
   
   all_components <- data.frame(occupancy_vals, enzyme_abund, nnlsCoef)
   
@@ -1411,20 +1407,22 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   if(all(avg_flux < 0)){
     
     nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, enzyme_abund)), -1*avg_flux)
-    tpred <- nnls_fit$residuals
+    nnls_fitted <- as.matrix(data.frame(NNLSmetab, enzyme_abund)) %*% nnls_fit$X
+    tpred <- avg_flux - nnls_fitted
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
   
-    fit_summary$nnlsPearson <- cor(-1*nnls_fit$fitted, avg_flux, method = "pearson")
-    fit_summary$nnlsSpearman <- cor(-1*nnls_fit$fitted, avg_flux, method = "spearman")
+    fit_summary$nnlsPearson <- cor(-1*nnls_fitted, avg_flux, method = "pearson")
+    fit_summary$nnlsSpearman <- cor(-1*nnls_fitted, avg_flux, method = "spearman")
     
   }else{
     
     nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, enzyme_abund)), avg_flux)
-    tpred <- nnls_fit$residuals
+    nnls_fitted <- as.matrix(data.frame(NNLSmetab, enzyme_abund)) %*% nnls_fit$X
+    tpred <- avg_flux - nnls_fitted
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
     
-    fit_summary$nnlsPearson <- cor(nnls_fit$fitted, avg_flux, method = "pearson")
-    fit_summary$nnlsSpearman <- cor(nnls_fit$fitted, avg_flux, method = "spearman")
+    fit_summary$nnlsPearson <- cor(nnls_fitted, avg_flux, method = "pearson")
+    fit_summary$nnlsSpearman <- cor(nnls_fitted, avg_flux, method = "spearman")
   
   }
    
@@ -1690,7 +1688,7 @@ reactionProperties <-  function(){
     # Calculate Vmax as during standard fitting
     
     flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
-    nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+    nnlsCoef <- t(t(rep(1, n_c)))  %*% flux_fit$X; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
     
     # Setup all species in linear-space
     
