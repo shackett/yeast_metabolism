@@ -540,11 +540,14 @@ pathwaySet <- data.frame(pathway = names(pathwaySet), members = unname(pathwaySe
 
 #### Generate reaction plots and summaries ####
 
+load("companionFiles/PTcomparison_list.Rdata") # by-gene comparisons of protein and transcript abundance
+
 shiny_flux_data <- list()
 rxn_fits <- NULL
 rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
 MLdata <- NULL
+TRdata <- NULL
 
 t_start = proc.time()[3]
 
@@ -615,6 +618,10 @@ for(arxn in reactionInfo$rMech){
   reaction_plots <- reactionProperties()
   MLdata <- rbind(MLdata, reaction_plots$ML_summary)
   shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reactionPropertiesPlots(reaction_plots))
+  
+  trans_res <- transcriptional_responsiveness()
+  if("Plots" %in% names(trans_res)){ shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, trans_res$Plots) }
+  if("TR" %in% names(trans_res)){ TRdata <- rbind(TRdata, trans_res$TR) }
   
   #param_dist <- param_compare()
   #ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
