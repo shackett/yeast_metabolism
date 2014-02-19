@@ -1427,6 +1427,12 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   fit_summary$parPearson <- cor(flux_fit$fitted, avg_flux, method = "pearson")
   fit_summary$parSpearman <- cor(flux_fit$fitted, avg_flux, method = "spearman")
   
+  # correct pearson correlation for measurement noise propagated through reaction eqtn # assume accuracy of flux for now
+  # for simplicity currently assume fixed noise - equal to the median SD - ideally this should be replaced with a weighted measure which
+  # directly accounts for the defined differences in propagated experimental noise == flux_SD
+  corrected_pearson <- fit_summary$parPearson / sqrt(var(avg_flux)/(var(avg_flux) + median(flux_SD)^2))
+  fit_summary$parPearson_c <- ifelse(corrected_pearson > 0, min(corrected_pearson, 1), max(corrected_pearson, -1))
+    
   output <- list()
   output$fit_summary <- fit_summary
   output$param_interval <- param_summary
