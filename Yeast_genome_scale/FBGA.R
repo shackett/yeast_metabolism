@@ -663,7 +663,7 @@ save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, TRdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
 
 
 
@@ -675,10 +675,49 @@ load("flux_cache/paramCI.Rdata")
 load("flux_cache/reconstructionWithCustom.Rdata")
 reversibleRx <- read.table("companionFiles/reversibleRx.tsv", header = T)
 
+### Determine which reactions to follow-up on based upon either
+## A) Contain all substrates
+## B) RM is well-fit despite missing substrates
+
+RMMrxns <- reactionInfo$rMech[reactionInfo$modification == ""]
+
+load("paramOptim.Rdata")
+measure_exception <- c("H+", "H2O")
+validRxnA <- sapply(rxnList_form[names(rxnList_form) %in% RMMrxns], function(x){
+  if(all(x$standardQP > 0)){
+    substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi < 0], names(x$originMet))]
+  }else if(all(x$standardQP < 0)){
+    substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi > 0], names(x$originMet))]
+  }else{
+    substrates <- x$originMet
+  }
+  
+  substrates <- substrates[names(substrates) %in% names(x$metNames)[!(x$metNames %in% measure_exception)]]
+  ifelse(any(substrates == "nm"), F, T)
+})
+
+validRxnB <- rxn_fits$parSpearman[chmatch(RMMrxns, rxn_fits$rxn)] > 0.6
+
+valid_rxns <- substr(RMMrxns[validRxnA | validRxnB], 1, 6)
+
+optimal_rxn_form <- sapply(valid_rxns, function(x){
+  rx_forms <- reactionInfo[reactionInfo$reaction == x,]
+  rx_forms <- rx_forms[grep('t_metX', rx_forms$modification, invert = T),]
+  rx_best_mod <- rx_forms$rMech[!is.na(rx_forms$Qvalue)][which.min(rx_forms$Qvalue[!is.na(rx_forms$Qvalue)])]
+  if(length(rx_best_mod) == 0){
+    rx_forms$rMech[rx_forms$modification == ""]
+  }else if(rx_forms$Qvalue[rx_forms$rMech == rx_best_mod] < 0.05){
+    rx_best_mod
+  }else{
+    rx_forms$rMech[rx_forms$modification == ""]
+  }
+})
+
 ##### Summary based on interval overlap #####
 
 interval_overlap_summary <- data.table(rxnForm = fraction_flux_deviation$rxn, intervalOverlap = fraction_flux_deviation$'Interval Overlap')
 interval_overlap_summary$reaction = substr(interval_overlap_summary$rxnForm, 1, 6)
+interval_overlap_summary <- interval_overlap_summary[interval_overlap_summary$reaction %in% valid_rxns,]
 
 interval_overlap_summary$Type = NA
 interval_overlap_summary$Type[interval_overlap_summary$rxnForm %in% reactionInfo$rMech[reactionInfo$modification %in% c("", "rmCond")]] <- "Substrates and Enzymes"
@@ -719,9 +758,25 @@ ggplot() + facet_grid(Type~.) + geom_bar(data = interval_overlap_summary, aes(x 
 ggsave("Figures/intervalOverlapSummary.pdf", height = 14, width = 10)
 
 
+
+### Just looking at MM and signficant regulation ###
+
+interval_overlap_summary <- data.table(rxnForm = fraction_flux_deviation$rxn, intervalOverlap = fraction_flux_deviation$'Interval Overlap')
+interval_overlap_summary <- interval_overlap_summary[interval_overlap_summary$rxnForm %in% optimal_rxn_form,]
+interval_overlap_summary$Type <- ifelse(reactionInfo$modification[chmatch(interval_overlap_summary$rxnForm, reactionInfo$rMech)] == "", "rMM", "regulator")
+setkey(interval_overlap_summary, "intervalOverlap")
+interval_overlap_summary$rxnForm <- factor(interval_overlap_summary$rxnForm, levels = interval_overlap_summary$rxnForm)
+
+ggplot() + geom_bar(data = interval_overlap_summary , aes(x = rxnForm, y = intervalOverlap, fill = Type), stat = "identity", position = "dodge", width = 0.85) + barplot_theme + theme(axis.title.y = element_blank()) +
+ scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "", expand = c(0,0)) + scale_fill_brewer("", palette = "Set1", label = c("Allosteric Regulator", "Reversible Michaelis-Menten")) +
+ ggtitle('Fraction of confidence intervals \n capturing experimental value')
+ggsave("Figures/intervalOverlapOptimal.pdf", height = 7, width = 10)
+
+
+
 ##### Summary based on spearman correlation #####
 
-spearman_MM <- rxn_fits$parSpearman[reactionInfo$modification == ""]
+spearman_MM <- rxn_fits$parSpearman[reactionInfo$modification == "" & substr(rxn_fits$rxn, 1, 6) %in% valid_rxns]
 spearman_MM <- sort(spearman_MM[spearman_MM > 0])
 spearman_MM_df <- data.frame(x = 1:length(spearman_MM), corr = spearman_MM)
 
@@ -734,6 +789,16 @@ ggsave("Figures/MMspearmanCorr.pdf", height = 12, width = 13)
 
 metabolic_leverage_summary_plots("L0.05")
 
+##### Generate  
+
+TResponsiveness <- TRdata[,list(TR = median(q0.5), TU = median(TU), MU = median(MU)), by = c("specie", "reaction")]
+TResponsiveness <- TResponsiveness[reaction %in% optimal_rxn_form,]
+TResponsiveness[,rxForm := substr(reaction, 1, 6),]
+setkey(TResponsiveness, TR)
+
+best_candidate_TR <- TResponsiveness$reaction[which.max(TResponsiveness$TR)]
+MLdata[reaction == TResponsiveness$reaction[65],,]
+rxnList_form[[TResponsiveness$reaction[65]]]
 
 
 ######### Compare Km values found through optimization to those from literature ################

@@ -2010,10 +2010,20 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   # Label the CI overlap of the parameteric fit and FBA flux based on relative metabolic leverage and identify the unexplained fraction of variance  
   # For the latter two plots, include both the RM leverage and the addition of the most significant putatively known regulator (if one exists) 
   
-  ##### Summarize weighted-elasticities / physiological leverage #####
+  # if nutrient condition == median - use median ML, otherwise provide nutrient condition
   
-  MLsummary <- data.table(MLdata[MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""] & MLdata$condition == nutrient_cond,])
-  setnames(MLsummary, "0.5", "q0.5")
+  if(nutrient_cond == "median"){
+    MLdata_reduced <- MLdata[, list(q0.5 = median(get("0.5"))), by = c("specie", "Type", "reaction")]
+  }else if(nutrient_cond %in% chemostatInfo$ChemostatCond){
+    MLdata_reduced <- MLdata[condition == nutrient_cond, list(q0.5 = get("0.5")), by = c("specie", "Type", "reaction")]
+  }else{
+    stop("invalid nutrient condition")
+  }
+  
+  ##### Summarize weighted-elasticities / metabolic leverage #####
+  MLsummary <- MLdata_reduced[reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""],]
+  MLsummary <- MLsummary[substr(reaction, 1, 6) %in% valid_rxns,] # only look at well defined reactions
+  
   MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
   MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme"))
   MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
@@ -2038,25 +2048,11 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   # Indicate fraction of missing explanatory power
   
   # consider reactions with a positive correlation between the rm form and flux carried
-  valid_rxns <- rxn_fits$rxn[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]][rxn_fits$parPearson[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]] >= 0]
-  valid_rxns <- reactionInfo$reaction[reactionInfo$rMech %in% valid_rxns]
-  
-  best_sig_regulator <- sapply(unique(valid_rxns), function(x){
-    subrxn <- reactionInfo[reactionInfo$reaction == x,]
-    subrxn <- subrxn[!is.na(subrxn$Qvalue) & subrxn$modification %in% grep('rmCond|t_metX|^$', subrxn$modification, invert = T, value = T) & subrxn$Qvalue < 0.1,]
-    if(nrow(subrxn) == 0){
-      NA
-    }else{
-      subrxn$rMech[which.min(subrxn$Qvalue)]
-    }
-  }) # identify which regulator results in the greatest improvement in fit for each reaction (if a signfiicant regulator was found)
-  best_sig_regulator <- best_sig_regulator[!is.na(best_sig_regulator)]
   
   
-  MLsummary <- data.table(MLdata[(MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" & reactionInfo$reaction %in% valid_rxns] | MLdata$reaction %in% best_sig_regulator) & MLdata$condition == nutrient_cond,])
-  setnames(MLsummary, "0.5", "q0.5")
+  MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form[rxn_fits$parPearson[chmatch(optimal_rxn_form, rxn_fits$rxn)] > 0],,] # optimal kinetic form and pearson corr > 0
   MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive")] <- "regulatory"
+  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
   
   # partitioning explained variance into ML contributions - keeping relative fractions proportional but adjusting the sum
   # MLfrac_species = ML * r2
@@ -2071,7 +2067,7 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   MLsummary <- rbind(MLsummary, residualLeverage, use.names = T)
   
   
-  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme", "regulatory", "residual"))
+  MLsummary$Type <- factor(MLsummary$Type, levels = c("enzyme", "substrate", "product", "regulatory", "residual"))
   MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
   MLsummary[,leverage := leverage/totalLeverage]
   
@@ -2100,27 +2096,11 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   
   ##### Same summary with capture probability #####
   
-  valid_rxns <- rxn_fits$rxn[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]][fraction_flux_deviation$"Interval Overlap"[rxn_fits$rxn %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""]] > 0]
-  valid_rxns <- reactionInfo$reaction[reactionInfo$rMech %in% valid_rxns]
-  
-  best_sig_regulator <- sapply(unique(valid_rxns), function(x){
-    subrxn <- reactionInfo[reactionInfo$reaction == x,]
-    subrxn <- subrxn[!is.na(subrxn$Qvalue) & subrxn$modification %in% grep('rmCond|t_metX|^$', subrxn$modification, invert = T, value = T) & subrxn$Qvalue < 0.1,]
-    if(nrow(subrxn) == 0){
-      NA
-    }else{
-      subrxn$rMech[which.min(subrxn$Qvalue)]
-    }
-  }) # identify which regulator results in the greatest improvement in fit for each reaction (if a signfiicant regulator was found)
-  best_sig_regulator <- best_sig_regulator[!is.na(best_sig_regulator)]
-  
-  
-  MLsummary <- data.table(MLdata[(MLdata$reaction %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" & reactionInfo$reaction %in% valid_rxns] | MLdata$reaction %in% best_sig_regulator) & MLdata$condition == nutrient_cond,])
-  setnames(MLsummary, "0.5", "q0.5")
+  MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form[fraction_flux_deviation$"Interval Overlap"[chmatch(optimal_rxn_form, fraction_flux_deviation$rxn)] > 0],,]
   MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive")] <- "regulatory"
+  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
   
-  residualLeverage <- MLsummary[,list(Type = "residual", leverage = sum(leverage) * (1-fraction_flux_deviation$"Interval Overlap"[chmatch(reaction, rxn_fits$rxn)]^2)/fraction_flux_deviation$"Interval Overlap"[chmatch(reaction, rxn_fits$rxn)]^2)
+  residualLeverage <- MLsummary[,list(Type = "residual", leverage = sum(leverage) * (1-fraction_flux_deviation$"Interval Overlap"[chmatch(reaction, fraction_flux_deviation$rxn)])/fraction_flux_deviation$"Interval Overlap"[chmatch(reaction, fraction_flux_deviation$rxn)])
                                 , by = "reaction"]
   
   MLsummary <- rbind(MLsummary, residualLeverage, use.names = T)
@@ -2151,6 +2131,23 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
     barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
     scale_fill_manual(values = TypeColors)
   ggsave("Figures/metabolicLeverage_intervalOverlap.pdf", height = 8, width = 12)
+
+  
+  ### Looking at ML of different pathways and relative to reaction reversibility ###
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
   
 }
 
