@@ -713,6 +713,8 @@ optimal_rxn_form <- sapply(valid_rxns, function(x){
   }
 })
 
+reactionInfo[chmatch(optimal_rxn_form, reactionInfo$rMech),]
+
 ##### Summary based on interval overlap #####
 
 interval_overlap_summary <- data.table(rxnForm = fraction_flux_deviation$rxn, intervalOverlap = fraction_flux_deviation$'Interval Overlap')

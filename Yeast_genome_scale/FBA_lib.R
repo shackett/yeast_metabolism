@@ -1782,8 +1782,11 @@ reactionProperties <-  function(){
     elast_partials[[spec]] <- D(elast_equation, spec)
   }
   
+  all_species <- data.frame(2^met_abund, 2^enzyme_abund)
+  all_species <- all_species[,chmatch(names(elast_partials), colnames(all_species))]
+  
   # calculate sensitivities #  partial F / partial S
-  mcmc_partials <- sapply(1:nrow(dist_pars), function(x){
+  mcmc_elasticity <- sapply(1:nrow(dist_pars), function(x){
     
     pars <- dist_pars[x,]
     dist_par_stack <- rep(1, n_c) %*% t(2^(pars))
@@ -1811,23 +1814,14 @@ reactionProperties <-  function(){
     for(j in 1:ncol(comp_partials)){
       comp_partials[,j] <- with(all_components ,eval(elast_partials[[j]]))
     }
-    comp_partials
+    
+    # partial F / partial S * [S]/F
+    as.matrix(comp_partials * all_species/flux_fit$fitted)
+      
   }, simplify = "array")
   
-  # partial F / partial S * [S]/F
-  
-  flux_expanded <- array(flux_fit$fitted_flux$fitted, dim = dim(mcmc_partials))
-
-  all_species <- data.frame(2^met_abund, 2^enzyme_abund)
-  all_species_expanded <- array(unlist(all_species[,chmatch(colnames(mcmc_partials), colnames(all_species))]), dim = dim(mcmc_partials))
-  
-  # calculate elasticities from partial derivatives * S/F
-  
-  mcmc_elasticity <- mcmc_partials * (all_species_expanded/flux_expanded)
-  
-  
   flux_names <- names(elast_partials)
-  flux_names[flux_names %in% run_rxn$kineticPars$rel_spec] <-  run_rxn$kineticPars$formatted[chmatch(flux_names[flux_names %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
+  flux_names[flux_names %in% run_rxn$kineticPars$rel_spec] <- run_rxn$kineticPars$formatted[chmatch(flux_names[flux_names %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
   
   dimnames(mcmc_elasticity) <- list(condition = rownames(measured_mets), specie = flux_names, markovSample = c(1:nrow(dist_pars)))
   
@@ -1857,9 +1851,8 @@ reactionProperties <-  function(){
   #WICSS <- apply(condSD^2, 2, sum)
   #OCSS <- apply((all_exp_species - rep(1,nrow(all_exp_species)) %*% t(apply(all_exp_species, 2, mean)))^2, 2, sum)
   
-  #
   
-  SDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(mcmc_elasticity))
+  SDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, var)), dim = dim(mcmc_elasticity))
   
   we_melt <- data.table(melt(SDweightedElasticity))
   
@@ -2106,7 +2099,7 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   MLsummary <- rbind(MLsummary, residualLeverage, use.names = T)
   
   
-  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "enzyme", "regulatory", "residual"))
+  MLsummary$Type <- factor(MLsummary$Type, levels = c("enzyme", "substrate", "product", "regulatory", "residual"))
   MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
   MLsummary[,leverage := leverage/totalLeverage]
   
@@ -2135,15 +2128,43 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   
   ### Looking at ML of different pathways and relative to reaction reversibility ###
   
+  reversibleRx$modelBound
+  
+  MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form,]
+  
+  MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
+  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
+  
+  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "regulatory", "enzyme"))
+  MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
+  MLsummary[,leverage := leverage/totalLeverage]
+  
+  enz_leverage <- data.frame(reaction = MLsummary[Type == "enzyme",reaction], rank = NA)
+  enz_leverage$rank[order(MLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
+  
+  MLsummary$rank <- factor(enz_leverage$rank[chmatch(MLsummary$reaction, enz_leverage$reaction)])
+  MLsummary$reversibility <- ifelse(reversibleRx$modelBound[chmatch(substr(MLsummary$reaction, 1, 6), reversibleRx$rx)] == "greaterEqual", "Irreversible", "Reversible")
+    
+  setkeyv(MLsummary, c("Type", "rank"))
+  setkey(MLsummary)
+  
+  TypeColors <- c("blue2", "chartreuse4", "darkorange", "firebrick1")
+  
+  ggplot(MLsummary[reversibility == "Reversible",], aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) + facet_wrap(~reversibility, drop = T) +
+    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+   scale_fill_manual(values = TypeColors) + scale_x_discrete("Reactions")
   
   
+  ggplot(MLsummary[reversibility != "Reversible",], aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) + facet_wrap(~reversibility, drop = T) +
+    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+   scale_fill_manual(values = TypeColors) + scale_x_discrete("Reactions")
   
+  regRev <- MLsummary[,list(Reg = "regulatory" %in% Type), by = c("reversibility", "reaction")]
+  regRev$MM <- c(1:nrow(regRev)) %in% grep('r_[0-9]{4}-rm$', regRev$reaction)
+  table(regRev$reversibility, regRev$Reg)
+  chisq.test(table(regRev$reversibility, regRev$Reg), simulate.p.value = T)
   
-  
-  
-  
-  
-  
+  TRdata
   
   
   
