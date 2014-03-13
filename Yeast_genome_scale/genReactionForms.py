@@ -29,7 +29,7 @@ rxnList[rxnID](
 ['hill'](hill coefficient, n > 0: fixed, n == 0: to be determined)
 ['inh']: contains modulator fields [modid] with subfields like act+
 ['subtype'] for inh(competitive, noncompetitive or uncompetitive) and for act(MM or CC)
-MM = (1 / ((Kd/L)^n + 1), CC = (1 + (L/D))^n
+MM = (1 / ((Kd/L)^n + 1), CC = (1 + (L/D)^n)
 ['rev']: 0 or 1)
 """
     
@@ -54,6 +54,7 @@ MM = (1 / ((Kd/L)^n + 1), CC = (1 + (L/D))^n
         
         # go through the substrate, if not yet present in the dictionary add them
         # each substrate is a dictionary with two values: active site and stoichiometry
+        # a suffix is appended if the kinetic parameter varies across isoenzymes
         
         metID = nr2id(vec[3].replace('t_',''))
         if vec[2] == 'rct':
@@ -61,11 +62,18 @@ MM = (1 / ((Kd/L)^n + 1), CC = (1 + (L/D))^n
                 rxnList[rxnID]['rct'][metID] = dict()
                 rxnList[rxnID]['rct'][metID]['actsit'] = float(vec[4])
                 rxnList[rxnID]['rct'][metID]['stoi'] = int(vec[5])
+                if str(vec[8]) != 'NA':
+                   rxnList[rxnID]['rct'][metID]['suffix'] = '_'+vec[8]
+                else:
+                    rxnList[rxnID]['rct'][metID]['suffix'] = ''
             else:
                 raise NameError(metID + ' twice in table for reaction ' + rxnID)
         
         # activator and inhibitor dictionaries are added to their respective
         # rection-specific dictionaries
+        # a suffix is appended to distinguish reaction species and regulators in case
+        # they are the same metabolite and to allow for kinetic parameters which vary
+        # between isoenzymes
                
         # activators
         elif vec[2] == 'act':
@@ -73,13 +81,21 @@ MM = (1 / ((Kd/L)^n + 1), CC = (1 + (L/D))^n
             rxnList[rxnID]['act'][metID]['hill'] = float(vec[6])
             rxnList[rxnID]['act'][metID]['actsit'] = float(vec[4])
             rxnList[rxnID]['act'][metID]['subtype'] = vec[7].lower()
-        
+            if str(vec[8]) != 'NA':
+                rxnList[rxnID]['act'][metID]['suffix'] = '_'+vec[2]+'_'+vec[8]
+            else:
+                rxnList[rxnID]['act'][metID]['suffix'] = '_'+vec[2]+''
+            
         # inhibitors 
         elif vec[2][0:3] == 'inh':
             rxnList[rxnID]['inh'][metID] = dict()
             rxnList[rxnID]['inh'][metID]['hill'] = float(vec[6])
             rxnList[rxnID]['inh'][metID]['actsit'] = float(vec[4])
             rxnList[rxnID]['inh'][metID]['subtype'] = vec[7].lower()
+            if str(vec[8]) != 'NA':
+                rxnList[rxnID]['inh'][metID]['suffix'] = '_'+vec[2]+'_'+vec[8]
+            else:
+                rxnList[rxnID]['inh'][metID]['suffix'] = '_'+vec[2]+''
             
         else:
             print(vec[2] + ' not a valid value for type.')
@@ -108,7 +124,7 @@ formModus:
         # create first the numerator, as it is invariant over all rate laws
         for rct in rxnList[rxn]['rct'].keys():
             tID = 't_' + rct
-            km = 'K_r_' + rxn + '_' + tID
+            km = 'K_r_' + rxn + '_' + tID + rxnList[rxn]['rct'][rct]['suffix']
             #numerator
             t_num = tID+'^'+str(abs(rxnList[rxn]['rct'][rct]['stoi']))
             # process substrates
@@ -133,7 +149,7 @@ formModus:
             prodSites = dict()
             denSites = dict()
             for rct in rxnList[rxn]['rct'].keys():
-                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + ')'
+                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + rxnList[rxn]['rct'][rct]['suffix'] + ')'
                 for i in range(abs(rxnList[rxn]['rct'][rct]['stoi'])):
                     if rxnList[rxn]['rct'][rct]['stoi'] < 0:
                         subSites[str(rxnList[rxn]['rct'][rct]['actsit']+i*0.1)]=tDen
@@ -164,12 +180,11 @@ formModus:
                         
             # Add the inhibitors to the denominators
             for rct in rxnList[rxn]['inh'].keys():
-                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + ')'
+                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + rxnList[rxn]['inh'][rct]['suffix'] + ')'
                 if rxnList[rxn]['inh'][rct]['hill'] == 0:
-                    tDen = tDen + '^' + 'KH_r_' + rxn + '_t_' + rct
+                    tDen = tDen + '^' + 'KH_r_' + rxn + '_t_' + rct + rxnList[rxn]['inh'][rct]['suffix']
                 elif rxnList[rxn]['inh'][rct]['hill'] != 1:
                     tDen = tDen + '^' + str(rxnList[rxn]['inh'][rct]['hill'])
-                
                   
                 site = str(rxnList[rxn]['inh'][rct]['actsit'])
                 if not(site in denSites.keys()):
@@ -188,13 +203,13 @@ formModus:
             for site in denSites.keys():
                 denTerm = denTerm + denSites[site] + ')*'
             denTerm = denTerm[:-1]
-                
+              
         # convinience kinetics denominator
         elif formModus == 'cc':
             subSites = dict()
             prodSites = dict()
             for rct in rxnList[rxn]['rct'].keys():
-                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + ')'
+                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + rxnList[rxn]['rct'][rct]['suffix'] + ')'
                 for i in range(abs(rxnList[rxn]['rct'][rct]['stoi'])):
                     if i == 0:
                         t_den = '(1'
@@ -203,7 +218,7 @@ formModus:
                     subSites[rct] = t_den
                 else:
                     prodSites[rct] = t_den
-                    
+                 
             denTerm = ''
             for site in subSites.keys():
                 denTerm = denTerm + subSites[site] + ')*'
@@ -214,11 +229,11 @@ formModus:
             denTerm = denTerm[:-1]
             # Add the inhibitors
             for rct in rxnList[rxn]['inh']:
-                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + ')'
+                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + rxnList[rxn]['inh'][rct]['suffix'] + ')'
                 if rxnList[rxn]['inh'][rct]['hill'] == 0:
-                    tDen = tDen + '^' + 'KH_r_' + rxn + '_t_' + rct
+                    tDen = tDen + '^' + 'KH_r_' + rxn + '_t_' + rct + rxnList[rxn]['inh'][rct]['suffix']
                 elif rxnList[rxn]['inh'][rct]['hill'] != 1:
-                    tDen = tDen + '^' + str(rxnList[rxn]['inh'][rct]['hill'])
+                    tDen = tDen + '^' + str(rxnList[rxn]['inh'][rct]['hill'])   
                 denTerm = '(' + denTerm + ')*(1+' + tDen + ')'
             
             
@@ -236,13 +251,34 @@ formModus:
             texeq = '-\\frac{\\frac{'+ prod_num+'}{'+ prod_km +'}}{' + denTerm + '}'
         # Add the activator term:
         for rct in rxnList[rxn]['act']:
-            tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + ')'
-            if rxnList[rxn]['act'][rct]['hill'] == 0:
-                tDen = tDen + '^' + 'KH_r_' + rxn + '_t_' + rct
-            elif rxnList[rxn]['act'][rct]['hill'] != 1:
-                tDen = tDen + '^' + str(rxnList[rxn]['act'][rct]['hill'])
-            eq = '(1+' + tDen + ')*' + eq
-            texeq = '(1+' + tDen + ')*' + texeq
+            
+            if rxnList[rxn]['act'][rct]['subtype'] == 'mm':
+                # 1 / ((K/L)^n + 1)
+                tDen = '(' + 'K_r_' + rxn + '_t_' + rct + rxnList[rxn]['act'][rct]['suffix'] + '/' + 't_' + rct + ')'
+                
+                if rxnList[rxn]['act'][rct]['hill'] == 0:
+                    tDen = tDen + '^' + 'KH_r_' + rxn + '_t_' + rct + rxnList[rxn]['act'][rct]['suffix']
+                elif rxnList[rxn]['act'][rct]['hill'] != 1:
+                    tDen = tDen + '^' + str(rxnList[rxn]['act'][rct]['hill'])
+                
+                eq = '(1/(' + tDen + '+1))*' + eq
+                texeq = '(1/(' + tDen + '+1))*' + texeq
+                
+            elif rxnList[rxn]['act'][rct]['subtype'] == 'cc':
+                # 1 +  (L/K^n)
+                tDen = '(t_' + rct + '/' +'K_r_' + rxn + '_t_' + rct + rxnList[rxn]['act'][rct]['suffix'] + ')'
+                
+                if rxnList[rxn]['act'][rct]['hill'] == 0:
+                    tDen = tDen + '^' + 'KH_r_' + rxn + '_t_' + rct + rxnList[rxn]['act'][rct]['suffix']
+                elif rxnList[rxn]['act'][rct]['hill'] != 1:
+                    tDen = tDen + '^' + str(rxnList[rxn]['act'][rct]['hill'])
+                
+                eq = '(1+' + tDen + ')*' + eq
+                texeq = '(1+' + tDen + ')*' + texeq
+                
+            else:
+                raise NameError('invalid activator style (valid: mm,cc) in ' + rxn)
+            
         eq = re.sub('\^1(?![0-9\.])','',eq)
         eq = re.sub('\\)\\(',')*(',eq)
         texeq = re.sub('\^1(?![0-9\.])','',texeq)
