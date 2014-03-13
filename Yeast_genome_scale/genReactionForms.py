@@ -2,7 +2,7 @@
 """
 Created on Thu Apr 11 11:09:06 2013
 
-This will create reaction formulas identical to the one descreibed in the
+This will create reaction formulas identical to the one described in the
 Liebermeister paper. The input is the conversion table used for Juns C script
 
 @author: vitoz@ethz.ch
@@ -28,13 +28,15 @@ rxnList[rxnID](
 ['actsit'](0 for noncomp, n for comp),
 ['hill'](hill coefficient, n > 0: fixed, n == 0: to be determined)
 ['inh']: contains modulator fields [modid] with subfields like act+
-['subtype']( competitive, noncompetitive or uncompetitive)
+['subtype'] for inh(competitive, noncompetitive or uncompetitive) and for act(MM or CC)
+MM = (1 / ((Kd/L)^n + 1), CC = (1 + (L/D))^n
 ['rev']: 0 or 1)
 """
     
     rxnList = dict()
     
     for line in convtab:
+        
         line = str(line)
         line = line.replace('\n','')
         line = line.replace('"','')
@@ -49,8 +51,9 @@ rxnList[rxnID](
             rxnList[rxnID]['rct'] = dict()
             rxnList[rxnID]['act'] = dict()
             rxnList[rxnID]['inh'] = dict()
-           
-        # go through the substrate, if not jet present in the dictionary add them
+        
+        # go through the substrate, if not yet present in the dictionary add them
+        # each substrate is a dictionary with two values: active site and stoichiometry
         
         metID = nr2id(vec[3].replace('t_',''))
         if vec[2] == 'rct':
@@ -60,21 +63,27 @@ rxnList[rxnID](
                 rxnList[rxnID]['rct'][metID]['stoi'] = int(vec[5])
             else:
                 raise NameError(metID + ' twice in table for reaction ' + rxnID)
+        
+        # activator and inhibitor dictionaries are added to their respective
+        # rection-specific dictionaries
                
+        # activators
         elif vec[2] == 'act':
             rxnList[rxnID]['act'][metID] = dict()
             rxnList[rxnID]['act'][metID]['hill'] = float(vec[6])
             rxnList[rxnID]['act'][metID]['actsit'] = float(vec[4])
+            rxnList[rxnID]['act'][metID]['subtype'] = vec[7].lower()
         
+        # inhibitors 
         elif vec[2][0:3] == 'inh':
             rxnList[rxnID]['inh'][metID] = dict()
             rxnList[rxnID]['inh'][metID]['hill'] = float(vec[6])
             rxnList[rxnID]['inh'][metID]['actsit'] = float(vec[4])
             rxnList[rxnID]['inh'][metID]['subtype'] = vec[7].lower()
-        
+            
         else:
             print(vec[2] + ' not a valid value for type.')
-    
+        
     return(rxnList)
 
 
@@ -94,9 +103,9 @@ formModus:
         subst_num = str()
         prod_num = str()
         subst_km = str()
-        prod_km =str() # only needed if irriversible backwards
+        prod_km =str() # only needed if irreversible backwards
         
-        # create first the nominator, as it is invariant over all rate laws
+        # create first the numerator, as it is invariant over all rate laws
         for rct in rxnList[rxn]['rct'].keys():
             tID = 't_' + rct
             km = 'K_r_' + rxn + '_' + tID
@@ -219,10 +228,10 @@ formModus:
             eq = '1/('+subst_km +')*(' + subst_num + '-' + prod_num + '/Keqr_' + rxn + ')/(' + denTerm + ')'
             texeq = '\\frac{\\frac{1}{' + subst_km + '}*\\left('+ subst_num + '-' + '\\frac{' + prod_num + '}{Keqr_' + rxn + '}\\right)}{' + denTerm + '}'
             
-        elif rxnList[rxn]['rev'] == '1':#irriversible
+        elif rxnList[rxn]['rev'] == '1':#irreversible
             eq = '(('+ subst_num +')/('+ subst_km +'))/(' + denTerm + ')'
             texeq = '\\frac{\\frac{'+ subst_num +'}{'+ subst_km +'}}{' + denTerm + '}'
-        else: #irriversibly backwards
+        else: #irreversibly backwards
             eq = '-(('+ prod_num +')/('+ prod_km +'))/(' + denTerm + ')'
             texeq = '-\\frac{\\frac{'+ prod_num+'}{'+ prod_km +'}}{' + denTerm + '}'
         # Add the activator term:
@@ -276,9 +285,10 @@ ReactionID (r_xxxx), reversibility (bool, 0= reversible)type(rct, act, inh), sub
 ]"""
 
 
-inpTable = sys.stdin.readlines()
-#inpTable = open('/home/vitoz/Dropbox/Rabino/git/vzcode/Python/test2.py','r').readlines()
-mode = inpTable[0].replace('"','').replace('\n','')
+#inpTable = sys.stdin.readlines()
+#inpTable = open('./pythonTest.py','r').readlines
+inpTable = open('./test3.py','r').readlines()
+mode = inpTable[0].replace('"','').replace('\n','') # cc or rm
 inpTable = inpTable[1:]
 rxnList = tab2reactions(inpTable)
 eqLists = rateLaws(rxnList,mode)
