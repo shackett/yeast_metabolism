@@ -272,7 +272,6 @@ formModus:
                     tDen = tDen + '^' + 'KH_r_' + rxn + '_t_' + rct + rxnList[rxn]['act'][rct]['suffix']
                 elif rxnList[rxn]['act'][rct]['hill'] != 1:
                     tDen = tDen + '^' + str(rxnList[rxn]['act'][rct]['hill'])
-                
                 eq = '(1+' + tDen + ')*' + eq
                 texeq = '(1+' + tDen + ')*' + texeq
                 
@@ -293,7 +292,8 @@ formModus:
         texeq = texeq.replace('_','\_')
         texeq = re.sub(r'\\',r'\\\\',texeq)
         eqList[rxn] = eq
-        texeqList[rxn] = texeq
+        texeqList[rxn] = re.sub('\\\\+', '\\\\', texeq)
+        
     return(dict(eqList = eqList,texeqList = texeqList))
 
 def EqList2R(eqLists):
@@ -303,6 +303,7 @@ in a variable rxnf, which is a list with the reactions, named by their
 reaction ID"""
     eqList = eqLists['eqList']
     texeqList = eqLists['texeqList']
+    
     for rxn in eqList.keys():
         line = "rxnf[[\'r_"+ rxn + '-'+ str(mode) + "\']]$rxnForm <- as.formula( ~I("+eqList[rxn]+')+0)\n'
         sys.stdout.write(line)
@@ -321,9 +322,8 @@ ReactionID (r_xxxx), reversibility (bool, 0= reversible)type(rct, act, inh), sub
 ]"""
 
 
-#inpTable = sys.stdin.readlines()
-#inpTable = open('./pythonTest.py','r').readlines
-inpTable = open('./test3.py','r').readlines()
+inpTable = sys.stdin.readlines()
+#inpTable = open('./test3.py','r').readlines()
 mode = inpTable[0].replace('"','').replace('\n','') # cc or rm
 inpTable = inpTable[1:]
 rxnList = tab2reactions(inpTable)
