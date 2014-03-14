@@ -80,8 +80,16 @@ lik_calc_fittedSD <- function(proposed_params){
   par_stack <- 2^par_stack
   occupancy_vals <- data.frame(met_abund, par_stack)
   
-  predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-  enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  if(!(kinetically_differing_isoenzymes)){
+    predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+    enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  }else{
+    enzyme_activity <- NULL
+    for(isoenzyme in names(rxnSummary$rxnForm)){
+      predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]][[isoenzyme]], data = occupancy_vals)[,1]
+      enzyme_activity <- cbind(enzyme_activity, predOcc %*% t(rep(1, sum(occEqtn_complex_match$occEqtn == isoenzyme)))*2^enzyme_abund[,colnames(enzyme_abund) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]])
+    }
+  }
   
   # fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
   # flux objective is set as the average of the minimal and maximal allowable flux flowing through the reaction at the optimal solution
@@ -214,10 +222,10 @@ rxTests <- c(which(names(rxnList_form) == "r_0005-rm-t_metX-inh-uncomp_ultra"), 
              which(names(rxnList_form) == "r_0042_Y_F_inhibition_isoenzymeSpecific"), # isoenzyme specific regulation
              which(names(rxnList_form) == "r_0042_E4P_enzyme_specific_affinity_test2"), # isoenzyme specific kinetics w.r.t. substrate
              which(names(rxnList_form) == "r_0148-rm-t_0234-inh-uncomp")) # auto-regulation
-rxN <- rxTests[2]
 
 #for(rxN in c(1:length(rxnList_form))[names(rxnList_form) %in% c("r_1088-rm", "r_0250-rm-t_0674-inh-comp")]){
 for(rxN in 1:length(rxnList_form)){
+for(rxN in rxTests){  
   
   t_start = proc.time()[3]
   print(paste(names(rxnList_form)[rxN], "started", sep = " "))
@@ -230,7 +238,7 @@ for(rxN in 1:length(rxnList_form)){
   # if isoenzymes differ w.r.t. kinetics or regulation then their occupancy equation are stored as different elements of a list
   # and enzyme concentrations need to be paired with these seperate equations
   
-  kinetically_differing_isoenzymes <- ifelse(any(names(rxnSummary$rxnForm) %in% rownames(rxnSummary$enzymeComplexes)), T, F)
+  kinetically_differing_isoenzymes <- any(names(rxnSummary$rxnForm) %in% rownames(rxnSummary$enzymeComplexes))
   
   rxnEquations <- list()
   
@@ -277,7 +285,7 @@ for(rxN in 1:length(rxnList_form)){
   
   kineticPars <- rbind(kineticPars, c("keq", "keq", NA, NA, paste("Keq", rxnSummary$rxnID, sep = ""), NA))
   if(any(rxnSummary$rxnFormData$Hill == 0)){ # an unspecified hill coefficient was found - introduce hill parameter
-    kineticPars <- rbind(kineticPars, c(rxnSummary$rxnFormData$SubstrateID[rxnSummary$rxnFormData$Hill == 0], "hillCoefficient", NA, NA, sub('^K', '^Kh', rxnSummary$rxnFormData$affinityParameter[rxnSummary$rxnFormData$Hill == 0]), NA))
+    kineticPars <- rbind(kineticPars, c(rxnSummary$rxnFormData$SubstrateID[rxnSummary$rxnFormData$Hill == 0], "hillCoefficient", NA, NA, sub('^K', 'KH', rxnSummary$rxnFormData$affinityParameter[rxnSummary$rxnFormData$Hill == 0]), NA))
   }
   
   if("t_metX" %in% all_species$rel_spec){
@@ -336,10 +344,40 @@ for(rxN in 1:length(rxnList_form)){
   
   if(kinetically_differing_isoenzymes){
     # if isoenzymes differ then their occupancy equations are not distributed e.g. Vmax1[O1] + Vmax2[O2] rather than (Vmax1 + Vmax2)*O
+    KcatEs_log <- mapply(function(E, Kcat){paste(Kcat, E, sep = " * ")}, E = sapply(all_species$rel_spec[all_species$SpeciesType == "Enzyme"], function(x){paste("2^", x, sep = "")}), Kcat = all_species$formulaName[all_species$SpeciesType == "Enzyme"])
+    KcatEs_linear <- mapply(function(E, Kcat){paste(Kcat, E, sep = " * ")}, E = all_species$rel_spec[all_species$SpeciesType == "Enzyme"], Kcat = all_species$formulaName[all_species$SpeciesType == "Enzyme"])
     
+    if(!all(names(rxnEquations$occupancyEq_list) %in% c(names(KcatEs_log), "other"))){
+      stop(paste("isoenzyme name does not match available complexes for reaction", names(rxnList_form)[rxN],"\nCheck the field \"enzymeInvolved\" in manual_ComplexRegulation.tsv"))
+      }
     
+    # a complex is matched to an enzyme either by being directly specified or otherwise being placed with "other" enzymes 
+    occEqtn_complex_match <- data.frame(complex = names(KcatEs_log), occEqtn = NA)
+    occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(rxnEquations$occupancyEq_list)] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(rxnEquations$occupancyEq_list)]
+    occEqtn_complex_match$occEqtn[is.na(occEqtn_complex_match$occEqtn)] <- "other"
     
+    KcatExpressions_linear <- NULL
+    KcatExpressions_log <- NULL
+    for(isoenzyme in unique(occEqtn_complex_match$occEqtn)){
+      # log
+      KcatExpression <- paste('(', paste(KcatEs_log[names(KcatEs_log) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]], collapse = " + "), ')', sep = "")
+      isoenzymeO <- rxnEquations$l_occupancyEq_list[names(rxnEquations$occupancyEq_list) == isoenzyme]
+      isoenzymeO <- sub('^I', paste0(KcatExpression, '*'), isoenzymeO)
+      isoenzymeO <- sub(' \\+ 0$', '', isoenzymeO)
+      
+      KcatExpressions_log <- c(KcatExpressions_log, isoenzymeO)
+      
+      # linear
+      KcatExpression <- paste('(', paste(KcatEs_linear[names(KcatEs_linear) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]], collapse = " + "), ')', sep = "")
+      isoenzymeO <- rxnEquations$occupancyEq_list[names(rxnEquations$occupancyEq_list) == isoenzyme]
+      isoenzymeO <- sub('^I', paste0(KcatExpression, '*'), isoenzymeO)
+      isoenzymeO <- sub(' \\+ 0$', '', isoenzymeO)
+      
+      KcatExpressions_linear <- c(KcatExpressions_linear, isoenzymeO)
+    }
     
+    rxnEquations[["full_kinetic_form_list"]] <- paste(unlist(KcatExpressions_log), collapse = " + ")
+    rxnEquations[["elasticity_calc"]] <- paste(unlist(KcatExpressions_linear), collapse = " + ")
     
   }else{
     
@@ -365,9 +403,6 @@ for(rxN in 1:length(rxnList_form)){
     
   }
   
-  
-  
-  
   # find the partial derivatives of the kinetic form for each reaction specie
   eq <- eval(parse(text = paste('expression(',rxnEquations[["full_kinetic_form_list"]],')')))
   
@@ -378,13 +413,7 @@ for(rxN in 1:length(rxnList_form)){
   rxnEquations[["kinetic_form_partials"]] <- D_full_kinetic_form
   D_full_kinetic_form <- D_full_kinetic_form[names(D_full_kinetic_form) %in% c(kineticPars$rel_spec[(kineticPars$measured & !is.na(kineticPars$measured))], all_species$rel_spec[all_species$SpeciesType == "Enzyme"])] # remove un-measured species, as these will have no variance
   
-  
-  
-  
-  
-  
-  
-  
+  #### Generate a prior for each non-linear kinetic parameter (i.e. not kcat) ####
   
   kineticParPrior <- data.frame(distribution = rep(NA, times = length(kineticPars[,1])), par_1 = NA, par_2 = NA, par_3 = NA) 
   
