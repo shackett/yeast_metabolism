@@ -81,12 +81,12 @@ lik_calc_fittedSD <- function(proposed_params){
   occupancy_vals <- data.frame(met_abund, par_stack)
   
   if(!(kinetically_differing_isoenzymes)){
-    predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+    predOcc <- eval(rxnEquations[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
     enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
   }else{
     enzyme_activity <- NULL
     for(isoenzyme in names(rxnSummary$rxnForm)){
-      predOcc <- model.matrix(rxnEquations[["l_occupancyEq"]][[isoenzyme]], data = occupancy_vals)[,1]
+      predOcc <- eval(rxnEquations[["l_occupancyExpression"]][[isoenzyme]], occupancy_vals)
       enzyme_activity <- cbind(enzyme_activity, predOcc %*% t(rep(1, sum(occEqtn_complex_match$occEqtn == isoenzyme)))*2^enzyme_abund[,colnames(enzyme_abund) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]])
     }
   }
@@ -250,26 +250,25 @@ for(rxN in rxTests){
       
       rxnEquations$occupancyEq_list[[isoenzyme]] <- paste(deparse(as.list(rxnSummary$rxnForm[names(rxnSummary$rxnForm) == isoenzyme])[[1]][[2]]), collapse = "") # a parametric form relating metabolites and constants to fraction of maximal activity
       rxnEquations$occupancyEq_list[[isoenzyme]] <- gsub('[ ]+', ' ', rxnEquations$occupancyEq_list[[isoenzyme]])
-      rxnEquations$occupancyEq_list[[isoenzyme]] <- gsub('\\^1234', '^h_allo', rxnEquations$occupancyEq_list[[isoenzyme]]) # 1234 was a standin for a hill coefficient that isn't pre-specified as a number
       
       rxnEquations$l_occupancyEq_list[[isoenzyme]] <- rxnEquations$occupancyEq_list[[isoenzyme]]
       rxnEquations$l_occupancyEq_list[[isoenzyme]] <- gsub('([^_])(t_)', '\\12^\\2', rxnEquations$l_occupancyEq_list[[isoenzyme]])
       rxnEquations$l_occupancyEq_list[[isoenzyme]] <- gsub('([0-9]+)\\^(t_[0-9]{4})\\^([0-9]+)', '(\\1\\^\\2)\\^\\3', rxnEquations$l_occupancyEq_list[[isoenzyme]]) # correct 2^X^2 -> (2^X)^2
       
-      rxnEquations[["l_occupancyEq"]][[isoenzyme]] <- as.formula(paste("~", rxnEquations$l_occupancyEq_list[[isoenzyme]], collapse = "")) # same equation naturally using log2 data
-      
+      # create an expression for each isoenzyme
+      rxnEquations[["l_occupancyExpression"]][[isoenzyme]] <- parse(text = sub(' \\+ 0$', '', sub('^I', '', rxnEquations$l_occupancyEq_list[[isoenzyme]]))) 
     }
   }else{
     # the typical case - single enzyme or kinetically equivalent isoenzymes
     rxnEquations[["occupancyEq_list"]] <- paste(deparse(as.list(rxnSummary$rxnForm)[[2]]), collapse = "") # a parametric form relating metabolites and constants to fraction of maximal activity
     rxnEquations[["occupancyEq_list"]] <- gsub('[ ]+', ' ', rxnEquations[["occupancyEq_list"]])
-    rxnEquations[["occupancyEq_list"]] <- gsub('\\^1234', '^h_allo', rxnEquations[["occupancyEq_list"]]) # 1234 was a standin for a hill coefficient that isn't pre-specified as a numbewr
     
     rxnEquations[["l_occupancyEq_list"]] <- rxnEquations[["occupancyEq_list"]]
     rxnEquations[["l_occupancyEq_list"]] <- gsub('([^_])(t_)', '\\12^\\2', rxnEquations[["l_occupancyEq_list"]])
     rxnEquations[["l_occupancyEq_list"]] <- gsub('([0-9]+)\\^(t_[0-9]{4})\\^([0-9]+)', '(\\1\\^\\2)\\^\\3', rxnEquations[["l_occupancyEq_list"]]) # correct 2^X^2 -> (2^X)^2
     
-    rxnEquations[["l_occupancyEq"]] <- as.formula(paste("~", rxnEquations[["l_occupancyEq_list"]], collapse = "")) # same equation naturally using log2 data
+    # create an expression for each isoenzyme
+    rxnEquations[["l_occupancyExpression"]] <- parse(text = sub(' \\+ 0$', '', sub('^I', '', rxnEquations$l_occupancyEq_list))) 
   }
   
  
