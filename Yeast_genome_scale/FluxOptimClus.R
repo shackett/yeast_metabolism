@@ -219,13 +219,16 @@ shmatch <- function(x,y){
 
 # test cases
 
-#rxTests <- c(which(names(rxnList_form) == "r_0005-rm-t_metX-inh-uncomp_ultra"), # ultra-sensitive allostery
-#             which(names(rxnList_form) == "r_0042_Y_F_inhibition_isoenzymeSpecific"), # isoenzyme specific regulation
-#             which(names(rxnList_form) == "r_0042_E4P_enzyme_specific_affinity_test2"), # isoenzyme specific kinetics w.r.t. substrate
-#             which(names(rxnList_form) == "r_0148-rm-t_0234-inh-uncomp")) # auto-regulation
+rxTests <- c(which(names(rxnList_form) == "r_0005-rm-t_metX-inh-uncomp_ultra"), # ultra-sensitive allostery
+             which(names(rxnList_form) == "r_0042_Y_F_inhibition_isoenzymeSpecific"), # isoenzyme specific regulation
+             which(names(rxnList_form) == "r_0042_E4P_enzyme_specific_affinity_test2"), # isoenzyme specific kinetics w.r.t. substrate
+             which(names(rxnList_form) == "r_0148-rm-t_0234-inh-uncomp"),# auto-regulation
+             which(names(rxnList_form) == "r_0250-rm-t_0219-inh-uncomp"),
+             which(names(rxnList_form) == "r_0211-rm-t_0234-inh-noncomp"),
+             which(names(rxnList_form) == "r_0250-cc")) 
 
-for(rxN in 1:length(rxnList_form)){
-#for(rxN in rxTests){  
+#for(rxN in 1:length(rxnList_form)){
+for(rxN in rxTests){  
   
   t_start = proc.time()[3]
   print(paste(names(rxnList_form)[rxN], "started", sep = " "))
@@ -362,7 +365,7 @@ for(rxN in 1:length(rxnList_form)){
       # log
       KcatExpression <- paste('(', paste(KcatEs_log[names(KcatEs_log) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]], collapse = " + "), ')', sep = "")
       isoenzymeO <- rxnEquations$l_occupancyEq_list[names(rxnEquations$occupancyEq_list) == isoenzyme]
-      isoenzymeO <- sub('^I', paste0(KcatExpression, '*'), isoenzymeO)
+      isoenzymeO <- sub('^I', paste(KcatExpression, '*', sep = ''), isoenzymeO)
       isoenzymeO <- sub(' \\+ 0$', '', isoenzymeO)
       
       KcatExpressions_log <- c(KcatExpressions_log, isoenzymeO)
@@ -370,7 +373,7 @@ for(rxN in 1:length(rxnList_form)){
       # linear
       KcatExpression <- paste('(', paste(KcatEs_linear[names(KcatEs_linear) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]], collapse = " + "), ')', sep = "")
       isoenzymeO <- rxnEquations$occupancyEq_list[names(rxnEquations$occupancyEq_list) == isoenzyme]
-      isoenzymeO <- sub('^I', paste0(KcatExpression, '*'), isoenzymeO)
+      isoenzymeO <- sub('^I', paste(KcatExpression, '*', sep = ''), isoenzymeO)
       isoenzymeO <- sub(' \\+ 0$', '', isoenzymeO)
       
       KcatExpressions_linear <- c(KcatExpressions_linear, isoenzymeO)
