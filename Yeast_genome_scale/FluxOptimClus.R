@@ -107,9 +107,6 @@ lik_calc_fittedSD <- function(proposed_params){
   }
   
   
-
-
-
 lik_calc_propagatedSD <- function(proposed_params){
   ### Determine the likelihood of predicted flux as a function of metabolite abundance and kinetics parameters relative to actual flux ###
   
@@ -210,6 +207,10 @@ metX_calc <- function(proposed_params, kineticPars, treatmentPCs){
 }
 
 
+shmatch <- function(x,y){
+  ### A quick (less efficient) replacement for data.table::chmatch to avoid its dependencies
+  sapply(x, function(z){which(y == z)[1]})
+  }
 
 
 ##@##@##@##@##@##@##@##@##@##@##@##@##@
@@ -218,14 +219,13 @@ metX_calc <- function(proposed_params, kineticPars, treatmentPCs){
 
 # test cases
 
-rxTests <- c(which(names(rxnList_form) == "r_0005-rm-t_metX-inh-uncomp_ultra"), # ultra-sensitive allostery
-             which(names(rxnList_form) == "r_0042_Y_F_inhibition_isoenzymeSpecific"), # isoenzyme specific regulation
-             which(names(rxnList_form) == "r_0042_E4P_enzyme_specific_affinity_test2"), # isoenzyme specific kinetics w.r.t. substrate
-             which(names(rxnList_form) == "r_0148-rm-t_0234-inh-uncomp")) # auto-regulation
+#rxTests <- c(which(names(rxnList_form) == "r_0005-rm-t_metX-inh-uncomp_ultra"), # ultra-sensitive allostery
+#             which(names(rxnList_form) == "r_0042_Y_F_inhibition_isoenzymeSpecific"), # isoenzyme specific regulation
+#             which(names(rxnList_form) == "r_0042_E4P_enzyme_specific_affinity_test2"), # isoenzyme specific kinetics w.r.t. substrate
+#             which(names(rxnList_form) == "r_0148-rm-t_0234-inh-uncomp")) # auto-regulation
 
-#for(rxN in c(1:length(rxnList_form))[names(rxnList_form) %in% c("r_1088-rm", "r_0250-rm-t_0674-inh-comp")]){
 for(rxN in 1:length(rxnList_form)){
-for(rxN in rxTests){  
+#for(rxN in rxTests){  
   
   t_start = proc.time()[3]
   print(paste(names(rxnList_form)[rxN], "started", sep = " "))
@@ -272,8 +272,8 @@ for(rxN in rxTests){
  
   #### Describe the relevent kinetic parameters ####
   
-  kineticPars <- data.frame(rel_spec = c(rownames(rxnSummary$enzymeComplexes), colnames(rxnSummary$rxnMet)), 
-                            SpeciesType = c(rep("Enzyme", times = nrow(rxnSummary$enzymeComplexes)), rep("Metabolite", times = ncol(rxnSummary$rxnMet))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
+  kineticPars <- data.frame(rel_spec = c(rownames(rxnSummary$enzymeComplexes), rxnSummary$rxnFormData$SubstrateID), 
+                            SpeciesType = c(rep("Enzyme", times = nrow(rxnSummary$enzymeComplexes)), rep("Metabolite", times = nrow(rxnSummary$rxnFormData))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
   kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste(paste("E", rxnSummary$rxnID, sep = "_"), kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"], sep = "_")
   kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
   kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metNames[names(rxnSummary$metNames) == x]}))
@@ -315,7 +315,7 @@ for(rxN in rxTests){
   }
   kineticPars$measured <- as.logical(kineticPars$measured)
   
-  met_abund[,!kineticPars$measured[kineticPars$rel_spec %in% colnames(met_abund)]] <- 0 # set missing data (unascertained) to invariant across conditions
+  met_abund[,!kineticPars$measured[shmatch(colnames(met_abund), kineticPars$modelName)]] <- 0 # set missing data (unascertained) to invariant across conditions
   
   flux <- rxnSummary$flux/median(abs(rxnSummary$flux$standardQP[rxnSummary$flux$standardQP != 0])) #flux, scaled to a prettier range
   
@@ -415,7 +415,7 @@ for(rxN in rxTests){
   
   #### Generate a prior for each non-linear kinetic parameter (i.e. not kcat) ####
   
-  kineticParPrior <- data.frame(distribution = rep(NA, times = length(kineticPars[,1])), par_1 = NA, par_2 = NA, par_3 = NA) 
+  kineticParPrior <- data.frame(distribution = rep(NA, times = nrow(kineticPars)), par_1 = NA, par_2 = NA, par_3 = NA) 
   
   # Options for these parameters are:
   # -@-@ unif: uniform in log-space: par_1 = lowerbound, par_2 = upperbound. draw in log2 space and exponentiate back to linear space
@@ -426,12 +426,13 @@ for(rxN in rxTests){
   kineticParPrior$distribution[kineticPars$SpeciesType %in% c("Metabolite", "keq")] <- "unif"
   kineticParPrior$par_1[kineticParPrior$distribution == "unif"] <- -10; kineticParPrior$par_2[kineticParPrior$distribution == "unif"] <- 10 # default value to 2^-10:2^10
   
-  for(exp_param in kineticPars$modelName[!is.na(kineticPars$measured) & kineticPars$measured == TRUE]){
-    kineticParPrior[kineticPars$modelName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(met_abund[,colnames(met_abund) == exp_param]) + c(-10,10)
+  for(exp_param in kineticPars$formulaName[!is.na(kineticPars$measured) & kineticPars$measured == TRUE]){
+    kineticParPrior[kineticPars$formulaName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(met_abund[,colnames(met_abund) == kineticPars$modelName[kineticPars$formulaName == exp_param & !is.na(kineticPars$formulaName)]]) + c(-10,10)
   }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
   
   # Prior for keq is centered around sum log(sub) - sum log(prod) - this deals with some species being in absolute space and others being absolute measurements
-  kineticParPrior[kineticPars$SpeciesType == "keq", c(2:3)] <- median(rowSums(met_abund * c(rep(1,n_c)) %*% t(rxnSummary$rxnFormData$Stoi))) + c(-10,10)
+  kineticParPrior[kineticPars$SpeciesType == "keq", c(2:3)] <- median(rowSums(met_abund * c(rep(1,n_c)) %*% t(rxnSummary$rxnStoi[shmatch(colnames(met_abund), names(rxnSummary$rxnStoi))]))) + c(-10,10)
+  
   
   # Specify prior for hill constants
   kineticParPrior$distribution[kineticPars$SpeciesType == "hillCoefficient"] <- "SpSl"
