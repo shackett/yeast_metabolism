@@ -62,8 +62,7 @@ par_draw <- function(updates){
     } else if(kineticParPrior$distribution[par_n] == "SpSl"){
       draw[par_n] <- ifelse(rbinom(1, 1, kineticParPrior$par_3[par_n]) == 0, 0, rnorm(1, kineticParPrior$par_1[par_n], kineticParPrior$par_2[par_n]))
     } else {
-      print("invalid distribution")
-      die
+      stop("invalid distribution")
     }
   }
   draw
@@ -219,16 +218,16 @@ shmatch <- function(x,y){
 
 # test cases
 
-rxTests <- c(which(names(rxnList_form) == "r_0005-rm-t_metX-inh-uncomp_ultra"), # ultra-sensitive allostery
-             which(names(rxnList_form) == "r_0042_Y_F_inhibition_isoenzymeSpecific"), # isoenzyme specific regulation
-             which(names(rxnList_form) == "r_0042_E4P_enzyme_specific_affinity_test2"), # isoenzyme specific kinetics w.r.t. substrate
-             which(names(rxnList_form) == "r_0148-rm-t_0234-inh-uncomp"),# auto-regulation
-             which(names(rxnList_form) == "r_0250-rm-t_0219-inh-uncomp"),
-             which(names(rxnList_form) == "r_0211-rm-t_0234-inh-noncomp"),
-             which(names(rxnList_form) == "r_0250-cc")) 
+#rxTests <- c(which(names(rxnList_form) == "r_0005-rm-t_metX-inh-uncomp_ultra"), # ultra-sensitive allostery
+#             which(names(rxnList_form) == "r_0042_Y_F_inhibition_isoenzymeSpecific"), # isoenzyme specific regulation
+#             which(names(rxnList_form) == "r_0042_E4P_enzyme_specific_affinity_test2"), # isoenzyme specific kinetics w.r.t. substrate
+#             which(names(rxnList_form) == "r_0148-rm-t_0234-inh-uncomp"),# auto-regulation
+#             which(names(rxnList_form) == "r_0250-rm-t_0219-inh-uncomp"),
+#             which(names(rxnList_form) == "r_0211-rm-t_0234-inh-noncomp"),
+#             which(names(rxnList_form) == "r_0250-cc")) 
 
-#for(rxN in 1:length(rxnList_form)){
-for(rxN in rxTests){  
+for(rxN in 1:length(rxnList_form)){
+#for(rxN in rxTests){  
   
   t_start = proc.time()[3]
   print(paste(names(rxnList_form)[rxN], "started", sep = " "))

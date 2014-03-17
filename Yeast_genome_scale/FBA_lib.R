@@ -989,6 +989,9 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   require(data.table)
   require(ggplot2)
+  require(RColorBrewer)
+  require(reshape2)
+  require(grid)
   
   #generate a list of four plots:
   #1: Flux predicted from FBA ~ GR
@@ -1100,14 +1103,152 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   output_plots$"Metabolite and enzyme abundance" <- ggplot(species_df, aes(x = DR, y = RA, col = condition)) + geom_path(size = 2, alpha = 0.7) + geom_errorbar(aes(ymin = LB, ymax = UB), size = 1, alpha = 0.7) +
     facet_wrap(~ variable, scale = "free_y") +
-    scatter_theme + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative/ absolute concentration")) +
+    scatter_theme + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative or absolute concentration")) +
     ggtitle("Metabolite and enzyme relative abundance") + scale_x_continuous("Dilution Rate (1/h)")
   
   output_plots$"Flux ~ species" <- ggplot(species_df, aes(y = (FLB + FUB)/2, x = 2^RA, ymin = FLB, ymax = FUB, xmin = 2^LB, xmax = 2^UB, col = condition)) + geom_path(size = 2, alpha = 0.7) +
     facet_wrap( ~ variable, scale = "free_x") + geom_point(aes(size = sqrt(DR)*14), alpha = 0.7) +
     geom_errorbar(size = 1) + geom_errorbarh(size = 1) + 
-    expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_x_continuous("Relative/absolute concentration") + 
-    ggtitle("Relationship between metabolite/enzyme levels and flux carried") + scale_y_continuous("Relative flux carried")
+    expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_x_continuous("Relative or absolute concentration") + 
+    ggtitle("Relationship between metabolite, enzyme levels and flux carried") + scale_y_continuous("Relative flux carried")
+  
+  #### Combining flux carried and species into a single faceted plot ####
+
+  species_df <- melt(cbind(all_species, condition = Chemoconds$name), id.vars = c("condition"), value.name = "RA")
+  species_df$SD <- melt(all_species_SD, value.name = "SD", measure.vars = colnames(all_species_SD))$SD
+  species_df <- data.table(species_df)
+  species_df[,metOrigin := if(variable %in% unname(run_rxn$rxnSummary$metNames)){
+    run_rxn$rxnSummary$originMet[chmatch(names(run_rxn$rxnSummary$metNames)[run_rxn$rxnSummary$metNames == variable], names(run_rxn$rxnSummary$originMet))]
+  }else{"rel"}, by = "variable"]
+  species_df[,LB :=  2^(RA - 2*SD),]
+  species_df[,UB :=  2^(RA + 2*SD),]
+  species_df[,RA :=  2^RA,]
+  
+  # first scale absolute units such that median is between 1&10
+  species_df[,units := as.character(if(all(metOrigin == "rel")){NA}else{
+    medianPower <- format(mean(abs(RA)), scientific = T)
+    regmatches(medianPower, regexpr('[-0-9]+$', medianPower))}),by = "variable"]
+  species_df$RA[!is.na(species_df$units)] <- species_df$RA[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
+  species_df$UB[!is.na(species_df$units)] <- species_df$UB[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
+  species_df$LB[!is.na(species_df$units)] <- species_df$LB[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
+  
+  # Assign species to substrates, products, regulators, enzymes
+  species_df$Pane <- NA
+  species_df$Pane[species_df$variable %in% run_rxn$kineticPars$commonName[chmatch(run_rxn$rxnSummary$rxnFormData$SubstrateID[run_rxn$rxnSummary$rxnFormData$Subtype == "substrate"], run_rxn$kineticPars$modelName)]] <- "Substrate"
+  species_df$Pane[species_df$variable %in% run_rxn$kineticPars$commonName[chmatch(run_rxn$rxnSummary$rxnFormData$SubstrateID[run_rxn$rxnSummary$rxnFormData$Subtype == "product"], run_rxn$kineticPars$modelName)]] <- "Product"
+  species_df$Pane[species_df$variable %in% run_rxn$kineticPars$commonName[chmatch(run_rxn$rxnSummary$rxnFormData$SubstrateID[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))], run_rxn$kineticPars$modelName)]] <- "Regulator"
+  species_df$Pane[species_df$variable %in% colnames(enzyme_abund)] <- "Enzyme"
+  species_df <- data.table(species_df)
+  
+  # scale relative units by arbitrary multiplier to align them as closely as possible to absolute data
+  for(a_Pane in unique(species_df$Pane)){
+    species_subset <- species_df[Pane == a_Pane,,]
+    if(any(species_subset$metOrigin == "abs")){
+      abs_mean <- mean(species_subset$RA[species_subset$metOrigin == "abs"])
+      for(relSpecies in unique(species_subset$variable[species_subset$metOrigin == "rel"])){
+        species_df$UB[species_df$variable == relSpecies] <- species_df$UB[species_df$variable == relSpecies] * abs_mean/mean(species_df$RA[species_df$variable == relSpecies])
+        species_df$LB[species_df$variable == relSpecies] <- species_df$LB[species_df$variable == relSpecies] * abs_mean/mean(species_df$RA[species_df$variable == relSpecies])
+        species_df$RA[species_df$variable == relSpecies] <- species_df$RA[species_df$variable == relSpecies] * abs_mean/mean(species_df$RA[species_df$variable == relSpecies])
+      }
+    }else{
+      rel_mean <- mean(species_subset$RA)
+      for(relSpecies in unique(species_subset$variable)){
+        species_df$UB[species_df$variable == relSpecies] <- species_df$UB[species_df$variable == relSpecies] * rel_mean/mean(species_df$RA[species_df$variable == relSpecies])
+        species_df$LB[species_df$variable == relSpecies] <- species_df$LB[species_df$variable == relSpecies] * rel_mean/mean(species_df$RA[species_df$variable == relSpecies])
+        species_df$RA[species_df$variable == relSpecies] <- species_df$RA[species_df$variable == relSpecies] * rel_mean/mean(species_df$RA[species_df$variable == relSpecies])
+      }
+    }
+  }
+  
+  # truncate upper bounds at max(RA) * 1.2
+  species_df$Truncated <- F
+  for(a_Pane in unique(species_df$Pane)){
+    species_subset <- species_df[Pane == a_Pane,,]
+    maxRA <- max(species_subset$RA)
+    if(any(species_subset$UB > maxRA*1.3)){
+      species_df$Truncated[species_df$UB > maxRA*1.3 & species_df$Pane == a_Pane] <- T
+      species_df$UB[species_df$UB > maxRA*1.3 & species_df$Pane == a_Pane] <-  maxRA*1.3
+      }
+    }
+  
+  flux_plot <- data.table(melt(flux_plot_comp, id.vars = c("condName", "FLUX", "LB", "UB"), measure.vars = "METHOD"))
+  flux_plot <- flux_plot[,-which(colnames(flux_plot) == "variable"), with = F]
+  flux_plot$variable <- as.character("Flux")
+  flux_plot$Truncated <- F
+  setnames(flux_plot, old = c("condName", "FLUX", "value", "variable"), new = c("condition", "RA", "variable", "Pane"))
+  
+  all_changes <- rbind(species_df[,chmatch(colnames(flux_plot), colnames(species_df)), with = F], flux_plot)
+  all_changes$Pane <- factor(all_changes$Pane, levels = c("Substrate", "Product", "Enzyme", "Regulator", "Flux"))
+  
+  all_changes$condition <- factor(all_changes$condition, levels = rownames(met_abund))
+  all_changes$Limitation <- factor(substr(all_changes$condition, 1, 1))
+  all_changes$pathGroup <- factor(paste(all_changes$Limitation, all_changes$variable, sep = "_"))
+  
+  # Define species color
+  
+  variable_colors <- data.frame(unique(as.data.frame(all_changes)[,c("variable", "Pane")]), color = NA)
+  
+  if(sum(variable_colors$Pane %in% c("Substrate", "Product")) > 8){
+    variable_colors$color[variable_colors$Pane %in% c("Substrate", "Product")] <- c(brewer.pal(8, "Dark2"), brewer.pal(8, "Pastel2")[c(1:(sum(variable_colors$Pane %in% c("Substrate", "Product")) - 8))])
+  }else{
+    variable_colors$color[variable_colors$Pane %in% c("Substrate", "Product")] <- brewer.pal(8, "Dark2")[1:sum(variable_colors$Pane %in% c("Substrate", "Product"))]
+    }
+  variable_colors$color[variable_colors$Pane == "Flux"] <- brewer.pal(8, "Set1")[1:2]
+  variable_colors$color[variable_colors$Pane == "Regulator"] <- rev(brewer.pal(9, "Reds"))[c(3,5,7,4,6)][1:sum(variable_colors$Pane == "Regulator")]
+  variable_colors$color[variable_colors$Pane == "Enzyme"] <- rev(brewer.pal(9, "YlGnBu"))[c(1,3,5,7,2,4,6,8,9)][1:sum(variable_colors$Pane == "Enzyme")]
+  
+  variable_colors <- variable_colors[chmatch(levels(all_changes$variable), as.character(variable_colors$variable)),]
+  
+  # Define species labels
+  
+  variable_labels <- data.frame(unique(as.data.frame(all_changes)[,c("variable", "Pane")]), units = NA, label = NA)
+  variable_labels$units <- species_df$units[chmatch(as.character(variable_labels$variable), as.character(species_df$variable))]
+  
+  abs_units <- data.frame(units = as.numeric(variable_labels$units[!is.na(variable_labels$units)]), referenceSymbol = NA, referencePower = NA, scaled =  NA)
+  if(nrow(abs_units) != 0){
+    abs_units[abs_units$units >= 0, 2:3] <- c("M", 0)
+    abs_units[between(abs_units$units, -3, -1, incbounds = T), 2:3] <- c("mM", -3)
+    abs_units[between(abs_units$units, -6, -4, incbounds = T), 2:3] <- c("uM", -6)
+    abs_units[abs_units$units < -7, 2:3] <- c("nM", 0)
+    
+    abs_units$scaled <- 10^(abs_units$units - as.numeric(abs_units$referencePower))
+    abs_units$scaled[abs_units$scaled == 1] <- ""
+    
+    variable_labels$units[!is.na(variable_labels$units)] <- paste0(abs_units$scaled, abs_units$referenceSymbol)
+    }
+  variable_labels$units[is.na(variable_labels$units)] <- "a.u."
+  
+  variable_labels$label <- paste0(variable_labels$variable, ' (', variable_labels$units, ')')
+  variable_labels$label[variable_labels$variable == "FBA"] <- "FBA-determined flux (a.u.)"
+  variable_labels$label[variable_labels$variable == "PAR"] <- "Observed flux (a.u.)"
+  
+  variable_labels$x = "P0.05"
+  variable_labels$y = NA
+  
+  for(a_Pane in unique(variable_labels$Pane)){
+    PaneMaxVal <- max(all_changes$UB[all_changes$Pane == a_Pane])
+    variable_labels$y[variable_labels$Pane == a_Pane] <- PaneMaxVal - c(1:sum(variable_labels$Pane == a_Pane))*PaneMaxVal*0.12
+    }
+  
+  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), 
+                    panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
+                    legend.position = "none", axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90),
+                    panel.margin = unit(1, "lines"))
+  
+  output_plots$"Flux and species" <- ggplot() + geom_path(data = all_changes, aes(x = condition, y = RA, col = variable, group = pathGroup), size = 2, alpha = 1) +
+    geom_pointrange(data = all_changes, aes(x = condition, y = RA, ymin = LB, ymax = UB, col = factor(variable)), size = 1.2, alpha = 0.5) +
+    geom_point(data = all_changes, aes(x = condition, y = RA, col = factor(variable)), size = 5) +
+    geom_text(data = all_changes[all_changes$Truncated,], aes(x = condition, y = UB, col = variable), label = "+", size = 8, alpha = 0.5) +
+    geom_text(data = variable_labels, aes(x = x, y = y, col = variable, label = label), hjust = 0) +
+    geom_vline(x = 0) + geom_hline(y = 0) +
+    facet_grid(Pane ~ ., scale = "free_y") +
+    scale_color_manual(labels = variable_colors$variable, values = variable_colors$color) +
+    ci_theme + scale_size_identity() +
+    scale_y_continuous("Concentration and Flux", expand = c(0,0)) + scale_x_discrete("Conditions") + expand_limits(y = 0)
+  
+  
+  
+  
   
   return(output_plots)
   }
