@@ -444,6 +444,15 @@ qStore[["lREGhill_RM"]] <- qvalue(reactionInfo$changeP[test_subset])
 qStore[["lREGhill_lREG"]] <- qvalue(reactionInfo$hillP[test_subset])
 reactionInfo$Qvalue[test_subset] <- mapply(function(x,y){max(x,y)}, x = qStore[["lREGhill_RM"]]$q, y = qStore[["lREGhill_lREG"]]$q)
 
+### Test proposed complex regulation (combine with literature tests to generate a more stable distribution of p-values
+manualRegulators <- read.delim('./companionFiles/manual_ComplexRegulation.txt')
+test_subset <- reactionInfo$rMech %in% manualRegulators$TechnicalName
+
+manualComplex_q <- qvalue(c(reactionInfo$changeP[test_subset], qStore[["lREGhill_RM"]]$pvalues))
+manualComplex_q$pvalues <- manualComplex_q$pvalues[1:sum(test_subset)]; manualComplex_q$qvalues <- manualComplex_q$qvalues[1:sum(test_subset)]
+qStore[["mREG"]] <- manualComplex_q
+reactionInfo$Qvalue[test_subset] <- qStore[["mREG"]]$q
+
 ### Assign a symbolic indicator of significance based on q-value
 
 signifCO <- data.frame(q_cutoff = c(0.1, 0.001, 0.00001), code = c("*", "**", "***"))
@@ -476,6 +485,7 @@ for(rxN in grep('act|inh', reactionInfo$modification)){
 }
   
 reactionInfo$Name[grep('rmCond', reactionInfo$modification)] <- sapply(reactionInfo$Name[grep('rmCond', reactionInfo$modification)], function(x){paste(x, "(zero flux reactions removed)")})
+reactionInfo$Name[reactionInfo$rMech %in% manualRegulators$TechnicalName] <- manualRegulators$DisplayName[chmatch(reactionInfo$rMech[reactionInfo$rMech %in% manualRegulators$TechnicalName], manualRegulators$TechnicalName)] # rescue manually named reactions
 
 reactionInfo$Name <- mapply(function(x,y){paste(x,y)}, x = reactionInfo$signifCode, y = reactionInfo$Name)
 
@@ -591,7 +601,7 @@ for(arxn in reactionInfo$rMech){
                              dotProduct = sum(flux_fit$fitted_flux$fitted/sqrt(sum((flux_fit$fitted_flux$fitted)^2)) * (run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2/sqrt(sum(((run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2)^2))))
   vector_match$angle <- acos(vector_match$dotProduct) * 180/pi
   
-  # Preformance based on fraction of FVA intervals captured by parameteric 95% CI #
+  # Performance based on fraction of FVA intervals captured by parameteric 95% CI #
   fluxIntervals <- data.frame(VLB = run_rxn$flux$FVAmin, VUB = run_rxn$flux$FVAmax, PLB = flux_fit$fitted_flux$fitted - 2*flux_fit$fitted_flux$SD, PUB = flux_fit$fitted_flux$fitted + 2*flux_fit$fitted_flux$SD)
   fluxOverlap <- (mapply(function(VUB, PUB){min(VUB, PUB)}, VUB = fluxIntervals$VUB, PUB = fluxIntervals$PUB) - mapply(function(VLB, PLB){max(VLB, PLB)}, VLB = fluxIntervals$VLB, PLB = fluxIntervals$PLB))/
     mapply(function(VI, PI){min(VI, PI)}, VI = fluxIntervals$VUB - fluxIntervals$VLB, PI = fluxIntervals$PUB - fluxIntervals$PLB)

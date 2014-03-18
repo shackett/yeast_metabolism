@@ -1106,11 +1106,11 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     scatter_theme + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative or absolute concentration")) +
     ggtitle("Metabolite and enzyme relative abundance") + scale_x_continuous("Dilution Rate (1/h)")
   
-  output_plots$"Flux ~ species" <- ggplot(species_df, aes(y = (FLB + FUB)/2, x = 2^RA, ymin = FLB, ymax = FUB, xmin = 2^LB, xmax = 2^UB, col = condition)) + geom_path(size = 2, alpha = 0.7) +
-    facet_wrap( ~ variable, scale = "free_x") + geom_point(aes(size = sqrt(DR)*14), alpha = 0.7) +
-    geom_errorbar(size = 1) + geom_errorbarh(size = 1) + 
-    expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_x_continuous("Relative or absolute concentration") + 
-    ggtitle("Relationship between metabolite, enzyme levels and flux carried") + scale_y_continuous("Relative flux carried")
+  output_plots$"Flux ~ species" <- ggplot(species_df, aes(x = (FLB + FUB)/2, y = 2^RA, xmin = FLB, xmax = FUB, ymin = 2^LB, ymax = 2^UB, col = condition)) + geom_path(size = 2, alpha = 0.7) +
+    facet_wrap( ~ variable, scale = "free_y") + geom_point(aes(size = sqrt(DR)*14), alpha = 0.7) +
+    geom_errorbar(size = 1, alpha = 0.7) + geom_errorbarh(size = 1, alpha = 0.7) +
+    expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous("Relative or absolute concentration") + 
+    ggtitle("Relationship between metabolite, enzyme levels and flux carried") + scale_x_continuous("Relative flux carried")
   
   #### Combining flux carried and species into a single faceted plot ####
 
@@ -1206,10 +1206,10 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   abs_units <- data.frame(units = as.numeric(variable_labels$units[!is.na(variable_labels$units)]), referenceSymbol = NA, referencePower = NA, scaled =  NA)
   if(nrow(abs_units) != 0){
-    abs_units[abs_units$units >= 0, 2:3] <- c("M", 0)
-    abs_units[between(abs_units$units, -3, -1, incbounds = T), 2:3] <- c("mM", -3)
-    abs_units[between(abs_units$units, -6, -4, incbounds = T), 2:3] <- c("uM", -6)
-    abs_units[abs_units$units < -7, 2:3] <- c("nM", 0)
+    abs_units[abs_units$units >= 0, 2] <- "M"; abs_units[abs_units$units >= 0, 3] <- 0
+    abs_units[between(abs_units$units, -3, -1, incbounds = T), 2] <- "mM"; abs_units[between(abs_units$units, -3, -1, incbounds = T), 3] <- -3
+    abs_units[between(abs_units$units, -6, -4, incbounds = T), 2] <- "uM"; abs_units[between(abs_units$units, -6, -4, incbounds = T), 3] <- -6
+    abs_units[abs_units$units < -7, 2] <- "nM"; abs_units[abs_units$units < -7, 3] <- -9
     
     abs_units$scaled <- 10^(abs_units$units - as.numeric(abs_units$referencePower))
     abs_units$scaled[abs_units$scaled == 1] <- ""
@@ -1247,29 +1247,28 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     scale_y_continuous("Concentration and Flux", expand = c(0,0)) + scale_x_discrete("Conditions") + expand_limits(y = 0)
   
   
-  
-  
-  
   return(output_plots)
   }
 
 
 likViolin <- function(par_likelihood, markovPars){
-    
-    ### show the distribution of likelihood values for each markov chain - similarity of their shapes is a good indication of convergence to the posterior
-    ### strong deviations should be corrected by decreasing autocorrelation (by decreasing how often a markov sample is saved) or increasing the lenght of burnin or number of samples
-    
-    boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-                           panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 60, vjust = 0.6), axis.line = element_blank(), strip.background = element_rect(fill = "darkseagreen2"),
-                           strip.text = element_text(size = 25, colour = "darkblue"))
-    
-    likRange <- range(par_likelihood$likelihood)
-    parList <- data.frame(x = 2, y = likRange[1] + c(likRange[2] - likRange[1])/10 * c(0:2), parameter = unname(mapply(function(x,y){paste(x, y, sep = ": ")}  , x = names(unlist(markovPars)), y = unname(unlist(markovPars)))))
-    
-    ggplot() + geom_violin(data = par_likelihood, aes(x = factor(index), y = likelihood), fill = "darkblue") + geom_text(data = parList, aes(x = x, y = y, label = parameter)) +
-      boxplot_theme + scale_x_discrete("Chain Number") + scale_y_continuous("Log-likelihood")
-    
-    }
+  
+  require(ggplot2)
+  
+  ### show the distribution of likelihood values for each markov chain - similarity of their shapes is a good indication of convergence to the posterior
+  ### strong deviations should be corrected by decreasing autocorrelation (by decreasing how often a markov sample is saved) or increasing the lenght of burnin or number of samples
+  
+  boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, angle = 60, vjust = 0.6), axis.line = element_blank(), strip.background = element_rect(fill = "darkseagreen2"),
+                         strip.text = element_text(size = 25, colour = "darkblue"))
+  
+  likRange <- range(par_likelihood$likelihood)
+  parList <- data.frame(x = 2, y = likRange[1] + c(likRange[2] - likRange[1])/10 * c(0:2), parameter = unname(mapply(function(x,y){paste(x, y, sep = ": ")}  , x = names(unlist(markovPars)), y = unname(unlist(markovPars)))))
+  
+  ggplot() + geom_violin(data = par_likelihood, aes(x = factor(index), y = likelihood), fill = "darkblue") + geom_text(data = parList, aes(x = x, y = y, label = parameter)) +
+    boxplot_theme + scale_x_discrete("Chain Number") + scale_y_continuous("Log-likelihood")
+  
+}
 
 
 hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
@@ -1581,12 +1580,28 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   occupancy_vals <- data.frame(met_abund, par_stack)
   
-  predOcc <- model.matrix(run_rxn$occupancyEq[["l_occupancyEq"]], data = occupancy_vals)[,1] #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-  enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  #occupany of enzymes * relative abundance of enzymes
+  kinetically_differing_isoenzymes <- any(names(run_rxn$occupancyEq[["l_occupancyExpression"]]) %in% rownames(run_rxn$rxnSummary$enzymeComplexes))
+  if(!(kinetically_differing_isoenzymes)){
+    predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+    enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  }else{
+    occEqtn_complex_match <- data.frame(complex = rownames(run_rxn$rxnSummary$enzymeComplexes), occEqtn = NA)
+    occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
+    occEqtn_complex_match$occEqtn[is.na(occEqtn_complex_match$occEqtn)] <- "other"
+    
+    enzyme_activity <- NULL
+    for(isoenzyme in names(run_rxn$occupancyEq[["l_occupancyExpression"]])){
+      predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]][[isoenzyme]], occupancy_vals)
+      enzyme_activity <- cbind(enzyme_activity, predOcc %*% t(rep(1, sum(occEqtn_complex_match$occEqtn == isoenzyme)))*2^enzyme_abund[,colnames(enzyme_abund) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]])
+    }
+  }
   
-  # point estimate of flux(M, E, par)
+  # fit flux ~ enzyme*occupancy using non-negative least squares (all enzymes have activity > 0, though negative flux can occur through occupancy)
+  # flux objective is set as the average of the minimal and maximal allowable flux flowing through the reaction at the optimal solution
   
-  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
+  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2) 
   
   # determine the sd of the fitted measures
   
@@ -1602,7 +1617,7 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   colnames(comp_partials) <- names(measured_partials)
   
   for(j in 1:ncol(comp_partials)){
-    comp_partials[,j] <- with(all_components ,eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
+    comp_partials[,j] <- with(all_components, eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
   }
   
   # calculate the fitted standard deviation after first finding the by-condition residual covariance matrix
@@ -1636,22 +1651,20 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   fit_summary$parametricFit <- fit_summary$TSS-sum((flux_fit$residuals)^2)
   
   ### using flux fitted using non-negative least squares regression, how much variance is explained ### metabolite abundances are corrected for whether the metabolite is a product (*-1) or reactant (*1)
-  NNLSmetab <- met_abund * -1*(rep(1, n_c) %*% t(unname(run_rxn$rxnSummary$rxnStoi)[chmatch(colnames(met_abund), names(run_rxn$rxnSummary$rxnStoi))]))
+  NNLSmetab <- 2^met_abund * -1*(rep(1, n_c) %*% t(unname(run_rxn$rxnSummary$rxnStoi)[chmatch(colnames(met_abund), names(run_rxn$rxnSummary$rxnStoi))]))
+  
   ### add potential activators and inhibitors
   if(length(run_rxn$rxnSummary$rxnFormData$Subtype[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))]) != 0){
     modifiers = data.frame(modifier = run_rxn$rxnSummary$rxnFormData$SubstrateID[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))], direction = ifelse(run_rxn$rxnSummary$rxnFormData$Type[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))] == "act", 1, -1))
-    
-    if(nrow(modifiers) > 1){print("fix code here to allow for multiple modifiers")}
-    
-    modifier_effect <- matrix(run_rxn$metabolites[,chmatch(modifiers$modifier, colnames(run_rxn$metabolites))])
-    colnames(modifier_effect) <- paste(c(modifiers$modifier, "mod"), collapse = "")
+    modifier_effect <- (2^run_rxn$metabolites)[,chmatch(modifiers$modifier, colnames(run_rxn$metabolites)),drop = F] * t(t(rep(1,n_c))) %*% modifiers$direction
+    colnames(modifier_effect) <- paste(modifiers$modifier, "mod", sep = "")
     NNLSmetab <- cbind(NNLSmetab, modifier_effect)
   }
   NNLSmetab <- NNLSmetab[,apply(NNLSmetab, 2, function(x){var(x) != 0})]
   
   if(all(avg_flux < 0)){
     
-    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, enzyme_abund)), -1*avg_flux)
+    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, 2^enzyme_abund)), -1*avg_flux)
     tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
   
@@ -1660,7 +1673,7 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
     
   }else{
     
-    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, enzyme_abund)), avg_flux)
+    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, 2enzyme_abund)), avg_flux)
     tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
     
