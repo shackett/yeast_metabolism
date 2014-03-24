@@ -997,7 +997,9 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   #1: Flux predicted from FBA ~ GR
   #2: Flux predicted from FBA and parametric form by condition
   #3: Relationship between metabolites/enzyme levels and condition
-  #4: Relationship between metabolite/enzyme levels and flux carried
+  #4: Relationship between metabolites/enzyme levels showing dynamic range
+  #5: Relationship between metabolite/enzyme levels and flux carried
+  #6: Flux, substrates, products, enzymes and regulators each get their own pane and are visualized together
   
   output_plots <- list()
   
@@ -1123,17 +1125,21 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   species_df <- melt(cbind(all_species, condition = Chemoconds$name), id.vars = c("condition"), value.name = "RA")
   species_df$SD <- melt(all_species_SD, value.name = "SD", measure.vars = colnames(all_species_SD))$SD
   species_df <- data.table(species_df)
-  species_df[,metOrigin := if(variable %in% unname(run_rxn$rxnSummary$metNames)){
-    run_rxn$rxnSummary$originMet[chmatch(names(run_rxn$rxnSummary$metNames)[run_rxn$rxnSummary$metNames == variable], names(run_rxn$rxnSummary$originMet))]
-  }else{"rel"}, by = "variable"]
+  species_df$metOrigin <- sapply(species_df$variable, function(x){
+    if(x %in% unname(run_rxn$rxnSummary$metNames)){
+      run_rxn$rxnSummary$originMet[chmatch(names(run_rxn$rxnSummary$metNames)[run_rxn$rxnSummary$metNames == x], names(run_rxn$rxnSummary$originMet))]
+    }else{
+     "rel" 
+    }
+  })
   species_df[,LB :=  2^(RA - 2*SD),]
   species_df[,UB :=  2^(RA + 2*SD),]
   species_df[,RA :=  2^RA,]
   
-  # first scale absolute units such that median is between 1&10
+  # first scale absolute units by powers of 10 such that mean is between 1&10
   species_df[,units := as.character(if(all(metOrigin == "rel")){NA}else{
-    medianPower <- format(mean(abs(RA)), scientific = T)
-    regmatches(medianPower, regexpr('[-0-9]+$', medianPower))}),by = "variable"]
+    meanPower <- format(mean(abs(RA)), scientific = T)
+    regmatches(meanPower, regexpr('[-0-9]+$', meanPower))}),by = "variable"]
   species_df$RA[!is.na(species_df$units)] <- species_df$RA[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
   species_df$UB[!is.na(species_df$units)] <- species_df$UB[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
   species_df$LB[!is.na(species_df$units)] <- species_df$LB[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
@@ -1227,6 +1233,9 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   variable_labels$label <- paste0(variable_labels$variable, ' (', variable_labels$units, ')')
   variable_labels$label[variable_labels$variable == "FBA"] <- "Observed flux"
   variable_labels$label[variable_labels$variable == "PAR"] <- "Michaelis-Menten flux (95% CI)"
+  tmp <- variable_labels$y[variable_labels$variable == "FBA"]
+  variable_labels$y[variable_labels$variable == "FBA"] <- variable_labels$y[variable_labels$variable == "PAR"]
+  variable_labels$y[variable_labels$variable == "PAR"] <- tmp
   
   variable_labels$x = "P0.05"
   variable_labels$y = NA
@@ -1471,6 +1480,8 @@ hillPlot <- function(run_rxn){
         positive_summary <- data.table(enzyme = names(positive_enzyme_groups), group = positive_enzyme_groups)
         positive_summary[,PTcorr := positive_enzymes[names(positive_enzymes) == enzyme], by = "enzyme"]
         positive_summary[,specie := paste(group, enzyme, sep = "_")]
+        
+        MLdata[,MLdata[,q0.025 := get("0.025")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm],]
         
         TR <- MLdata[,list(q0.025 = get("0.025")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm,
                            q0.5 = get("0.5")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm,
@@ -1946,6 +1957,7 @@ reactionProperties <-  function(){
   all_species <- all_species[,chmatch(names(elast_partials), colnames(all_species))]
   
   # calculate sensitivities #  partial F / partial S
+  kinetically_differing_isoenzymes <- any(names(run_rxn$occupancyEq[["l_occupancyExpression"]]) %in% rownames(run_rxn$rxnSummary$enzymeComplexes))
   mcmc_elasticity <- sapply(1:nrow(dist_pars), function(x){
     
     pars <- dist_pars[x,]
@@ -1953,8 +1965,23 @@ reactionProperties <-  function(){
     
     occupancy_vals <- data.frame(met_abund, dist_par_stack)
     
-    predOcc <- model.matrix(run_rxn$occupancyEq[["l_occupancyEq"]], data = occupancy_vals)[,1]
-    enzyme_activity <- (predOcc %*% t(rep(1, sum(run_rxn$all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund
+    #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+    #occupany of enzymes * relative abundance of enzymes
+    
+    if(!(kinetically_differing_isoenzymes)){
+      predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+      enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+    }else{
+      occEqtn_complex_match <- data.frame(complex = rownames(run_rxn$rxnSummary$enzymeComplexes), occEqtn = NA)
+      occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
+      occEqtn_complex_match$occEqtn[is.na(occEqtn_complex_match$occEqtn)] <- "other"
+      
+      enzyme_activity <- NULL
+      for(isoenzyme in names(run_rxn$occupancyEq[["l_occupancyExpression"]])){
+        predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]][[isoenzyme]], occupancy_vals)
+        enzyme_activity <- cbind(enzyme_activity, predOcc %*% t(rep(1, sum(occEqtn_complex_match$occEqtn == isoenzyme)))*2^enzyme_abund[,colnames(enzyme_abund) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]])
+      }
+    }
     
     # Calculate Vmax as during standard fitting
     
