@@ -1438,112 +1438,6 @@ hillPlot <- function(run_rxn){
 
 
 
-  transcriptional_responsiveness <- function(){
-    
-    ### Generate a plot which compare enzyme levels to transcript levels across these conditons ###
-    ### Also, relate expected change in flux to transcriptional control ###
-    ### TR = R2fm * R2pt * ML
-    ### R2fm - Fraction of variance in flux accounted for by reaction mechanism
-    ### R2pt - Fraction of variance in protein abundance due to linear changes in transcripts
-    ### ML - Metabolic leverage - a hypothesis regarding the anticipated instantaneous change in flux when a protein is altered
-    
-    require(ggplot2)
-    require(data.table)
-    
-    ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
-                          panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
-                          legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
-        
-    TRplots <- list()
-    
-    #### Determine TR ####
-    
-    # Determine whether the enzyme can be catalyzed by a single enzyme (as opposed to a complex)
-    enzyme_groups <- run_rxn$rxnSummary$enzGroup
-    enzyme_groups <- enzyme_groups[enzyme_groups %in% names(table(enzyme_groups))[table(enzyme_groups) == 1]]
-    
-    R2fm <- c(flux_fit$fit_summary$parPearson_c^2)
-    
-    PTsubset <- PTcomparison[names(PTcomparison) %in% unique(names(enzyme_groups))]
-    if(length(PTsubset) != 0){
-      
-      PTcorr <- unlist(lapply(PTsubset, function(x){x$PTcorr}))
-      
-      ### Determine transcriptional effectiveness for reactions where the reaction mechanism is predictive and transcriptional regulation of proteins has been demonstrated ###
-      
-      if(flux_fit$fit_summary$parPearson_c > 0 & any(PTcorr > 0)){
-        
-        positive_enzymes <- PTcorr[PTcorr > 0]
-        
-        positive_enzyme_groups <- enzyme_groups[names(enzyme_groups) %in% names(positive_enzymes)]
-        
-        positive_summary <- data.table(enzyme = names(positive_enzyme_groups), group = positive_enzyme_groups)
-        positive_summary[,PTcorr := positive_enzymes[names(positive_enzymes) == enzyme], by = "enzyme"]
-        positive_summary[,specie := paste(group, enzyme, sep = "_")]
-        
-        MLdata[,MLdata[,q0.025 := get("0.025")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm],]
-        
-        TR <- MLdata[,list(q0.025 = get("0.025")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm,
-                           q0.5 = get("0.5")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm,
-                           q0.975 = get("0.975")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm), 
-                     by = c("specie", "condition", "reaction")]
-        TR[,TU := 1 - positive_summary$PTcorr[positive_summary$specie == specie]^2, by = "specie"] #transcriptional uncertainty
-        TR[,MU := 1 - R2fm,] # mechanistic uncertainty
-        TR[,limitation := substr(condition, 1, 1), by = "condition"]
-        TR$limitation <- factor(TR$limitation, levels = c("P", "C", "N", "L", "U"))
-        
-        
-        TRcompliment <- TR[,list(source = "transcriptional uncertainty", fraction = (1 - (1-TU)*(1-MU))*TU/(TU + MU), alpha = 0.6), by = c("specie", "condition")]
-        TRcompliment <- rbind(TRcompliment, TR[,list(source = "mechanistic uncertainty", fraction = (1 - (1-TU)*(1-MU))*MU/(TU + MU), alpha = 0.6), by = c("specie", "condition")])
-        TRcompliment <- rbind(TRcompliment, TR[,list(source = "total controllable", fraction = (1-TU)*(1-MU), alpha = 0), by = c("specie", "condition")])
-        TRcompliment$source <- factor(TRcompliment$source, levels = c("total controllable", "mechanistic uncertainty", "transcriptional uncertainty"))
-        TRcompliment$condition <- factor(TRcompliment$condition, levels = levels(TR$condition))
-        
-        TRcomp_label <- TRcompliment[condition == "N0.16", list(condition = "N0.16", source = "mechanistic uncertainty", y = fraction[source == "total controllable"]+0.04), by = "specie"]
-        TRcomp_label <- rbind(TRcomp_label, TRcompliment[condition == "N0.16", list(condition = "N0.16", source = "transcriptional uncertainty", y = sum(fraction[source %in% c("mechanistic uncertainty", "total controllable")])+0.04), by = "specie"])
-        
-        TRplots$Plots$"Transcriptional Responsiveness" <- ggplot(data = TR, aes(x = condition)) + geom_bar(data = TRcompliment, aes(y = fraction, fill = source, alpha = alpha), stat = "bin") + facet_wrap(~specie) +
-          scale_alpha_identity("") + geom_pointrange(data = TR, aes(ymin = q0.025, y = q0.5, ymax = q0.975, color = limitation), size = 1) +
-          geom_text(data = TRcomp_label, aes(label = source, y = y), size = 8) + ci_theme + scale_color_brewer("", palette = "Set1") +
-          scale_y_continuous("Predicted Transcriptional Responsiveness", expand = c(0,0), labels = percent_format()) + scale_fill_brewer("Source of Departure", palette = "Set2") +
-          ggtitle("Flux responsiveness to transcriptional changes") + scale_x_discrete("Nutrient Condition")
-        
-        TRplots$TR <- TR
-      
-      }
-    }
-    
-    #### Generate Plots comparing proteins and transcripts ####
-    
-    scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
-                           panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
-                           legend.text = element_text(size = 20, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
-    
-    
-    enzyme_groups <- run_rxn$rxnSummary$enzGroup
-    PTsubset <- PTcomparison[names(PTcomparison) %in% unique(names(enzyme_groups))]
-    
-    if(length(PTsubset) != 0){
-      
-      PTdt <- data.table(melt(lapply(PTsubset, function(x){
-        x$PTabund
-      }), id.vars = "Condition"))
-      setnames(PTdt, c("L1", "variable", "value"), c("Gene", "Specie", "Relative Abundance"))
-      PTdt$Limitation <- factor(substr(PTdt$Condition, 1, 1), levels = c("P", "C", "N", "L", "U"))
-      PTdt$Condition <- factor(PTdt$Condition, levels = levels(MLdata$condition))
-      
-      TRplots$Plots$"Enzyme and Transcript Levels" <- ggplot(PTdt, aes(x = Condition, y = get("Relative Abundance"), color = Limitation, group = Limitation)) + geom_path(size = 2) + geom_point(size = 5) +
-        facet_grid(Specie ~ Gene) + scatter_theme +
-        scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2]~" Relative Abundance")) +
-        scale_x_discrete("Nutrient Condition") + ggtitle('Comparison of transcripts, \n enzymes and their ratio')
-      
-      }
-    
-    return(TRplots)
-    
-    }
-
-
 flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   ### Look at the MLE parameter set - the posterior sample with the highest likelihood ###
@@ -2101,6 +1995,112 @@ reactionPropertiesPlots <- function(reaction_plots){
     scale_fill_discrete() + facet_wrap(~ specie, ncol = 2)
   
   return(output_plots)
+  
+}
+
+
+transcriptional_responsiveness <- function(){
+  
+  ### Generate a plot which compare enzyme levels to transcript levels across these conditons ###
+  ### Also, relate expected change in flux to transcriptional control ###
+  ### TR = R2fm * R2pt * ML
+  ### R2fm - Fraction of variance in flux accounted for by reaction mechanism
+  ### R2pt - Fraction of variance in protein abundance due to linear changes in transcripts
+  ### ML - Metabolic leverage - a hypothesis regarding the anticipated instantaneous change in flux when a protein is altered
+  
+  require(ggplot2)
+  require(data.table)
+  
+  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+                    panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
+                    legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
+  
+  TRplots <- list()
+  
+  #### Determine TR ####
+  
+  # Determine whether the enzyme can be catalyzed by a single enzyme (as opposed to a complex)
+  enzyme_groups <- run_rxn$rxnSummary$enzGroup
+  enzyme_groups <- enzyme_groups[enzyme_groups %in% names(table(enzyme_groups))[table(enzyme_groups) == 1]]
+  
+  R2fm <- c(flux_fit$fit_summary$parPearson_c^2)
+  
+  PTsubset <- PTcomparison[names(PTcomparison) %in% unique(names(enzyme_groups))]
+  if(length(PTsubset) != 0){
+    
+    PTcorr <- unlist(lapply(PTsubset, function(x){x$PTcorr}))
+    
+    ### Determine transcriptional effectiveness for reactions where the reaction mechanism is predictive and transcriptional regulation of proteins has been demonstrated ###
+    
+    if(flux_fit$fit_summary$parPearson_c > 0 & any(PTcorr > 0)){
+      
+      positive_enzymes <- PTcorr[PTcorr > 0]
+      
+      positive_enzyme_groups <- enzyme_groups[names(enzyme_groups) %in% names(positive_enzymes)]
+      
+      positive_summary <- data.table(enzyme = names(positive_enzyme_groups), group = positive_enzyme_groups)
+      positive_summary[,PTcorr := positive_enzymes[names(positive_enzymes) == enzyme], by = "enzyme"]
+      positive_summary[,specie := paste(group, enzyme, sep = "_")]
+      
+      MLdata_subset <- reaction_plots$ML_summary
+      MLdata_subset$specie <- as.character(MLdata_subset$specie)
+      
+      TR <- MLdata_subset[,list(q0.025 = get("0.025")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm,
+                                q0.5 = get("0.5")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm,
+                                q0.975 = get("0.975")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm), 
+                          by = c("specie", "condition", "reaction")]
+      TR[,TU := 1 - positive_summary$PTcorr[positive_summary$specie == specie]^2, by = "specie"] #transcriptional uncertainty
+      TR[,MU := 1 - R2fm,] # mechanistic uncertainty
+      TR$limitation <- substr(levels(TR$condition)[TR$condition], 1, 1)
+      TR$limitation <- factor(TR$limitation, levels = c("P", "C", "N", "L", "U"))
+      
+      TRcompliment <- TR[,list(source = "transcriptional uncertainty", fraction = (1 - (1-TU)*(1-MU))*TU/(TU + MU), alpha = 0.6), by = c("specie", "condition")]
+      TRcompliment <- rbind(TRcompliment, TR[,list(source = "mechanistic uncertainty", fraction = (1 - (1-TU)*(1-MU))*MU/(TU + MU), alpha = 0.6), by = c("specie", "condition")])
+      TRcompliment <- rbind(TRcompliment, TR[,list(source = "total controllable", fraction = (1-TU)*(1-MU), alpha = 0), by = c("specie", "condition")])
+      TRcompliment$source <- factor(TRcompliment$source, levels = c("total controllable", "mechanistic uncertainty", "transcriptional uncertainty"))
+      TRcompliment$condition <- factor(TRcompliment$condition, levels = levels(TR$condition))
+      
+      TRcomp_label <- TRcompliment[condition == "N0.16", list(condition = "N0.16", source = "mechanistic uncertainty", y = fraction[source == "total controllable"]+0.04), by = "specie"]
+      TRcomp_label <- rbind(TRcomp_label, TRcompliment[condition == "N0.16", list(condition = "N0.16", source = "transcriptional uncertainty", y = sum(fraction[source %in% c("mechanistic uncertainty", "total controllable")])+0.04), by = "specie"])
+      
+      TRplots$Plots$"Transcriptional Responsiveness" <- ggplot(data = TR, aes(x = condition)) + geom_bar(data = TRcompliment, aes(y = fraction, fill = source, alpha = alpha), stat = "bin") + facet_wrap(~specie) +
+        scale_alpha_identity("") + geom_pointrange(data = TR, aes(ymin = q0.025, y = q0.5, ymax = q0.975, color = limitation), size = 1) +
+        geom_text(data = TRcomp_label, aes(label = source, y = y), size = 8) + ci_theme + scale_color_brewer("", palette = "Set1") +
+        scale_y_continuous("Predicted Transcriptional Responsiveness", expand = c(0,0), labels = percent_format()) + scale_fill_brewer("Source of Departure", palette = "Set2") +
+        ggtitle("Flux responsiveness to transcriptional changes") + scale_x_discrete("Nutrient Condition")
+      
+      TRplots$TR <- TR
+      
+    }
+  }
+  
+  #### Generate Plots comparing proteins and transcripts ####
+  
+  scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+                         panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
+                         legend.text = element_text(size = 20, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
+  
+  
+  enzyme_groups <- run_rxn$rxnSummary$enzGroup
+  PTsubset <- PTcomparison[names(PTcomparison) %in% unique(names(enzyme_groups))]
+  
+  if(length(PTsubset) != 0){
+    
+    PTdt <- data.table(melt(lapply(PTsubset, function(x){
+      x$PTabund
+    }), id.vars = "Condition"))
+    setnames(PTdt, c("L1", "variable", "value"), c("Gene", "Specie", "Relative Abundance"))
+    PTdt$Limitation <- factor(substr(PTdt$Condition, 1, 1), levels = c("P", "C", "N", "L", "U"))
+    PTdt$Condition <- factor(PTdt$Condition, levels = levels(MLdata$condition))
+    
+    TRplots$Plots$"Enzyme and Transcript Levels" <- ggplot(PTdt, aes(x = Condition, y = get("Relative Abundance"), color = Limitation, group = Limitation)) + geom_path(size = 2) + geom_point(size = 5) +
+      facet_grid(Specie ~ Gene) + scatter_theme +
+      scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2]~" Relative Abundance")) +
+      scale_x_discrete("Nutrient Condition") + ggtitle('Comparison of transcripts, \n enzymes and their ratio')
+    
+  }
+  
+  return(TRplots)
   
 }
 
