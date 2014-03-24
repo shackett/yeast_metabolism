@@ -1083,7 +1083,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   }
   
   if(any(colnames(all_species) != colnames(all_species_SD))){
-    print(paste(arxn, "has misaligned metabolite point-estimates and standard deviations"))
+    stop(paste(arxn, "has misaligned metabolite point-estimates and standard deviations"))
     }
   
   colnames(all_species) <- colnames(all_species_SD) <- run_rxn$all_species$commonName[chmatch(colnames(all_species), run_rxn$all_species$rel_spec)]
@@ -1091,23 +1091,29 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   #all_species_tab <- run_rxn$all_species[colSums(all_species != 1) != 0,]
   #all_species <- all_species[,colSums(all_species != 1) != 0]
   
-  
   scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "right", 
-      panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
-     legend.text = element_text(size = 20, face = "bold"), axis.text = element_text(color = "black"), legend.key = element_rect(fill = "white"))
- 
+                         panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
+                         legend.text = element_text(size = 20, face = "bold"), axis.text = element_text(color = "black"), legend.key = element_rect(fill = "white"), panel.border = element_rect(colour = "black", fill = NA))
+  
   species_df <- melt(cbind(all_species, data.frame(condition = Chemoconds$Limitation, DR = Chemoconds$actualDR, FLB = flux$FVAmin, FUB = flux$FVAmax)), id.vars = c("condition", "DR", "FLB", "FUB"), value.name = "RA")
   species_df$SD <- melt(all_species_SD, value.name = "SD", measure.vars = colnames(all_species_SD))$SD
   species_df$LB <- species_df$RA - 2*species_df$SD
   species_df$UB <- species_df$RA + 2*species_df$SD
   
+  scatter_theme_facetRotate <- scatter_theme + theme(strip.text.y = element_text(angle = 0))
+  
   output_plots$"Metabolite and enzyme abundance" <- ggplot(species_df, aes(x = DR, y = RA, col = condition)) + geom_path(size = 2, alpha = 0.7) + geom_errorbar(aes(ymin = LB, ymax = UB), size = 1, alpha = 0.7) +
-    facet_wrap(~ variable, scale = "free_y") +
+    facet_wrap(~ variable, scale = "free_y", ncol = 2) +
     scatter_theme + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative or absolute concentration")) +
     ggtitle("Metabolite and enzyme relative abundance") + scale_x_continuous("Dilution Rate (1/h)")
   
+  output_plots$"Metabolite and enzyme fold changes" <- ggplot(species_df, aes(x = DR, y = RA, col = condition)) + geom_path(size = 2, alpha = 0.7) + geom_errorbar(aes(ymin = LB, ymax = UB), size = 1, alpha = 0.7) +
+    facet_grid(variable ~ ., scale = "free_y", space = "free_y") +
+    scatter_theme_facetRotate + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2] ~ "relative or absolute concentration")) +
+    ggtitle("Metabolite and enzyme relative abundance") + scale_x_continuous("Dilution Rate (1/h)", expand = c(0.01, 0))
+  
   output_plots$"Flux ~ species" <- ggplot(species_df, aes(x = (FLB + FUB)/2, y = 2^RA, xmin = FLB, xmax = FUB, ymin = 2^LB, ymax = 2^UB, col = condition)) + geom_path(size = 2, alpha = 0.7) +
-    facet_wrap( ~ variable, scale = "free_y") + geom_point(aes(size = sqrt(DR)*14), alpha = 0.7) +
+    facet_wrap( ~ variable, scale = "free_y", ncol = 2) + geom_point(aes(size = sqrt(DR)*14), alpha = 0.7) +
     geom_errorbar(size = 1, alpha = 0.7) + geom_errorbarh(size = 1, alpha = 0.7) +
     expand_limits(x = 0, y = 0) + scatter_theme + theme(axis.text.x = element_text(angle = 90)) + scale_size_identity() + scale_color_brewer("", palette = "Set1") + scale_y_continuous("Relative or absolute concentration") + 
     ggtitle("Relationship between metabolite, enzyme levels and flux carried") + scale_x_continuous("Relative flux carried")
@@ -1219,8 +1225,8 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   variable_labels$units[is.na(variable_labels$units)] <- "a.u."
   
   variable_labels$label <- paste0(variable_labels$variable, ' (', variable_labels$units, ')')
-  variable_labels$label[variable_labels$variable == "FBA"] <- "FBA-determined flux (a.u.)"
-  variable_labels$label[variable_labels$variable == "PAR"] <- "Observed flux (a.u.)"
+  variable_labels$label[variable_labels$variable == "FBA"] <- "Observed flux"
+  variable_labels$label[variable_labels$variable == "PAR"] <- "Michaelis-Menten flux (95% CI)"
   
   variable_labels$x = "P0.05"
   variable_labels$y = NA
@@ -1673,7 +1679,7 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
     
   }else{
     
-    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, 2enzyme_abund)), avg_flux)
+    nnls_fit <- nnls(as.matrix(data.frame(NNLSmetab, 2^enzyme_abund)), avg_flux)
     tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
     

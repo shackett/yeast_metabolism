@@ -560,7 +560,7 @@ MLdata <- NULL
 TRdata <- NULL
 
 t_start = proc.time()[3]
-
+arxn <- "r_0042_Y_F_inhibition_isoenzymeSpecific"
 for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
