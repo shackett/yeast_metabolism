@@ -1,13 +1,18 @@
 #### This script is a pared down version of Pep_Prot.Rnw focusing on direct comparisons of proteomic and transcriptional data ####
 
+### Packages ####
+library(impute)
+library(missMDA)
+library(grid)
+library(data.table)
+library(ggplot2)
+library(reshape2)
+
 setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/Protein_Transcript_Compare")
 load("../../ChemicalSpeciesQuant/Proteomics/EMoutputDeg.Rdata")
 load("../../ChemicalSpeciesQuant/Proteomics/EMimport.Rdata")
 source("../../ChemicalSpeciesQuant/Proteomics/pep_library.R")
 
-### Packages ####
-library(impute)
-library(missMDA)
 
 prot_abund_final <- prot_abund
 mixing_fract[likdiff_df$matched == "Divergent-trend",] <- 0
@@ -128,8 +133,11 @@ PTscatter_plotter <- PTscatter_plotter + geom_hex(bins = 60)
 PTscatter_plotter
 ggsave(plot = PTscatter_plotter, "Output/globalPTcomp.pdf", width = 10, height = 10)
 
-table(PTscatterDF$Protein > 0, PTscatterDF$Transcript > 0)
-
+Ptaggreement_all <- table(PTscatterDF$Protein > 0, PTscatterDF$Transcript > 0)
+sum(diag(Ptaggreement_all)) / sum(Ptaggreement_all)
+PTagreement <- table(PTscatterDF$Protein[abs(PTscatterDF$Transcript) > 1] > 0,
+      PTscatterDF$Transcript[abs(PTscatterDF$Transcript) > 1] > 0)
+sum(diag(PTagreement)) / sum(PTagreement)
 
 #### Compare protein RA to transcript RA on a gene-by-gene basis ####
 
@@ -187,14 +195,35 @@ ggsave(plot = cor_plot, "Output/PTspearmansSig.pdf", width = 12, height = 12)
 
 
 cond_reorder <- c(16:20, 1:5, 11:15, 6:10, 21:25)
-ptDiff <- proteomics_reduced[,cond_reorder] - shared_trans_pool[,cond_reorder]
+ptDiff <- proteomics_reduced[,cond_reorder] - transcript_brauer_reduced[,cond_reorder]
 ptDiff <- ptDiff - apply(ptDiff, 1, mean)
 
 ### Save so that dendrogram of PTdiff can be generated and each matrix can be kmeans clustered so that shared motifs can be found
 
 write.output(ptDiff, "Output/coclust_ptdiff.tsv")
-write.output(proteomics_reduced, "Output/proteinRA.tsv")
-write.output(transcript_brauer_reduced, "Output/transcriptRA.tsv")
+write.output(proteomics_reduced[,cond_reorder], "Output/proteinRA.tsv")
+write.output(transcript_brauer_reduced[,cond_reorder], "Output/transcriptRA.tsv")
+
+#### Generate a list of by-gene comparisons of transcripts and proteins ####
+
+PTcomparison <- list()
+
+for(i in 1:nrow(proteomics_reduced)){
+  Gene = rownames(proteomics_reduced)[i]
+  
+  PTdt <- data.table(Condition = toupper(colnames(proteomics_reduced)[cond_reorder]), Protein = proteomics_reduced[i,cond_reorder], Transcript = transcript_brauer_reduced[i,cond_reorder])
+  PTdt[,Proteins_per_Transcript := Protein - Transcript,]
+  
+  corrected_corr <- cor(PTdt$Protein, PTdt$Transcript, method = "pearson")/sqrt(var(PTdt$Protein)/(var(PTdt$Protein) + median(squared_resid[rownames(squared_resid) == Gene,], na.rm = T)))
+  corrected_corr <- ifelse(corrected_corr > 0, min(corrected_corr, 1), max(corrected_corr, -1))
+  
+  PTcomparison[[Gene]]$PTabund <- PTdt
+  PTcomparison[[Gene]]$PTcorr <- corrected_corr
+  
+  }
+
+save(PTcomparison, file = "../companionFiles/PTcomparison_list.Rdata")
+
 
 
 ####
