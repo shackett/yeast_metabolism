@@ -1,5 +1,9 @@
 #### This script is a pared down version of Pep_Prot.Rnw focusing on direct comparisons of proteomic and transcriptional data ####
 
+setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/Protein_Transcript_Compare")
+
+options(stringsAsFactors = F)
+
 ### Packages ####
 library(impute)
 library(missMDA)
@@ -8,7 +12,6 @@ library(data.table)
 library(ggplot2)
 library(reshape2)
 
-setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/Protein_Transcript_Compare")
 load("../../ChemicalSpeciesQuant/Proteomics/EMoutputDeg.Rdata")
 load("../../ChemicalSpeciesQuant/Proteomics/EMimport.Rdata")
 source("../../ChemicalSpeciesQuant/Proteomics/pep_library.R")
@@ -50,9 +53,9 @@ impute_abund <- impute_abund - apply(impute_abund, 1, mean)
 
 #### Load Transcriptional data ####
 
-transcript_brauer <- read.delim("../../ChemicalSpeciesQuant/brauer-microarray/Brauer_2008.pcl") # supplemental data in Brauer et al. 2008
-rownames(transcript_brauer) <- transcript_brauer$SYSTEMATIC_NAME
-transcript_brauer <- transcript_brauer[-1,-c(1:3)]
+transcript_brauer <- read.delim("dilution_rate_00_raw.cdt") # supplemental data in Brauer et al. 2008
+rownames(transcript_brauer) <- transcript_brauer$YORF
+transcript_brauer <- transcript_brauer[-1,-c(1:5)]
 
 #remove genes with many missing values
 #impute missing values with KNN imputation (as per original Brauer paper)
@@ -75,7 +78,7 @@ genes_to_compare <- rownames(impute_abund)[rownames(impute_abund) %in% rownames(
 
 proteomics_reduced <- impute_abund[chmatch(genes_to_compare, rownames(impute_abund)),]
 transcript_brauer_reduced <- transcript_brauer[chmatch(genes_to_compare, rownames(transcript_brauer)),]
-  
+all(rownames(proteomics_reduced) == rownames(transcript_brauer_reduced))
 
 #load true dilution rates for each of the proteomics samples
 
@@ -125,12 +128,11 @@ hex_breaks <- c(1,2,4,8,16,32,64,125,250,500)
 #hex_breaks <- round(exp(seq(0, log(hex_bin_max), by = log(hex_bin_max)/n_hex_breaks)))
 
 hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "gray90"), legend.position = "top", 
-  panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line"), axis.text = element_text(color = "black")) 
-                           
+                   panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.width = unit(6, "line"), axis.text = element_text(color = "black")) 
+
 PTscatter_plotter <- ggplot(cbind(PTscatterDF, z = 1), aes(x = Protein, y = Transcript, z = z)) + scale_x_continuous("Relative protein abundance", expand = c(0.02,0.02)) + scale_y_continuous("Relative transcript abundance", expand = c(0.02,0.02)) + 
   scale_fill_gradient(name = "Counts", low = "black", high = "firebrick1", trans = "log", breaks = hex_breaks, labels = hex_breaks) + hex_theme
 PTscatter_plotter <- PTscatter_plotter + geom_hex(bins = 60)
-PTscatter_plotter
 ggsave(plot = PTscatter_plotter, "Output/globalPTcomp.pdf", width = 10, height = 10)
 
 Ptaggreement_all <- table(PTscatterDF$Protein > 0, PTscatterDF$Transcript > 0)
@@ -240,7 +242,7 @@ reducedPTscatter <- PTscatterDF[Gene %in% dispartecors$Gene,,]
 reducedPTscatter[,Limitation := toupper(substr(Condition, 1, 1))]
 reducedPTscatter$Limitation <- factor(reducedPTscatter$Limitation, levels = c("P", "C", "N", "L", "U"))
 reducedPTscatter$Gene <- factor(reducedPTscatter$Gene, levels = dispartecors$Gene)
-reducedPTscatter[,GeneCommon := orf2common(as.character(Gene)), by = "Gene"]
+reducedPTscatter$GeneCommon <- orf2common(as.character(reducedPTscatter$Gene))
 setkeyv(reducedPTscatter, c("Gene", "Limitation"))
 reducedPTscatter$GeneCommon <- factor(reducedPTscatter$GeneCommon, levels = unique(reducedPTscatter$GeneCommon))
 
@@ -322,3 +324,155 @@ rownames(impSVD_pcs) <- toupper(colnames(impute_abund))
 impSVD_pcs <- impSVD_pcs[c(16:20,1:5,11:15,6:10,21:25),]
 
 write.output.preclustered(t(impSVD_pcs), "Output/ptDiffPCs.cdt", gap = c(5,10,15,20))
+
+
+######### Compare omics datasets in terms of how much variation is explained by experimental design ########
+
+library(reshape2)
+library(data.table)
+library(ggplot2)
+library(eigenR2)
+library(impute)
+
+options(stringsAsFactor = F)
+
+boer_metab <- read.delim('~/Desktop/Rabinowitz/Presentations/CommonImages/CombinedHeatmap/BoerMetabolites.txt')[-1,-2]
+boer_metab <- data.table(melt(boer_metab, id.vars = "Metabolite", value.name = "RA"))
+boer_metab$variable <- as.character(boer_metab$variable)
+boer_metab[,Lim := substr(variable, 1, 3), by = "variable"]
+boer_metab[,DR := substr(variable, 5, 1000000L), by = "variable"]
+boer_metab <- boer_metab[,colnames(boer_metab) != "variable", with = F]
+setnames(boer_metab, 'Metabolite', 'Feature')
+
+chemo_DR <- read.delim("~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/chemostatInformation/ListOfChemostats_augmented.txt")
+
+protein_RA <- read.delim('~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/Protein_Transcript_Compare/Output/proteinRA.tsv')
+rownames(protein_RA) <- protein_RA$Gene
+protein_RA <- protein_RA[,-1]
+protein_RA <- data.table(melt(data.frame(chemo_DR[chemo_DR$include_this, c('Limitation', 'actualDR')], t(protein_RA)), id.vars = c("Limitation", "actualDR")))
+setnames(protein_RA, c('Limitation', 'actualDR', 'variable', 'value'), c('Lim', 'DR', 'Feature', 'RA'))
+
+flux_rel <- read.delim('~/Desktop/Rabinowitz/Presentations/CommonImages/CombinedHeatmap/fluxCarried.tsv')
+rownames(flux_rel) <- flux_rel$Gene
+flux_rel <- flux_rel[,-1]
+flux_rel <- data.table(melt(data.frame(chemo_DR[chemo_DR$include_this, c('Limitation', 'actualDR')], t(flux_rel)), id.vars = c("Limitation", "actualDR")))
+setnames(flux_rel, c('Limitation', 'actualDR', 'variable', 'value'), c('Lim', 'DR', 'Feature', 'RA'))
+
+pt_diff_rel <- read.delim('~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/Protein_Transcript_Compare/Output/coclust_ptdiff.tsv')
+rownames(pt_diff_rel) <- pt_diff_rel$Gene
+pt_diff_rel <- pt_diff_rel[,-1]
+pt_diff_rel <- data.table(melt(data.frame(chemo_DR[chemo_DR$include_this, c('Limitation', 'actualDR')], t(pt_diff_rel)), id.vars = c("Limitation", "actualDR")))
+setnames(pt_diff_rel, c('Limitation', 'actualDR', 'variable', 'value'), c('Lim', 'DR', 'Feature', 'RA'))
+
+brauer_chemo_DR <- read.delim("~/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Proteomics/TranscriptomicsChemostatsActualDR.tsv") # import transcriptomics chemostat dilution rates
+
+transcript_RA <- read.delim("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/Protein_Transcript_Compare/dilution_rate_00_raw.cdt")[-1,-c(1,3:5)]
+rownames(transcript_RA) <- transcript_RA$YORF
+transcript_RA <- transcript_RA[,-1]
+colnames(transcript_RA) <- sub('([0-9.]{3})[0-9.]{2}$', '\\1', sub('limD', '0', colnames(transcript_RA)))
+colnames(transcript_RA) <- sub('C', 'G', colnames(transcript_RA))
+transcript_RA <- transcript_RA[,colnames(transcript_RA) %in% brauer_chemo_DR$SampleID]
+
+if(!all(as.character(brauer_chemo_DR$SampleID) == colnames(transcript_RA))){
+  stop("out of order")
+  }
+
+transcript_RA <- data.table(melt(data.frame(brauer_chemo_DR[, c('Nutrient', 'GR')], t(transcript_RA)), id.vars = c('Nutrient', 'GR')))
+setnames(transcript_RA, c('Nutrient', 'GR', 'variable', 'value'), c('Lim', 'DR', 'Feature', 'RA'))
+
+transcript_subset <- transcript_RA
+transcript_subset <- transcript_subset[Feature %in% protein_RA$Feature,]
+
+transcript_RA[,Experiment := 'Transcripts']
+transcript_subset[,Experiment := 'Transcript (measured protein subset)']
+protein_RA[,Experiment := 'Proteins']
+boer_metab[,Experiment := 'Metabolites'] 
+flux_rel[,Experiment := 'Fluxes']
+pt_diff_rel[,Experiment := 'Proteins-per-transcript']
+
+aggregated_omics <- rbind(transcript_RA, protein_RA, transcript_subset, pt_diff_rel, boer_metab, flux_rel, use.names = T)
+
+
+eigenR2summary <- data.frame(Experiment = unique(aggregated_omics$Experiment), GR = NA, Lim = NA, GR_Lim = NA)
+eigenR2_per_df <- data.frame(Experiment = unique(aggregated_omics$Experiment), GR = NA, Lim = NA, GR_Lim = NA)
+
+for(exp in unique(aggregated_omics$Experiment)){
+  
+  omics_subset <- acast(aggregated_omics[Experiment == exp,], Feature ~ Lim + DR, value.var = "RA")
+  omics_subset <- omics_subset[rowSums(!is.na(omics_subset)) >= ncol(omics_subset)/2,]
+  omics_subset <- impute.knn(omics_subset)$data # this will only effect the brauer transcriptomics dataset
+  
+  # center each row
+  omics_subset <- omics_subset - rowMeans(omics_subset)
+  
+  omics_covariates <- as.data.frame(t(sapply(colnames(omics_subset), function(x){strsplit(x, '_')[[1]]})))
+  colnames(omics_covariates) <- c("Lim", "DR")
+  omics_covariates$DR <- as.numeric(as.character(omics_covariates$DR))
+  
+  # calculate explained sum of squares explained by sets of covariates & explained mean square
+  
+  TSS <- sum(rowSums(omics_subset^2))
+  
+  # Test effect of GR as DR + 1 vs. 1
+  
+  DReffect <- model.matrix(~ omics_covariates$DR + 1) # 2 df
+  eigen_summary <- eigenR2(omics_subset, model = DReffect, adjust = T, eigen.sig = 0.05)
+  eigenR2summary$GR[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2
+  eigenR2_per_df$GR[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2/(ncol(DReffect) - 1)
+  
+  DR_RSS <- sum(apply(omics_subset, 1, function(x){sum(lm(x ~ DReffect + 0)$resid^2)}))
+  DR_Rsquared <- 1 - (DR_RSS/(25-ncol(DReffect)) / (TSS/24))
+  
+  eigenR2summary$GR[eigenR2summary$Experiment == exp] <- DR_Rsquared
+  eigenR2_per_df$GR[eigenR2summary$Experiment == exp] <- DR_Rsquared/(ncol(DReffect) - 1)
+  
+  
+  # Test effect of Lim as two nested comparisons:
+  # Lim + GR vs. GR + 1
+  # Lim * GR vs. Lim + GR
+  
+  # add in limitation-specific intercept
+  
+  LimDReffect <- model.matrix(~ omics_covariates$Lim + omics_covariates$DR + 1) # 6 df
+  eigen_summary <- eigenR2(omics_subset, model = LimDReffect, null.model = DReffect, adjust = T, eigen.sig = 0.05)
+  eigenR2summary$Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2
+  eigenR2_per_df$Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2/(ncol(LimDReffect) - ncol(DReffect))
+  
+  LimDR_RSS <- sum(apply(omics_subset, 1, function(x){sum(lm(x ~ LimDReffect + 0)$resid^2)}))
+  LimDR_Rsquared <- 1 - (LimDR_RSS/(25-ncol(LimDReffect)) / (TSS/24))
+  
+  eigenR2summary$Lim[eigenR2summary$Experiment == exp] <- LimDR_Rsquared - DR_Rsquared
+  eigenR2_per_df$Lim[eigenR2summary$Experiment == exp] <- (LimDR_Rsquared - DR_Rsquared)/(ncol(LimDReffect) - ncol(DReffect))
+  
+  # add in limitation-specific slope
+  
+  LimDRInteffect <- model.matrix(~ omics_covariates$Lim * omics_covariates$DR + 1) # 10 df
+  eigen_summary <- eigenR2(omics_subset, model = LimDRInteffect, null.model = LimDReffect, adjust = T, eigen.sig = 0.05)
+  eigenR2summary$GR_Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2
+  eigenR2_per_df$GR_Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2/(ncol(LimDRInteffect) - ncol(LimDReffect))
+  
+  LimDRInt_RSS <- sum(apply(omics_subset, 1, function(x){sum(lm(x ~ LimDRInteffect + 0)$resid^2)}))
+  LimDRInt_Rsquared <- 1 - (LimDRInt_RSS/(25-ncol(LimDRInteffect)) / (TSS/24))
+  LimDRInt_Rsquared - LimDR_Rsquared
+  eigenR2summary$GR_Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2
+  eigenR2_per_df$GR_Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2/(ncol(LimDRInteffect) - ncol(LimDReffect))
+  
+  
+  }
+
+
+eigen_melt <- melt(eigenR2summary)
+eigen_melt <- eigen_melt[eigen_melt$Experiment != "Fluxes",]
+
+eigen_melt$Experiment <- factor(eigen_melt$Experiment, levels = c("Transcripts", "Transcript (measured protein subset)",
+                                                                  "Proteins", "Proteins-per-transcript", "Metabolites"))
+
+eigen_melt <- data.table(eigen_melt)
+eigen_melt[,scaled := value/sum(value), by = "Experiment"]
+
+ggplot(eigen_melt, aes(x = Experiment, y = value, fill = variable)) + geom_bar() +
+ scale_fill_brewer(palette = "Set1") + expand_limits(y = c(0,1)) +
+ scale_y_continuous("Variance Explained by Experimental Design") +
+ scale_x_discrete(NULL)
+
+
