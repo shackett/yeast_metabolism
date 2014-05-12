@@ -7,9 +7,11 @@ library(reshape2) #for visualization at the end
 library(data.table)
 library(nnls) #for non-negative regression used to fit kinetic parameters
 library(ggplot2)
-library(gplots)
-library(grid)
+library(gplots) 
+library(grid) # minor use to adjust layout of ggplot2 facets
+library(coda) # for assessing mcmc convergence
 source("FBA_lib.R")
+
 
 options(stringsAsFactors = FALSE)
 
@@ -307,15 +309,13 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 ######## Import cluster parameter results #########
 ##@##@ Start here if loading parameter sets ##@##@#
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
- 
+
 load("paramOptim.Rdata")
 
 param_sets <- list.files('FBGA_files/paramSets/')
 
 param_run_info <- data.frame(file = param_sets, index = 1:length(param_sets), chunkNum =sapply(param_sets, function(x){as.numeric(sub('C', '', regmatches(x, regexec('C[0-9]+', x))[[1]]))}),
                              runNum = sapply(param_sets, function(x){as.numeric(sub('R', '', regmatches(x, regexec('R[0-9]+', x))[[1]]))}), n_samples = NA, sample_freq = NA, burn_in = NA)
-
-
 
 ### combine parameter runs together into a list indexed by reaction name ####
 
@@ -324,7 +324,7 @@ param_set_list <- list()
 k <- 1
 for(a_chunk in sort(unique(param_run_info$chunkNum))){
   
-  for(an_index in param_run_info$index[param_run_info$chunkNum == a_chunk]){ #temporarely only loading run number 1 (1 tenth of data)
+  for(an_index in param_run_info$index[param_run_info$chunkNum == a_chunk]){ #temporarily only loading run number 1 (1 tenth of data)
     load(paste(c("FBGA_files/paramSets/", param_run_info$file[an_index]), collapse = ""))
     param_run_info$n_samples[an_index] <- run_summary$markov_pars$n_samples
     param_run_info$sample_freq[an_index] <- run_summary$markov_pars$sample_freq
@@ -339,13 +339,27 @@ for(a_chunk in sort(unique(param_run_info$chunkNum))){
   }
 }
 
+parSetInfo <- as.data.frame(t(sapply(param_set_list, function(x){x$name})))
+parSetInfo$ML <- sapply(param_set_list, function(x){max(x$lik)})
+
+#### Generate technical summaries of MCMC performance ####
+
+if(length(unique(param_run_info$n_samples)) != 1 | length(unique(param_run_info$sample_freq)) != 1 | length(unique(param_run_info$burn_in)) != 1){
+  stop("Run parameters differ between chains")
+  }
+
+all_rx <- unique(unlist(parSetInfo$rx))
+chain_convergence <- sapply(all_rx, function(arxn){
+  parSubset <- param_set_list[parSetInfo$rx == arxn]
+  gelman.diag(as.mcmc.list(lapply(parSubset, function(x){as.mcmc(x$MC)})), autoburnin = F)$mpsrf # determine convergence of markov chains
+  # gelman.plot(as.mcmc.list(lapply(parSubset, function(x){as.mcmc(x$MC)})))
+})
+
+
 ### Pull out relevent reaction information - such as reaction ID, number of parameters and maximum likelihood ###
 
 load('flux_cache/metaboliteTables.RData')
 npc <- ncol(metSVD$v)
-
-parSetInfo <- as.data.frame(t(sapply(param_set_list, function(x){x$name})))
-parSetInfo$ML <- sapply(param_set_list, function(x){max(x$lik)})
 
 # npar = number of enzymes (kcat) + number of metabolites (Km) + hill coefficients (which are not 1) 
 # + hypothetical metabolite (trend governed by npc significant PCs) + Keq
@@ -353,7 +367,8 @@ parSetInfo$ML <- sapply(param_set_list, function(x){max(x$lik)})
 reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(rxnList_form), function(x){substr(x, 1, 6)}),
                            form = sapply(names(rxnList_form), function(x){substr(x, 8, 9)}), modification = sapply(names(rxnList_form), function(x){sub(substr(x, 1, 10), '', x)}),
                            ncond = sapply(rxnList_form, function(x){nrow(x$flux)}),
-                           npar = sapply(rxnList_form, function(x){nrow(x$enzymeAbund) + nrow(x$rxnFormData) + sum(x$rxnFormData$Hill != 1) + ifelse(any(x$rxnFormData$SubstrateID == "t_metX"), npc, 0) + 1}))
+                           npar = sapply(rxnList_form, function(x){nrow(x$enzymeAbund) + nrow(x$rxnFormData) + sum(x$rxnFormData$Hill != 1) + ifelse(any(x$rxnFormData$SubstrateID == "t_metX"), npc, 0) + 1}),
+                           MPSRF = chain_convergence)
 
 reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])}) # the maximum likelihood over all corresponding parameter sets
 
@@ -483,7 +498,7 @@ for(rxN in grep('act|inh', reactionInfo$modification)){
                                   ifelse(length(grep('ultra', reactionInfo$modification[rxN])) == 0, "", "(variable hill)"),
                                   "by", unname(rxnList_form[[reactionInfo$rMech[rxN]]]$metNames[names(rxnList_form[[reactionInfo$rMech[rxN]]]$metNames) == regName]))
 }
-  
+
 reactionInfo$Name[grep('rmCond', reactionInfo$modification)] <- sapply(reactionInfo$Name[grep('rmCond', reactionInfo$modification)], function(x){paste(x, "(zero flux reactions removed)")})
 reactionInfo$Name[reactionInfo$rMech %in% manualRegulators$TechnicalName] <- manualRegulators$DisplayName[chmatch(reactionInfo$rMech[reactionInfo$rMech %in% manualRegulators$TechnicalName], manualRegulators$TechnicalName)] # rescue manually named reactions
 
@@ -560,7 +575,7 @@ MLdata <- NULL
 TRdata <- NULL
 
 t_start = proc.time()[3]
-arxn <- "r_0042_Y_F_inhibition_isoenzymeSpecific"
+
 for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
@@ -580,12 +595,12 @@ for(arxn in reactionInfo$rMech){
   ### A couple of catches for poorly defined reactions or if optimization grossly fails ### 
   
   if(sum(is.finite(par_likelihood$likelihood)) == 0){# all parameter sets have a zero likelihood (e.g. SD = 0)
-    print(paste(arxn, "has zero valid parameter sets")); next
+    warning(paste(arxn, "has zero valid parameter sets")); next
   }
   
   
   if(var(par_likelihood$likelihood) < 10^-10 | all(run_rxn$metabolites == 1)){
-    print(paste(arxn, "does not vary in likelihood, or has too many unmeasured species")); next
+    warning(paste(arxn, "does not vary in likelihood, or has too many unmeasured species")); next
   } #skip underparameterized reactions - those with essentially no variation
   
   
@@ -594,7 +609,7 @@ for(arxn in reactionInfo$rMech){
   flux_fit <- flux_fitting(run_rxn, par_markov_chain, par_likelihood) #compare flux fitted using the empirical MLE of parameters
   rxn_fits <- rbind(rxn_fits, data.frame(rxn = arxn, flux_fit$fit_summary))
   rxn_fit_params[[arxn]] <- flux_fit$param_interval
-    
+  
   ### Take the fractional flux departure and dot-product between FBA and parametric vector
   
   vector_match <- data.frame(rxn = arxn, FFD = 1 - sum(abs(flux_fit$fitted_flux$fitted - (run_rxn$flux$FVAmin + run_rxn$flux$FVAmax)/2))/sum(abs(run_rxn$flux)),
@@ -668,13 +683,12 @@ save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file 
 # generate a minute version of shinyData that will load quickly when the App is being modified
 #reactionInfo <- reactionInfo[1:20,]
 #shiny_flux_data <- shiny_flux_data[names(shiny_flux_data) %in% reactionInfo$rMech]
-#save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinySubData.Rdata")
+#system.time(save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinySubData.Rdata"))
 
 
 #### Save parameter estimates for further global analyses ####
 
 save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, TRdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
-
 
 
 
@@ -723,7 +737,7 @@ optimal_rxn_form <- sapply(valid_rxns, function(x){
   }
 })
 
-reactionInfo[chmatch(optimal_rxn_form, reactionInfo$rMech),]
+#reactionInfo[chmatch(optimal_rxn_form, reactionInfo$rMech),]
 
 ##### Summary based on interval overlap #####
 
@@ -797,9 +811,72 @@ ggplot() + geom_bar(data = spearman_MM_df, aes(x = x, y = spearman_MM), stat = "
 ggsave("Figures/MMspearmanCorr.pdf", height = 12, width = 13)
 
 
-##### Generate summarizing metabolic leverage for a condition #####
+##### Generate figure summarizing metabolic leverage for a condition #####
 
 metabolic_leverage_summary_plots("L0.05")
+
+# Look at the ML of enzymes to identify cases where:
+# A) Potential inducibility is high verus low
+# B) Potential inducibility varies based upon nutrient condition
+
+# Look at the best significant reaction form for reaction where CI overlap with flux carried is substantial (>50%)
+
+ML_inducibility_summary <- MLdata[reaction %in% intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]),,]
+optimal_rxn_form
+       
+       
+       
+       
+       
+       reversibleRx$modelBound
+  
+  MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form,]
+  
+  MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
+  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
+  
+  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "regulatory", "enzyme"))
+  MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
+  MLsummary[,leverage := leverage/totalLeverage]
+  
+  enz_leverage <- data.frame(reaction = MLsummary[Type == "enzyme",reaction], rank = NA)
+  enz_leverage$rank[order(MLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
+  
+  MLsummary$rank <- factor(enz_leverage$rank[chmatch(MLsummary$reaction, enz_leverage$reaction)])
+  MLsummary$reversibility <- ifelse(reversibleRx$modelBound[chmatch(substr(MLsummary$reaction, 1, 6), reversibleRx$rx)] == "greaterEqual", "Irreversible", "Reversible")
+    
+  setkeyv(MLsummary, c("Type", "rank"))
+  setkey(MLsummary)
+  
+  TypeColors <- c("blue2", "chartreuse4", "darkorange", "firebrick1")
+  
+  ggplot(MLsummary[reversibility == "Reversible",], aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) + facet_wrap(~reversibility, drop = T) +
+    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+   scale_fill_manual(values = TypeColors) + scale_x_discrete("Reactions")
+  
+  
+  ggplot(MLsummary[reversibility != "Reversible",], aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) + facet_wrap(~reversibility, drop = T) +
+    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+   scale_fill_manual(values = TypeColors) + scale_x_discrete("Reactions")
+  
+  regRev <- MLsummary[,list(Reg = "regulatory" %in% Type), by = c("reversibility", "reaction")]
+  regRev$MM <- c(1:nrow(regRev)) %in% grep('r_[0-9]{4}-rm$', regRev$reaction)
+  table(regRev$reversibility, regRev$Reg)
+  chisq.test(table(regRev$reversibility, regRev$Reg), simulate.p.value = T)
+  
+  TRdata
+       
+       
+       
+       
+       
+       
+# regress ML by E.C. and pathway # logistic regression
+
+
+
+
+
 
 ##### Generate  
 

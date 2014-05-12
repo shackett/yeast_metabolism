@@ -1216,8 +1216,10 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   variable_labels <- data.frame(unique(as.data.frame(all_changes)[,c("variable", "Pane")]), units = NA, label = NA)
   variable_labels$units <- species_df$units[chmatch(as.character(variable_labels$variable), as.character(species_df$variable))]
   
-  abs_units <- data.frame(units = as.numeric(variable_labels$units[!is.na(variable_labels$units)]), referenceSymbol = NA, referencePower = NA, scaled =  NA)
-  if(nrow(abs_units) != 0){
+  
+  if(!all(is.na(variable_labels$units))){
+    abs_units <- data.frame(units = as.numeric(variable_labels$units[!is.na(variable_labels$units)]), referenceSymbol = NA, referencePower = NA, scaled =  NA)
+    
     abs_units[abs_units$units >= 0, 2] <- "M"; abs_units[abs_units$units >= 0, 3] <- 0
     abs_units[between(abs_units$units, -3, -1, incbounds = T), 2] <- "mM"; abs_units[between(abs_units$units, -3, -1, incbounds = T), 3] <- -3
     abs_units[between(abs_units$units, -6, -4, incbounds = T), 2] <- "uM"; abs_units[between(abs_units$units, -6, -4, incbounds = T), 3] <- -6
@@ -1315,51 +1317,26 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   reconstructedDraws <- par_markov_chain[,run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs)
   reconstructedDraws <- reconstructedDraws - apply(reconstructedDraws, 1, mean)
   
-  reconstructedOcc <- reconstructedDraws - par_markov_chain[,run_rxn$kineticParPrior$rel_spec == "t_metX" & run_rxn$kineticParPrior$SpeciesType == "Metabolite"] %*% t(rep(1, nrow(releventPCs))) # convert from relative concentration to relative occupancy
-  
-  #if("hillCoefficient" %in% run_rxn$kineticParPrior$SpeciesType){
-  #  allosteryStrength <- log2(1 + (2^reconstructedOcc) ^ (2^par_markov_chain[,run_rxn$kineticParPrior$rel_spec == "t_metX" & run_rxn$kineticParPrior$SpeciesType == "hillCoefficient"] %*% t(rep(1, nrow(releventPCs))))) # 1 + ([A]/[Ka])^h
-  #}else{
-  #  allosteryStrength <- log2(1 + (2^reconstructedOcc)) # 1 + ([A]/[Ka])
-  #}
-  if("hillCoefficient" %in% run_rxn$kineticParPrior$SpeciesType){
-    allosteryStrength <- (1 / (1 + (2^(-1*reconstructedOcc)) ^ (2^par_markov_chain[,run_rxn$kineticParPrior$rel_spec == "t_metX" & run_rxn$kineticParPrior$SpeciesType == "hillCoefficient"] %*% t(rep(1, nrow(releventPCs)))))) # 1 / (([Ka]/[A])^h + 1)
-  }else{
-    allosteryStrength <- 1 / (1 + 2^(-1*reconstructedOcc)) # 1 / ([Ka]/[A] + 1)
-  }
-  
-  
   ### Create a violin plot, with the MLE highlighted ###
   
   mod_type <- run_rxn$rxnSummary$rxnFormData$Type[run_rxn$rxnSummary$rxnFormData$SubstrateID == "t_metX"]
   mod_type <- ifelse(mod_type == "act", "allosteric activator", "allosteric inhibitor")
   
-  PCconds <- data.frame(name = factor(colnames(reconstructedOcc), levels = colnames(reconstructedOcc)), Limitation = factor(substr(colnames(reconstructedOcc),1,1)), DR = gsub('^[A-Z]', '', colnames(reconstructedOcc)))
+  PCconds <- data.frame(name = factor(colnames(reconstructedDraws), levels = colnames(reconstructedDraws)), Limitation = factor(substr(colnames(reconstructedDraws),1,1)), DR = gsub('^[A-Z]', '', colnames(reconstructedDraws)))
   
-  PCreco_melt <- data.frame(melt(cbind(PCconds, t(reconstructedOcc)), id.vars = colnames(PCconds)), allosteryStrength = melt(t(allosteryStrength))$value)
+  PCreco_melt <- melt(cbind(PCconds, t(reconstructedDraws)), id.vars = colnames(PCconds))
   
   ### the MLE ###
   
   mle_pars <- par_markov_chain[which.max(par_likelihood$likelihood),]
   mle_RA <- mle_pars[run_rxn$kineticParPrior$SpeciesType == "PCL"] %*% diag(metSVD$d[1:npc]) %*% t(releventPCs)
-  mle_occ <- mle_RA - mle_pars[run_rxn$kineticParPrior$rel_spec == "t_metX" & run_rxn$kineticParPrior$SpeciesType == "Metabolite"]
-  #if("hillCoefficient" %in% run_rxn$kineticParPrior$SpeciesType){
-  #  mle_strength <- log2(1 + (2^mle_occ) ^ (2^mle_pars[run_rxn$kineticParPrior$rel_spec == "t_metX" & run_rxn$kineticParPrior$SpeciesType == "hillCoefficient"]))
-  #}else{
-  #  mle_strength <- log2(1 + (2^mle_occ))
-  #}
-  if("hillCoefficient" %in% run_rxn$kineticParPrior$SpeciesType){
-    mle_strength <- 1 / (1 + 2^(-1*mle_occ) ^ (2^mle_pars[run_rxn$kineticParPrior$rel_spec == "t_metX" & run_rxn$kineticParPrior$SpeciesType == "hillCoefficient"]))
-  }else{
-    mle_strength <- 1 / (1 +  2^(-1*mle_occ))
-  }
-  mle_info <- data.frame(PCconds, value = c(mle_occ), allosetryStrength = c(mle_strength))
+  mle_RA <- mle_RA - mean(mle_RA)
   
-  hypoMetPlots$AlloStrength <- ggplot() + geom_violin(data = PCreco_melt, aes(x = name, y = value, fill = factor(Limitation))) + scale_y_continuous(expression(log[2]~1 + bgroup("[", frac("[M]", K[M]), "]")^h)) +
-    geom_point(data = mle_info, aes(x = name, y = allosetryStrength), size = 2) + scale_fill_brewer(palette = "Pastel1") +
-    ggtitle("Strength of allostery") + boxplot_theme
+  mle_info <- data.frame(PCconds, value = c(mle_RA))
   
-  ggplot() + geom_violin(data = 
+  hypoMetPlots$"Hypothetical Regulator Trend" <- ggplot() + geom_violin(data = PCreco_melt, aes(x = name, y = value, fill = factor(Limitation))) + scale_y_continuous(expression(log[2]~"Relative Concentration")) +
+    geom_point(data = mle_info, aes(x = name, y = value), size = 3, shape = 21, color = "BLACK", fill = "RED") + scale_fill_brewer(palette = "Pastel1") +
+    ggtitle("Hypothetical Regulator Trend") + boxplot_theme + scale_x_discrete("Nutrient Condition")
   
   
   ### Show distribution of hill coefficients ###
@@ -1467,7 +1444,7 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   param_summary <- list()
   
   param_interval <- 2^(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
-  param_interval <- data.frame(cbind(t(param_interval), median = 2^(apply(par_markov_chain, 2, median)), MLE = 2^(par_markov_chain[which.max(par_likelihood$likelihood),])))
+  param_interval <- data.frame(t(param_interval), median = 2^(apply(par_markov_chain, 2, median)), MLE = 2^(par_markov_chain[which.max(par_likelihood$likelihood),]), row.names = NULL)
   param_interval$absoluteQuant <- ifelse(rownames(param_interval) %in% names(run_rxn$rxnSummary$originMet)[run_rxn$rxnSummary$originMet == "abs"], T, F)
   # store logQ in the keq absolute quant position - meaningful in relation to keq
   param_interval$absoluteQuant[rownames(param_interval) == "keq"] <- as.character((run_rxn$kineticParPrior$par_2[run_rxn$kineticParPrior$SpeciesType == "keq"] + run_rxn$kineticParPrior$par_1[run_rxn$kineticParPrior$SpeciesType == "keq"])/2)
@@ -1510,7 +1487,7 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   kinetically_differing_isoenzymes <- any(names(run_rxn$occupancyEq[["l_occupancyExpression"]]) %in% rownames(run_rxn$rxnSummary$enzymeComplexes))
   if(!(kinetically_differing_isoenzymes)){
     predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-    enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+    enzyme_activity <- (predOcc %*% t(rep(1, ncol(enzyme_abund))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
   }else{
     occEqtn_complex_match <- data.frame(complex = rownames(run_rxn$rxnSummary$enzymeComplexes), occEqtn = NA)
     occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
@@ -1878,7 +1855,7 @@ reactionProperties <-  function(){
     
     if(!(kinetically_differing_isoenzymes)){
       predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-      enzyme_activity <- (predOcc %*% t(rep(1, sum(all_species$SpeciesType == "Enzyme"))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+      enzyme_activity <- (predOcc %*% t(rep(1, ncol(enzyme_abund))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
     }else{
       occEqtn_complex_match <- data.frame(complex = rownames(run_rxn$rxnSummary$enzymeComplexes), occEqtn = NA)
       occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
@@ -2246,7 +2223,7 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   
   MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form[rxn_fits$parPearson[chmatch(optimal_rxn_form, rxn_fits$rxn)] > 0],,] # optimal kinetic form and pearson corr > 0
   MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
+  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive", "mm", "cc")] <- "regulatory"
   
   # partitioning explained variance into ML contributions - keeping relative fractions proportional but adjusting the sum
   # MLfrac_species = ML * r2
@@ -2260,7 +2237,6 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   
   MLsummary <- rbind(MLsummary, residualLeverage, use.names = T)
   
-  
   MLsummary$Type <- factor(MLsummary$Type, levels = c("enzyme", "substrate", "product", "regulatory", "residual"))
   MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
   MLsummary[,leverage := leverage/totalLeverage]
@@ -2269,8 +2245,10 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   MLsummary[,rxnType := ifelse(any(Type %in% "regulatory"), "Regulator", "RM"), by = "reaction"]
   MLsummary$rxnType <- factor(MLsummary$rxnType, levels = c("RM", "Regulator"))
   
+  
+  
   rank_var_explained <- data.frame(reaction = unique(MLsummary$rxn), rank = NA)
-  rank_var_explained$residLev <- sapply(rank_var_explained$reaction, function(x){min(MLsummary$leverage[MLsummary$Type == "residual" & MLsummary$rxn == x])})
+  rank_var_explained$residLev <- sapply(rank_var_explained$reaction, function(x){min(MLsummary$leverage[MLsummary$Type == "residual" & MLsummary$rxn == x], na.rm = T)})
   rank_var_explained$rank[order(rank_var_explained$residLev, decreasing = T)] <- 1:nrow(rank_var_explained)
   
   
@@ -2292,7 +2270,7 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   
   MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form[fraction_flux_deviation$"Interval Overlap"[chmatch(optimal_rxn_form, fraction_flux_deviation$rxn)] > 0],,]
   MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
+  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive", "mm", "cc")] <- "regulatory"
   
   residualLeverage <- MLsummary[,list(Type = "residual", leverage = sum(leverage) * (1-fraction_flux_deviation$"Interval Overlap"[chmatch(reaction, fraction_flux_deviation$rxn)])/fraction_flux_deviation$"Interval Overlap"[chmatch(reaction, fraction_flux_deviation$rxn)])
                                 , by = "reaction"]
@@ -2326,50 +2304,24 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
     scale_fill_manual(values = TypeColors)
   ggsave("Figures/metabolicLeverage_intervalOverlap.pdf", height = 8, width = 12)
 
+  ### Using interval_overlap summary determine reactions with > 50% CI capture - look at the ML sources of these reactions ###
   
-  ### Looking at ML of different pathways and relative to reaction reversibility ###
-  
-  reversibleRx$modelBound
-  
-  MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form,]
-  
-  MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
-  
-  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "regulatory", "enzyme"))
+  MLsummary <- MLsummary[Type != "residual" & reaction %in% MLsummary$reaction[MLsummary$Type == "residual" & MLsummary$leverage < 0.5],]
   MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
   MLsummary[,leverage := leverage/totalLeverage]
   
-  enz_leverage <- data.frame(reaction = MLsummary[Type == "enzyme",reaction], rank = NA)
-  enz_leverage$rank[order(MLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
+  rank_var_explained <- data.frame(reaction = unique(MLsummary$rxn), rank = NA)
+  rank_var_explained$enzML <- sapply(rank_var_explained$reaction, function(x){min(MLsummary$leverage[MLsummary$Type == "enzyme" & MLsummary$rxn == x])})
+  rank_var_explained$rank[order(rank_var_explained$enzML, decreasing = T)] <- 1:nrow(rank_var_explained)
   
-  MLsummary$rank <- factor(enz_leverage$rank[chmatch(MLsummary$reaction, enz_leverage$reaction)])
-  MLsummary$reversibility <- ifelse(reversibleRx$modelBound[chmatch(substr(MLsummary$reaction, 1, 6), reversibleRx$rx)] == "greaterEqual", "Irreversible", "Reversible")
-    
-  setkeyv(MLsummary, c("Type", "rank"))
-  setkey(MLsummary)
+  MLsummary$rxn <- factor(MLsummary$rxn, levels = rank_var_explained$reaction[order(rank_var_explained$rank)])
+  MLsummary <- MLsummary[order(MLsummary$rxn, MLsummary$rxnType, MLsummary$Type),]
+  MLsummary$reaction <- factor(MLsummary$reaction, levels = unique(MLsummary$reaction))
   
-  TypeColors <- c("blue2", "chartreuse4", "darkorange", "firebrick1")
-  
-  ggplot(MLsummary[reversibility == "Reversible",], aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) + facet_wrap(~reversibility, drop = T) +
+  ggplot(MLsummary, aes(x = reaction, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) +
     barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
-   scale_fill_manual(values = TypeColors) + scale_x_discrete("Reactions")
-  
-  
-  ggplot(MLsummary[reversibility != "Reversible",], aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) + facet_wrap(~reversibility, drop = T) +
-    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
-   scale_fill_manual(values = TypeColors) + scale_x_discrete("Reactions")
-  
-  regRev <- MLsummary[,list(Reg = "regulatory" %in% Type), by = c("reversibility", "reaction")]
-  regRev$MM <- c(1:nrow(regRev)) %in% grep('r_[0-9]{4}-rm$', regRev$reaction)
-  table(regRev$reversibility, regRev$Reg)
-  chisq.test(table(regRev$reversibility, regRev$Reg), simulate.p.value = T)
-  
-  TRdata
-  
-  
-  
-  
+    scale_fill_brewer(palette = "Set1") + scale_x_discrete("Reactions")
+  ggsave("Figures/metabolicLeverage_goodFit.pdf", height = 6, width = 10)
   
 }
 
