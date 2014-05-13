@@ -306,7 +306,7 @@ ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
-######## Import cluster parameter results #########
+#######* Import cluster parameter results #########
 ##@##@ Start here if loading parameter sets ##@##@#
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@
 
@@ -691,6 +691,11 @@ save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file 
 save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, TRdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
 
 
+##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
+###################### * Summarize Reaction Behavior ##########################
+##@##@ Start here if loading parameter estimates and kinetic summaries ##@##@##
+##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
+
 
 
 ##### Systems level comparison of optimized and external parameter values #####
@@ -813,6 +818,8 @@ ggsave("Figures/MMspearmanCorr.pdf", height = 12, width = 13)
 
 ##### Generate figure summarizing metabolic leverage for a condition #####
 
+library(stringr)
+
 metabolic_leverage_summary_plots("L0.05")
 
 # Look at the ML of enzymes to identify cases where:
@@ -821,16 +828,53 @@ metabolic_leverage_summary_plots("L0.05")
 
 # Look at the best significant reaction form for reaction where CI overlap with flux carried is substantial (>50%)
 
-ML_inducibility_summary <- MLdata[reaction %in% intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]),,]
-optimal_rxn_form
-       
-       
-       
-       
-       
-       reversibleRx$modelBound
-  
-  MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form,]
+ML_inducibility <- MLdata[reaction %in% intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]),,]
+ML_inducibility <- ML_inducibility[Type == "enzyme",,]
+ML_inducibility <- ML_inducibility[,list(ML = sum(get("0.5")), nenzyme = length(get("0.5"))), by = c("reaction", "condition")]
+
+# collapse across conditions to mean(ML) and SD(ML)
+
+ML_inducibility_summary <- ML_inducibility[,list(ML_mean = mean(ML), ML_sd = sd(ML), ML_range = max(ML)-min(ML), nenzyme = nenzyme[1]), by = "reaction"]
+ML_inducibility_summary[,CV := ML_sd/ML_mean] 
+ML_inducibility_summary$rxn <- substr(ML_inducibility_summary$reaction, 1, 6)
+ML_inducibility_summary[,ML_logit := log(ML_mean/(1-ML_mean))]
+
+rxn_meta_info <- read.delim("flux_cache/rxnParYeast.tsv")
+aligned_ML_meta <- rxn_meta_info[chmatch(ML_inducibility_summary$rxn, rxn_meta_info$ReactionID),]
+
+# Determine pathway E.C. numbers
+# If multiple E.C. identifiers exist, take the first one (this will be the identifier associated with the kegg R ID if there is one)
+aligned_ML_meta$EC <- sapply(aligned_ML_meta$EC, function(x){
+    strsplit(x, split = ",")[[1]][1]
+  })
+
+aligned_ML_meta$EC1 <- sapply(aligned_ML_meta$EC, function(x){strsplit(x, split = "\\.")[[1]][1]})
+aligned_ML_meta$EC2 <- sapply(aligned_ML_meta$EC, function(x){paste(strsplit(x, split = "\\.")[[1]][1:2], collapse = ".")})
+
+# Determine pathway-by-reaction
+
+aligned_ML_meta$pathname <- sapply(aligned_ML_meta$pathname, function(x){strsplit(x, split = "__")[[1]][1]})
+
+rxn_meta_path_prune <- melt(lapply(aligned_ML_meta$pathname, function(x){
+  strsplit(x, split = "__")
+  }))
+
+rxn_meta_path_pruned <- rxn_meta_path_prune[rxn_meta_path_prune$value %in% names(table(rxn_meta_path_prune$value))[table(rxn_meta_path_prune$value) >= 5 & table(rxn_meta_path_prune$value) <= 20],]
+rxn_meta_path_pruned$rxn <- aligned_ML_meta$ReactionID[rxn_meta_path_pruned$L1]
+rxn_meta_path_pruned <- rbind(rxn_meta_path_pruned, data.frame(value = "Misc", L2 = 1, L1 = NA, rxn = aligned_ML_meta$ReactionID[!(aligned_ML_meta$ReactionID %in% rxn_meta_path_pruned$rxn)]))
+rxn_pathways_cast <- acast(rxn_meta_path_pruned, formula = rxn ~ value, value.var = "L2", fill = 0)
+
+# Determine reaction reversibility
+aligned_ML_meta$reversibility <- ifelse(reversibleRx$modelBound[chmatch(aligned_ML_meta$ReactionID, reversibleRx$rx)] == "greaterEqual", "F", "T")
+
+# Regression of EC and pathway on metabolic leverage
+
+anova(lm(ML_inducibility_summary$ML_logit ~ aligned_ML_meta$EC1)) # associate with E.C. number
+anova(lm(ML_inducibility_summary$ML_logit ~ rxn_pathways_cast)) # assocaite with pathway
+anova(lm(ML_inducibility_summary$ML_logit ~ aligned_ML_meta$reversibility)) # associate with reversibility
+
+
+MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form,]
   
   MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
   MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
