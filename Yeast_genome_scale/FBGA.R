@@ -818,7 +818,7 @@ ggsave("Figures/MMspearmanCorr.pdf", height = 12, width = 13)
 
 ##### Generate figure summarizing metabolic leverage for a condition #####
 
-library(stringr)
+#library(stringr)
 
 metabolic_leverage_summary_plots("L0.05")
 
@@ -834,7 +834,7 @@ ML_inducibility <- ML_inducibility[,list(ML = sum(get("0.5")), nenzyme = length(
 
 # collapse across conditions to mean(ML) and SD(ML)
 
-ML_inducibility_summary <- ML_inducibility[,list(ML_mean = mean(ML), ML_sd = sd(ML), ML_range = max(ML)-min(ML), nenzyme = nenzyme[1]), by = "reaction"]
+ML_inducibility_summary <- ML_inducibility[,list(ML_mean = mean(ML), ML_sd = sd(ML), ML_min = min(ML), ML_max = max(ML), ML_range = max(ML)-min(ML), nenzyme = nenzyme[1]), by = "reaction"]
 ML_inducibility_summary[,CV := ML_sd/ML_mean] 
 ML_inducibility_summary$rxn <- substr(ML_inducibility_summary$reaction, 1, 6)
 ML_inducibility_summary[,ML_logit := log(ML_mean/(1-ML_mean))]
@@ -873,65 +873,130 @@ anova(lm(ML_inducibility_summary$ML_logit ~ aligned_ML_meta$EC1)) # associate wi
 anova(lm(ML_inducibility_summary$ML_logit ~ rxn_pathways_cast)) # assocaite with pathway
 anova(lm(ML_inducibility_summary$ML_logit ~ aligned_ML_meta$reversibility)) # associate with reversibility
 
+regulatory_contingency <- table(regulated = c(1:nrow(ML_inducibility_summary)) %in% grep('act|inh', ML_inducibility_summary$reaction), reversible = aligned_ML_meta$reversibility)
+chisq.test(regulatory_contingency, simulate.p.value = T)
+regulatory_contingency[2,2]/sum(regulatory_contingency[,2])
+regulatory_contingency[2,1]/sum(regulatory_contingency[,1])
 
-MLsummary <- MLdata_reduced[reaction %in% optimal_rxn_form,]
+ML_inducibility_summary$reversibility <- aligned_ML_meta$reversibility
+setkey(ML_inducibility_summary, 'ML_mean')
+ML_inducibility_summary$rxn <- factor(ML_inducibility_summary$rxn, levels = ML_inducibility_summary$rxn)
+
+# convert reaction enzymes to common names
+rxn_enzyme_groups <- read.delim("./flux_cache/rxn_enzyme_groups.tsv")
+library("org.Sc.sgd.db")
+c2o <- toTable(org.Sc.sgdCOMMON2ORF)
+
+# convert from systematic names to common names and then generate a compact summary of genes with consecutive numbers
+ML_reaction_enzymes <- sapply(ML_inducibility_summary$rxn, function(x){
+  commonSubset <- sort(c2o$gene_name[chmatch(unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction == x]), c2o$systematic_name)])
+  commonSubsetDF <- data.frame(a = regmatches(commonSubset, regexpr('^[A-Z]{3}', commonSubset)), n = regmatches(commonSubset, regexpr('[0-9]+', commonSubset)))
   
-  MLsummary <- MLsummary[,list(leverage = sum(q0.5)), by = c("Type", "reaction")]
-  MLsummary$Type[MLsummary$Type %in% c("allosteric", "noncompetitive", "uncompetitive", "competitive")] <- "regulatory"
-  
-  MLsummary$Type <- factor(MLsummary$Type, levels = c("substrate", "product", "regulatory", "enzyme"))
-  MLsummary[,totalLeverage := sum(leverage), by = "reaction"]
-  MLsummary[,leverage := leverage/totalLeverage]
-  
-  enz_leverage <- data.frame(reaction = MLsummary[Type == "enzyme",reaction], rank = NA)
-  enz_leverage$rank[order(MLsummary[Type == "enzyme",leverage])] <- 1:nrow(enz_leverage)
-  
-  MLsummary$rank <- factor(enz_leverage$rank[chmatch(MLsummary$reaction, enz_leverage$reaction)])
-  MLsummary$reversibility <- ifelse(reversibleRx$modelBound[chmatch(substr(MLsummary$reaction, 1, 6), reversibleRx$rx)] == "greaterEqual", "Irreversible", "Reversible")
-    
-  setkeyv(MLsummary, c("Type", "rank"))
-  setkey(MLsummary)
-  
-  TypeColors <- c("blue2", "chartreuse4", "darkorange", "firebrick1")
-  
-  ggplot(MLsummary[reversibility == "Reversible",], aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) + facet_wrap(~reversibility, drop = T) +
-    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
-   scale_fill_manual(values = TypeColors) + scale_x_discrete("Reactions")
-  
-  
-  ggplot(MLsummary[reversibility != "Reversible",], aes(x = rank, y = leverage, fill = Type)) + geom_bar(stat = "identity", width = 0.85) + facet_wrap(~reversibility, drop = T) +
-    barplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
-   scale_fill_manual(values = TypeColors) + scale_x_discrete("Reactions")
-  
-  regRev <- MLsummary[,list(Reg = "regulatory" %in% Type), by = c("reversibility", "reaction")]
-  regRev$MM <- c(1:nrow(regRev)) %in% grep('r_[0-9]{4}-rm$', regRev$reaction)
-  table(regRev$reversibility, regRev$Reg)
-  chisq.test(table(regRev$reversibility, regRev$Reg), simulate.p.value = T)
-  
-  TRdata
-       
-       
-       
-       
-       
-       
-# regress ML by E.C. and pathway # logistic regression
+  gene_name_compact = NULL
+  for(an_a in unique(commonSubsetDF$a)){
+    if(length(commonSubsetDF$n[commonSubsetDF$a == an_a]) == 1){
+      gene_name_compact <- c(gene_name_compact, paste(an_a, commonSubsetDF$n[commonSubsetDF$a == an_a], sep = ""))
+    }else{
+      q_seq <- as.numeric(commonSubsetDF$n[commonSubsetDF$a == an_a])
+      q_group <- rep(1:length(q_seq))
+      for(q_el in 1:(length(q_seq)-1)){
+        if(q_seq[q_el] + 1 == q_seq[q_el + 1]){
+          q_group[q_el + 1] <- q_group[q_el]
+        }
+      }
+      group_track <- NULL
+      for(a_group in unique(q_group)){
+        if(length(q_seq[q_group == a_group]) == 1){
+         group_track <- c(group_track, q_seq[q_group == a_group])
+        }else{
+          group_track <- c(group_track, paste(q_seq[q_group == a_group][1], q_seq[q_group == a_group][length(q_seq[q_group == a_group])], sep = "-"))
+          }
+        }
+      gene_name_compact <- c(gene_name_compact, paste(an_a, paste(group_track, collapse = ", ") , sep = ""))
+    }
+  }
+  return(c(expanded = paste(commonSubset, collapse = ", "), collapsed = paste(gene_name_compact, collapse = ", ")))
+})
+ML_reaction_enzymes <- as.data.frame(t(ML_reaction_enzymes))
+
+ML_inducibility_summary$genes <- ML_reaction_enzymes$collapsed
+
+# Determine transcription factors regulating reaction subset
+
+# Import matrix relating transcription factors to their targets (http://www.yeastract.com/generateregulationmatrix.php)
+# Interaction based on "DNA binding and expression evidence", all genes considered #
+# expression or affinity : 10% non-zero
+# affinity : 2% non-zero
+TFmatrix <- as.matrix(read.delim("./companionFiles/yeast_TF_regulation.csv", sep = ";", row.names = 1)) # direct and indirect
+TFmatrix <- as.matrix(read.delim("./companionFiles/Yeast_TF_affinity.csv", sep = ";", row.names = 1)) # direct targets
 
 
 
+ML_gene_summaries <- data.frame(systematic = unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]),
+                                common = c2o$gene_name[chmatch(unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]), c2o$systematic_name)])
+
+TFmatrix_reduced <- TFmatrix[,colnames(TFmatrix) %in% ML_gene_summaries$common]
+
+# convert matrix from TF ~ Gene to TF ~ Rxn
+rxn2gene <- matrix(0, nrow = nrow(ML_inducibility_summary), ncol = ncol(TFmatrix_reduced))
+rownames(rxn2gene) <- ML_inducibility_summary$rxn; colnames(rxn2gene) <- colnames(TFmatrix_reduced)
+for(i in 1:nrow(ML_reaction_enzymes)){
+  rxn2gene[i,colnames(rxn2gene) %in% strsplit(ML_reaction_enzymes$expanded[i], split = ", ")[[1]]] <- 1
+  }
+
+TFreg_byrxn <- TFmatrix_reduced %*% t(rxn2gene)
+TFreg_byrxn[TFreg_byrxn != 0] <- 1
+
+# from FIRE, generate a subset of TFs shaping transcription across these conditions (based upon Brauer data)
+FIRE_TFs <- c("Msn2p", "Msn4p", "Gcn4p", "Bas1p", "Cbf1p", "Mbp1p", "Swi4p")
+
+TFreg_byrxn <- TFreg_byrxn[rownames(TFreg_byrxn) %in% FIRE_TFs,]
+
+TF_ML_assoc <- data.frame(TF = rownames(TFreg_byrxn), p = NA)
+
+for(i in 1:nrow(TFreg_byrxn)){
+  TF_ML_assoc$p[i] <- wilcox.test(ML_inducibility_summary$ML_mean[TFreg_byrxn[i,] == 1], ML_inducibility_summary$ML_mean[TFreg_byrxn[i,] == 0], alternative = "two.sided")$p.value
+}
+TF_ML_assoc$q <- p.adjust(TF_ML_assoc$p, method = "BH")
+TF_ML_assoc <- TF_ML_assoc[TF_ML_assoc$q < 0.1,] # look at TFs with an FDR of less than 0.1
+
+TF_effect_melt <- data.table(melt(TFreg_byrxn[rownames(TFreg_byrxn) %in% TF_ML_assoc$TF,]))
+setnames(TF_effect_melt, colnames(TF_effect_melt), c("TF", "rxn", "target"))
+TF_effect_melt$rxn <- factor(TF_effect_melt$rxn, levels = levels(TF_effect_melt$rxn))
+TF_effect_melt$TF <- factor(TF_effect_melt$TF)
+TF_effect_melt$ypos <- max(ML_inducibility_summary$ML_max) + as.numeric(TF_effect_melt$TF)/20
+TF_effect_melt$fillCol <- ifelse(TF_effect_melt$target == 1, "chocolate1", "aliceblue")  
+
+
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+                       panel.background = element_rect(fill = "gray80"), legend.position = "top", 
+                       axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black"),
+                       axis.text = element_text(color = "black"), axis.text.x = element_text(size = 18, angle = 75, hjust = 1, vjust = 1),
+                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
+                       )
+
+
+ggplot() + geom_point(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max), size = 2, color = "firebrick1") + 
+  geom_pointrange(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max), size = 2, color = "firebrick1") +
+  scale_x_discrete("Reactions", breaks = ML_inducibility_summary$rxn, labels = ML_inducibility_summary$genes) + scale_y_continuous("Enyzme Metabolic Leverage", breaks = seq(0,0.6, by = 0.2), labels = seq(0,0.6, by = 0.2), expand = c(0,0)) +
+  geom_raster(data = TF_effect_melt, aes(x = rxn, y = ypos, fill = fillCol)) + 
+  geom_text(data = TF_effect_melt[TF_effect_melt$rxn == levels(TF_effect_melt$rxn)[2],], aes(x = rxn, y = ypos, label = TF)) +
+  barplot_theme + scale_fill_identity()
+  
 
 
 
-##### Generate  
+ggplot(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max)) + geom_point(size = 2, color = "firebrick1") + geom_pointrange(size = 2, color = "firebrick1") +
+  scale_x_discrete("Reactions", breaks = ML_inducibility_summary$rxn, labels = ML_inducibility_summary$genes) + scale_y_continuous("Enyzme Metabolic Leverage", breaks = seq(0,0.6, by = 0.2)) +
+  barplot_theme + geom_raster(data = TF_effect_melt, aes(x = rxn, y = ypos)) +
+  expand_limits(y = 0.9)
 
-TResponsiveness <- TRdata[,list(TR = median(q0.5), TU = median(TU), MU = median(MU)), by = c("specie", "reaction")]
-TResponsiveness <- TResponsiveness[reaction %in% optimal_rxn_form,]
-TResponsiveness[,rxForm := substr(reaction, 1, 6),]
-setkey(TResponsiveness, TR)
+ggplot() + geom_raster(data = TF_effect_melt, aes(x = rxn, y = ypos, fill = target))
+  
 
-best_candidate_TR <- TResponsiveness$reaction[which.max(TResponsiveness$TR)]
-MLdata[reaction == TResponsiveness$reaction[65],,]
-rxnList_form[[TResponsiveness$reaction[65]]]
+
+
 
 
 ######### Compare Km values found through optimization to those from literature ################
