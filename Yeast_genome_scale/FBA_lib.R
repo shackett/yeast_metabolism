@@ -1445,14 +1445,19 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   
   param_interval <- 2^(apply(par_markov_chain, 2, function(x){quantile(x, probs = c(0.025, 0.975))}))
   param_interval <- data.frame(t(param_interval), median = 2^(apply(par_markov_chain, 2, median)), MLE = 2^(par_markov_chain[which.max(par_likelihood$likelihood),]), row.names = NULL)
-  param_interval$absoluteQuant <- ifelse(rownames(param_interval) %in% names(run_rxn$rxnSummary$originMet)[run_rxn$rxnSummary$originMet == "abs"], T, F)
+  
+  param_interval$absoluteQuant <- ifelse(run_rxn$kineticParPrior$rel_spec %in% names(run_rxn$rxnSummary$originMet)[run_rxn$rxnSummary$originMet == "abs"] & run_rxn$kineticParPrior$SpeciesType == "Metabolite", T, F)
   # store logQ in the keq absolute quant position - meaningful in relation to keq
-  param_interval$absoluteQuant[rownames(param_interval) == "keq"] <- as.character((run_rxn$kineticParPrior$par_2[run_rxn$kineticParPrior$SpeciesType == "keq"] + run_rxn$kineticParPrior$par_1[run_rxn$kineticParPrior$SpeciesType == "keq"])/2)
+  param_interval$absoluteQuant[run_rxn$kineticParPrior$SpeciesType == "keq"] <- as.character((run_rxn$kineticParPrior$par_2[run_rxn$kineticParPrior$SpeciesType == "keq"] + run_rxn$kineticParPrior$par_1[run_rxn$kineticParPrior$SpeciesType == "keq"])/2)
+  
   param_summary$param_interval <- param_interval
+  
+  param_summary$kineticParPrior <- run_rxn$kineticParPrior
   
   param_summary$param_species <- run_rxn$rxnSummary$rxnFormData
   median_species_abund <- apply(run_rxn$metabolites, 2, median)
   param_summary$param_species$medianAbund <- median_species_abund[chmatch(param_summary$param_species$SubstrateID, names(median_species_abund))]
+  
   
   ### Reproduce the flux and sd(flux) of the most likely parameter set ###
   

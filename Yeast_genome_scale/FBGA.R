@@ -654,10 +654,17 @@ for(arxn in reactionInfo$rMech){
            
   #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <-  param_compare() # these plots makes the resulting list huge, but they are awesome ...
   
+  # when all of the reaction forms for a given reaction have been plotted, then export them as a group
+  rID = reactionInfo$reaction[reactionInfo$rMech == arxn]
+  if(arxn == last(reactionInfo$rMech[reactionInfo$reaction == rID])){
+    save(shiny_flux_data, file = paste0("shinyapp/reaction_data/", rID, "plots.Rdata"))
+    shiny_flux_data <- list()  
+  }
+  
   if(which(reactionInfo$rMech == arxn) %% 10 == 0){
     print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
     }
- 
+  
 }
 
 #for(a_name in names(shiny_flux_data)){
@@ -828,7 +835,9 @@ metabolic_leverage_summary_plots("L0.05")
 
 # Look at the best significant reaction form for reaction where CI overlap with flux carried is substantial (>50%)
 
-ML_inducibility <- MLdata[reaction %in% intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]),,]
+adequate_fit_optimal_rxn_form <- union(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
+
+ML_inducibility <- MLdata[reaction %in% adequate_fit_optimal_rxn_form,,]
 ML_inducibility <- ML_inducibility[Type == "enzyme",,]
 ML_inducibility <- ML_inducibility[,list(ML = sum(get("0.5")), nenzyme = length(get("0.5"))), by = c("reaction", "condition")]
 
@@ -923,53 +932,72 @@ ML_inducibility_summary$genes <- ML_reaction_enzymes$collapsed
 
 # Determine transcription factors regulating reaction subset
 
+ML_gene_summaries <- data.frame(systematic = unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]),
+                                common = c2o$gene_name[chmatch(unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]), c2o$systematic_name)])
+
 # Import matrix relating transcription factors to their targets (http://www.yeastract.com/generateregulationmatrix.php)
 # Interaction based on "DNA binding and expression evidence", all genes considered #
 # expression or affinity : 10% non-zero
 # affinity : 2% non-zero
-TFmatrix <- as.matrix(read.delim("./companionFiles/yeast_TF_regulation.csv", sep = ";", row.names = 1)) # direct and indirect
-TFmatrix <- as.matrix(read.delim("./companionFiles/Yeast_TF_affinity.csv", sep = ";", row.names = 1)) # direct targets
+TF_indirect <- as.matrix(read.delim("./companionFiles/yeast_TF_regulation.csv", sep = ";", row.names = 1)) # direct and indirect
+TF_indirect <- TF_indirect[,colnames(TF_indirect) %in% ML_gene_summaries$common]
 
+TF_direct <- as.matrix(read.delim("./companionFiles/Yeast_TF_affinity.csv", sep = ";", row.names = 1)) # direct targets
+TF_direct <- TF_direct[,colnames(TF_direct) %in% ML_gene_summaries$common]
 
-
-ML_gene_summaries <- data.frame(systematic = unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]),
-                                common = c2o$gene_name[chmatch(unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]), c2o$systematic_name)])
-
-TFmatrix_reduced <- TFmatrix[,colnames(TFmatrix) %in% ML_gene_summaries$common]
+if(all(colnames(TF_indirect) == colnames(TF_direct))){
+  
+  rxn2gene <- matrix(0, nrow = nrow(ML_inducibility_summary), ncol = ncol(TF_direct))
+  rownames(rxn2gene) <- ML_inducibility_summary$rxn; colnames(rxn2gene) <- colnames(TF_direct)
+  for(i in 1:nrow(ML_reaction_enzymes)){
+    rxn2gene[i,colnames(rxn2gene) %in% strsplit(ML_reaction_enzymes$expanded[i], split = ", ")[[1]]] <- 1
+  }  
+  
+}else{
+  stop("TF_direct and TF_indirect gene complements differ -> rxn2gene transformation needs to be modified")
+}
 
 # convert matrix from TF ~ Gene to TF ~ Rxn
-rxn2gene <- matrix(0, nrow = nrow(ML_inducibility_summary), ncol = ncol(TFmatrix_reduced))
-rownames(rxn2gene) <- ML_inducibility_summary$rxn; colnames(rxn2gene) <- colnames(TFmatrix_reduced)
-for(i in 1:nrow(ML_reaction_enzymes)){
-  rxn2gene[i,colnames(rxn2gene) %in% strsplit(ML_reaction_enzymes$expanded[i], split = ", ")[[1]]] <- 1
-  }
 
-TFreg_byrxn <- TFmatrix_reduced %*% t(rxn2gene)
-TFreg_byrxn[TFreg_byrxn != 0] <- 1
+TF_indirect_byrxn <- TF_indirect %*% t(rxn2gene); TF_indirect_byrxn[TF_indirect_byrxn != 0] <- 1
+TF_direct_byrxn <- TF_direct %*% t(rxn2gene); TF_direct_byrxn[TF_direct_byrxn != 0] <- 1
 
+# Reduce the number of transcription factors to those with a role in steady-state metabolism #
 # from FIRE, generate a subset of TFs shaping transcription across these conditions (based upon Brauer data)
 FIRE_TFs <- c("Msn2p", "Msn4p", "Gcn4p", "Bas1p", "Cbf1p", "Mbp1p", "Swi4p")
 
-TFreg_byrxn <- TFreg_byrxn[rownames(TFreg_byrxn) %in% FIRE_TFs,]
+TF_indirect_byrxn <- TF_indirect_byrxn[rownames(TF_indirect_byrxn) %in% FIRE_TFs,]
+TF_direct_byrxn <- TF_direct_byrxn[rownames(TF_direct_byrxn) %in% FIRE_TFs,]
 
-TF_ML_assoc <- data.frame(TF = rownames(TFreg_byrxn), p = NA)
+TF_ML_assoc <- data.frame(TF = c(rownames(TF_indirect_byrxn), rownames(TF_direct_byrxn)), Effect = c(rep("indirect", times = nrow(TF_indirect_byrxn)),rep("direct", times = nrow(TF_direct_byrxn))) , p = NA)
 
-for(i in 1:nrow(TFreg_byrxn)){
-  TF_ML_assoc$p[i] <- wilcox.test(ML_inducibility_summary$ML_mean[TFreg_byrxn[i,] == 1], ML_inducibility_summary$ML_mean[TFreg_byrxn[i,] == 0], alternative = "two.sided")$p.value
+for(i in 1:nrow(TF_ML_assoc)){
+  if(TF_ML_assoc$Effect[i] == "indirect"){
+    refVec <- TF_indirect_byrxn[rownames(TF_indirect_byrxn) == TF_ML_assoc$TF[i],]
+  }else{
+    refVec <- TF_direct_byrxn[rownames(TF_direct_byrxn) == TF_ML_assoc$TF[i],]
+  }
+  TF_ML_assoc$p[i] <- wilcox.test(ML_inducibility_summary$ML_mean[refVec == 1], ML_inducibility_summary$ML_mean[refVec == 0], alternative = "two.sided")$p.value
 }
-TF_ML_assoc$q <- p.adjust(TF_ML_assoc$p, method = "BH")
-TF_ML_assoc <- TF_ML_assoc[TF_ML_assoc$q < 0.1,] # look at TFs with an FDR of less than 0.1
 
-TF_effect_melt <- data.table(melt(TFreg_byrxn[rownames(TFreg_byrxn) %in% TF_ML_assoc$TF,]))
+TF_ML_assoc$q <- qvalue(TF_ML_assoc$p)$q
+TF_ML_assoc <- TF_ML_assoc[TF_ML_assoc$q < 0.1,] # look at TFs with an FDR of less than 0.1
+TF_ML_assoc$label <- paste(sub('p$', '', TF_ML_assoc$TF), TF_ML_assoc$Effect, sep = "-")
+
+TFsigSubset <- rbind(TF_indirect_byrxn[chmatch(TF_ML_assoc$TF[TF_ML_assoc$Effect == "indirect"], rownames(TF_indirect_byrxn)),],
+TF_direct_byrxn[chmatch(TF_ML_assoc$TF[TF_ML_assoc$Effect == "direct"], rownames(TF_direct_byrxn)),])
+rownames(TFsigSubset) <- TF_ML_assoc$label
+
+TF_effect_melt <- data.table(melt(TFsigSubset))
 setnames(TF_effect_melt, colnames(TF_effect_melt), c("TF", "rxn", "target"))
 TF_effect_melt$rxn <- factor(TF_effect_melt$rxn, levels = levels(TF_effect_melt$rxn))
-TF_effect_melt$TF <- factor(TF_effect_melt$TF)
-TF_effect_melt$ypos <- max(ML_inducibility_summary$ML_max) + as.numeric(TF_effect_melt$TF)/20
+TF_effect_melt$TF <- factor(TF_effect_melt$TF, levels = rev(sort(unique(as.character(TF_effect_melt$TF)))))
+TF_effect_melt$ypos <- max(ML_inducibility_summary$ML_max) + as.numeric(TF_effect_melt$TF)/25
 TF_effect_melt$fillCol <- ifelse(TF_effect_melt$target == 1, "chocolate1", "aliceblue")  
 
 
 barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
-                       panel.background = element_rect(fill = "gray80"), legend.position = "top", 
+                       panel.background = element_rect(fill = "gray90"), legend.position = "top", 
                        axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black"),
                        axis.text = element_text(color = "black"), axis.text.x = element_text(size = 18, angle = 75, hjust = 1, vjust = 1),
                        panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
@@ -977,26 +1005,15 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
                        )
 
 
-ggplot() + geom_point(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max), size = 2, color = "firebrick1") + 
-  geom_pointrange(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max), size = 2, color = "firebrick1") +
-  scale_x_discrete("Reactions", breaks = ML_inducibility_summary$rxn, labels = ML_inducibility_summary$genes) + scale_y_continuous("Enyzme Metabolic Leverage", breaks = seq(0,0.6, by = 0.2), labels = seq(0,0.6, by = 0.2), expand = c(0,0)) +
+ggplot() + geom_pointrange(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max), size = 2, color = "blue3") +
+  scale_x_discrete("Reactions", breaks = ML_inducibility_summary$rxn, labels = ML_inducibility_summary$genes) + scale_y_continuous("Enyzme Metabolic Leverage", breaks = seq(0,0.8, by = 0.2), expand = c(0,0)) +
   geom_raster(data = TF_effect_melt, aes(x = rxn, y = ypos, fill = fillCol)) + 
-  geom_text(data = TF_effect_melt[TF_effect_melt$rxn == levels(TF_effect_melt$rxn)[2],], aes(x = rxn, y = ypos, label = TF)) +
-  barplot_theme + scale_fill_identity()
+  geom_text(data = TF_effect_melt[TF_effect_melt$rxn == ML_inducibility_summary$rxn[1],], aes(x = rxn, y = ypos, label = TF), hjust = 0, size = 7) +
+  barplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y = 0)
   
+ggsave("Figures/MLstrength.pdf", height = 10, width = 14)
 
-
-
-ggplot(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max)) + geom_point(size = 2, color = "firebrick1") + geom_pointrange(size = 2, color = "firebrick1") +
-  scale_x_discrete("Reactions", breaks = ML_inducibility_summary$rxn, labels = ML_inducibility_summary$genes) + scale_y_continuous("Enyzme Metabolic Leverage", breaks = seq(0,0.6, by = 0.2)) +
-  barplot_theme + geom_raster(data = TF_effect_melt, aes(x = rxn, y = ypos)) +
-  expand_limits(y = 0.9)
-
-ggplot() + geom_raster(data = TF_effect_melt, aes(x = rxn, y = ypos, fill = target))
   
-
-
-
 
 
 ######### Compare Km values found through optimization to those from literature ################
