@@ -11,19 +11,23 @@ library(gridExtra) # grid of ggplot plots
 # point each pathway to all relevent reactions using a list - order as factors with ALL being first
 # generate figures and dump out when appropriate
 
-##### Five files loaded #####
+##### Four files loaded upfront #####
 # pathwaySet - number of members in various pathways
 # rxToPW - which pathways is a reaction associated with + name
 # reactionInfo - reactiion -> rxMechanism + sanitized names
 # pathway_plot_list - plots showing information (performance) at a pathway level
-# shiny_flux_data - rxMechanism specific plots
 
-test <- T
-if(test == T){
-  load("shinyapp/shinySubData.Rdata") # this is a reduced environment for development purposes
-}else{
-  load("shinyapp/shinyData.Rdata") # this is the full environment
-}
+#### Reaction-specific plots are loaded on-the-fly when a reaction is chosen #####
+# For each reaction (e.g. r_0001), a .Rdata file exists in shinyapp/reaction_data which contains all of the relevent plots
+
+load("shinyapp/shinyData.Rdata", envir=.GlobalEnv)
+
+#test <- F
+#if(test == T){
+#  load("shinyapp/shinySubData.Rdata") # this is a reduced environment for development purposes
+#}else{
+#  load("shinyapp/shinyData.Rdata") # this is the full environment
+#}
 
 
 
@@ -85,23 +89,37 @@ shinyServer(function(input, output) {
   ### If a reaction is chosen ###
   
   rID = reactive({rxToPW$rID[rxToPW$reactionName == input$reaction_chosen][1]}) # which reaction is active
+  
+  shiny_flux_data <- reactive({
+    if(!is.na(rID())){
+      load(paste0("shinyapp/reaction_data/", rID(), "plots.Rdata"))
+    }
+  })
+  shiny_flux_data <- shiny_flux_data()
+  
   subtypeChoices <- reactive({reactionInfo$Name[reactionInfo$reaction == rID()]}) # which reaction mechanisms are available
   
   output$subforms_available <- renderUI({selectInput("subform_chosen", "Subtype:", as.list(subtypeChoices()))}) # pass which reaction mechanisms are available to UI
   currentRx <- reactive({reactionInfo$rMech[reactionInfo$reaction == rID()][reactionInfo$Name[reactionInfo$reaction == rID()] == input$subform_chosen]}) # which reaction mechanism is active
   
-  RXplots <- reactive({names(shiny_flux_data[[currentRx()]]$plotChoices)}) # which plots can be chosen for the reaction form of interest
+  # Now that the current reaction is known, load the list containing pre-plotted figures
+  #RX_plots_list <- shiny_flux_data()
+  #output$indicator <- renderText("shiny_flux_data" %in% ls())
+  #output$indicator <- renderText(shiny_flux_data())
+  #output$indicator <- renderText(names(RX_plots_list()))
+  
+  RXplots <- reactive({names(shiny_flux_data()[[currentRx()]]$plotChoices)}) # which plots can be chosen for the reaction form of interest
   
   output$rx_check <- renderUI({checkboxGroupInput("reaction_plots", "Reaction plots to choose", choices = as.list(RXplots()))}) # pass which plots are available to UI
   
-  chosenRXplots <- reactive({shiny_flux_data[[currentRx()]]$plotChoices[names(shiny_flux_data[[currentRx()]]$plotChoices) %in% input$reaction_plots]}) # a subset of plots to be shown for a reaction form
+  chosenRXplots <- reactive({shiny_flux_data()[[currentRx()]]$plotChoices[names(shiny_flux_data()[[currentRx()]]$plotChoices) %in% input$reaction_plots]}) # a subset of plots to be shown for a reaction form
   
   column_number <- reactive({as.numeric(input$col_num)}) # how many columns should reaction-level figures be displayed in (if only 1 figure is shown it will be 1 column)
   
   # Display information - stoichiometry, pathway, enzymes ... for the reaction of interest
   
   output$RXinfo <- renderPlot({
-    textplot(shiny_flux_data[[currentRx()]]$reactionInfo, cex = 3, valign = "top", halign = "left")
+    textplot(shiny_flux_data()[[currentRx()]]$reactionInfo, cex = 3, valign = "top", halign = "left")
   })
   
   # Update the rxn-level plot(s) shown
@@ -144,14 +162,14 @@ shinyServer(function(input, output) {
         }
         dev.off()
         
-              
-    })
-  }
-})
-
-
-
-
+        
+      })
+    }
+  })
+  
+  
+  
+  
 })
 
 
