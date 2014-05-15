@@ -685,7 +685,7 @@ for(pw in pathwaySet$display){
 
 #### Save lists which will be processed by Shiny app ####
 
-save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, shiny_flux_data, file = "shinyapp/shinyData.Rdata")
+save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, file = "shinyapp/shinyData.Rdata")
 
 # generate a minute version of shinyData that will load quickly when the App is being modified
 #reactionInfo <- reactionInfo[1:20,]
