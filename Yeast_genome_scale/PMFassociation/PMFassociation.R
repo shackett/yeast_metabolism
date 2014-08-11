@@ -7,7 +7,14 @@ setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/PMFassociation")
 # libraries and sources
 library(qvalue)
 library(ggplot2)
-library(grid)
+library(grid) # units
+library(scales) # percent
+library(data.table)
+library(gridExtra) # for combining ggplot objects
+library(reshape2)
+library(igraph)
+
+options(stringsAsFactors = F)
 
 scatterPlotTheme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(color = "black", fill = "white"), legend.position = "none", 
                           panel.grid.minor = element_blank(), legend.key.width = unit(6, "line"), panel.grid.major = element_line(colour = "black"), axis.ticks = element_line(colour = "black"), strip.background = element_rect(fill = "cyan"),
@@ -18,7 +25,17 @@ JME_plot <- function(J,M,E){
   JMEdf <- data.frame(J = J, ME = M + E)
   JMEdf <- JMEdf - rep(1, nrow(JMEdf)) %*% t(apply(JMEdf, 2, mean)) # center flux and M*E
   
-  ggplot(JMEdf, aes(x = ME, y = J)) + geom_point() + geom_abline(intercept = 0, slope = 1)
+  # aesthetics
+  
+  sampleInfo <- data.frame(condition = rownames(JMEdf), limitation = substr(rownames(JMEdf), 1, 1), DR = substr(rownames(JMEdf), 2, 5))
+  sampleInfo$limitation <- factor(sampleInfo$limitation, levels = unique(sampleInfo$limitation))
+  sampleInfo$size <- sqrt(as.numeric(sampleInfo$DR)*200)
+  
+  JMEdf <- cbind(JMEdf, sampleInfo)
+  
+  ggplot(JMEdf, aes(x = ME, y = J, color = limitation, size = size)) + geom_point() + geom_abline(intercept = 0, slope = 1) +
+    scatterPlotTheme + scale_color_brewer(palette = "Set2") + scale_size_identity() +
+    scale_y_continuous(expression(log[2]~Flux)) + scale_x_continuous(expression(log[2]~Enzyme + log[2]~Substrate))
   
 }
 
@@ -29,18 +46,28 @@ JME_plot <- function(J,M,E){
 load("../flux_cache/paramCI.Rdata")
 load("../paramOptim.Rdata")
 
-MMreactionMechs <- reactionInfo$rMech[reactionInfo$modification == ""]
+MEreactionMechs <- reactionInfo$rMech[reactionInfo$modification == ""]
 
-MMreactionData <- rxnList_form[names(rxnList_form) %in% MMreactionMechs]
+MEreactionData <- rxnList_form[names(rxnList_form) %in% MEreactionMechs]
 
 # all flux > 0 | all flux < 0
 # dealing with multiple E or M : all pair-wise
-nbs <- 10000
-ME_TO <- NULL
-i <- which(names(MMreactionData) == "r_0195-rm")
-for(i in 1:length(MMreactionData)){
+
+# two comparisons for every paired substrate and enzyme
+# 1 ) log(J) ~ log(E) + log(M) - arbitrary dependence via bootstrapped pearson correlation
+# 2 ) log(J) propto log(E) + log(M) - as implied by mass-action kinetics
+# % variance explained from explained SS / TSS | slope = 1
+# p-value via permutation testing 
+
+nbs_perm <- 10000
+ME_assoc <- NULL
+ME_plot <- list()
+
+#i <- which(names(MEreactionData) == "r_0195-rm")
+
+for(i in 1:length(MEreactionData)){
   
-  a_reactionData <- MMreactionData[[i]]
+  a_reactionData <- MEreactionData[[i]]
   
   relFlux <- (a_reactionData$flux$FVAmax + a_reactionData$flux$FVAmin)/2
   
@@ -67,51 +94,129 @@ for(i in 1:length(MMreactionData)){
   MEcombos <- expand.grid(1:ncol(rxnSubstrates), 1:ncol(rxnEnzymes))
   for(k in 1:nrow(MEcombos)){
     
-    MEcor <- cor(log(relFlux), rxnSubstrates[,MEcombos[k,1]] + rxnEnzymes[,MEcombos[k,2]])
+    # Correlation
     
     J = log(relFlux)
     M = rxnSubstrates[,MEcombos[k,1]]
     E = rxnEnzymes[,MEcombos[k,2]]
     
-    MEcor_bs <- sapply(1:nbs, function(x){
+    MEcor <- cor(J, M + E)
+    
+    MEcor_bs <- sapply(1:nbs_perm, function(x){
       rs <- sample(1:length(J), replace = T)
       cor(J[rs], M[rs] + E[rs])
     })
     
     # two-tailed test for correlation != 0 with a pseudo-count to avoid p = 0
-    cor_sig <- min(1 - 2*abs(0.5 - sum(MEcor_bs > 0) / nbs) + 1/nbs, 1)
+    cor_sig <- min(1 - 2*abs(0.5 - sum(MEcor_bs > 0) / nbs_perm) + 1/nbs_perm, 1)
     
-    ME_TO <- rbind(ME_TO, 
-                   data.frame(rx = names(MMreactionData)[i], metabolite = colnames(rxnSubstrates)[MEcombos[k,1]], enzyme = colnames(rxnEnzymes)[MEcombos[k,2]], 
-                              corr = MEcor, pvalue = cor_sig)
+    # Proportionality
+    
+    varEx <- (sum((J - mean(J))^2) - sum((J - c(M+E) - mean(J - c(M+E)))^2))/sum((J - mean(J))^2)  # (TSS - RSS)/TSS
+    
+    varEx_perm <- sapply(1:nbs_perm, function(x){
+      rs <- sample(1:length(J), replace = F)
+      MEperm <- c(M+E)[rs]
+      (sum((J - mean(J))^2) - sum((J - MEperm - mean(J - MEperm))^2))/sum((J - mean(J))^2)  # (TSS - RSS)/TSS
+      })
+    
+    varEx_sig <- min((sum(varEx < varEx_perm) + 1)/nbs_perm, 1)
+    
+    ME_assoc <- rbind(ME_assoc, 
+                      data.frame(
+                        rxNum = ifelse(is.null(ME_assoc), 1, nrow(ME_assoc) + 1),
+                        rx = a_reactionData$reaction, 
+                        metabolite = a_reactionData$metNames[names(a_reactionData$metNames) == colnames(rxnSubstrates)[MEcombos[k,1]]],
+                        enzyme = colnames(rxnEnzymes)[MEcombos[k,2]], 
+                        corr = MEcor, corr_pvalue = cor_sig,
+                        varEx = varEx, varex_pvalue = varEx_sig)
     )
+    
+    ME_plot[[length(ME_plot)+1]] <- JME_plot(J,M,E)
+   
   }
 }
 
-ME_TO$qvalue <- qvalue(ME_TO$pvalue)$q
-#ME_TO_sig <- ME_TO[ME_TO$qvalue < 0.05,]
+ME_assoc$corr_qvalue <- qvalue(ME_assoc$corr_pvalue)$q
+ME_assoc$varex_qvalue <- qvalue(ME_assoc$varex_pvalue)$q
 
-ME_TO$color <- ifelse(ME_TO$qvalue > 0.1, "darkgray", NA)
-ME_TO$color[is.na(ME_TO$color)] <- ifelse(ME_TO$corr[is.na(ME_TO$color)] > 0, "darkgoldenrod1", "cornflowerblue")
-  
-ggplot() + geom_point(data = ME_TO, aes(y = -1*log(pvalue, base = 10), x = corr, color = color, alpha = 0.7), size = 4) + geom_hline(yintercept = c(0, 2, 4)) + geom_vline(xintercept = seq(-1,1,by = 0.5)) +
-  geom_hline(y = -1*log(max(ME_TO$pvalue[ME_TO$qvalue < 0.1]), base = 10), color = "RED", size = 2) +
+ME_assoc$corr_color <- ifelse(ME_assoc$corr_qvalue > 0.1, "darkgray", NA)
+ME_assoc$corr_color[is.na(ME_assoc$corr_color)] <- ifelse(ME_assoc$corr[is.na(ME_assoc$corr_color)] > 0, "darkgoldenrod1", "cornflowerblue")
+
+ME_assoc$varex_color <- ifelse(ME_assoc$varex_qvalue > 0.1, "darkgray", "darkgoldenrod1")
+
+# Correlation between M+E and Flux
+ggplot() + geom_point(data = ME_assoc, aes(y = -1*log(corr_pvalue, base = 10), x = corr, color = corr_color, alpha = 0.7), size = 4) + geom_hline(yintercept = c(0, 2, 4)) + geom_vline(xintercept = seq(-1,1,by = 0.5)) +
+  geom_hline(y = -1*log(max(ME_assoc$corr_pvalue[ME_assoc$corr_qvalue < 0.1]), base = 10), color = "RED", size = 2) +
   scale_y_continuous(expression(-log[10]~pvalue), expand = c(0,0), breaks = c(0, 2, 4), limits = c(0,4)) + scale_x_continuous("Pearson Correlation", limits = c(-1, 1), expand = c(0,0)) +
   scale_alpha_identity() + scale_color_identity() + scale_size_identity() +
   scatterPlotTheme
+ggsave("MEcorr.pdf", height = 8, width = 8)
+
+# Generate summary plots for the N genes with the greatest absolute correlation - only take the greatest pair for each gene
+best_corr <- sapply(unique(ME_assoc$rx), function(x){
+  ME_assoc$rxNum[ME_assoc$rx == x][which.max(abs(ME_assoc$corr[ME_assoc$rx == x]))]
+})
+
+MEcorr_dataTable <- data.table(ME_assoc[best_corr, c('rxNum', 'rx', 'metabolite', 'enzyme', 'corr', 'corr_pvalue', 'corr_qvalue')])
+MEcorr_dataTable <- MEcorr_dataTable[corr_qvalue < 0.1,]
+MEcorr_dataTable[, absCorr := abs(corr) ,]
+
+MEcorr_dataTable <- MEcorr_dataTable[order(-absCorr)]
+
+n_example_plots <- 6
+
+pdf(file = "MEcorr_examples.pdf", height = 20, width = 15)
+do.call(grid.arrange,  ME_plot[MEcorr_dataTable$rxNum[1:n_example_plots]])
+dev.off()
 
 
+# Fraction of variance explained given proportionality
+#ME_assoc$varEx[ME_assoc$varEx < 0] <- 0 # For associations that predict worse than the mean, floor them to this value
+
+ggplot() + geom_hline(yintercept = seq(0,4, by = 1)) + geom_vline(xintercept = seq(0,1,by = 0.25)) +
+  geom_point(data = ME_assoc, aes(y = -1*log(varex_pvalue, base = 10), x = varEx), color = "black", size = 6, alpha = 1) +
+  geom_point(data = ME_assoc, aes(y = -1*log(varex_pvalue, base = 10), x = varEx, color = varex_color), size = 5, alpha = 1) +
+  geom_hline(y = -1*log(max(ME_assoc$varex_pvalue[ME_assoc$varex_qvalue < 0.1]), base = 10), color = "RED", size = 2) +
+  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0.01,0), breaks = c(0, 2, 4), limits = c(0,4)) + scale_x_continuous("Variance Explained", limits = c(0, 1), expand = c(0.01,0), labels = percent) +
+  scale_alpha_identity() + scale_color_identity() + scale_size_identity() +
+  scatterPlotTheme 
+ggsave("MEvarex.pdf", height = 12, width = 12)
 
 
+best_varex <- sapply(unique(ME_assoc$rx), function(x){
+  ME_assoc$rxNum[ME_assoc$rx == x][which.max(ME_assoc$varEx[ME_assoc$rx == x])]
+})
+
+MEvarex_dataTable <- data.table(ME_assoc[best_varex, c('rxNum', 'rx', 'metabolite', 'enzyme', 'varEx', 'varex_pvalue', 'varex_qvalue')])
+MEvarex_dataTable <- MEvarex_dataTable[varex_qvalue < 0.1,]
+
+MEvarex_dataTable <- MEvarex_dataTable[order(-varEx)]
+
+pdf(file = "MEvarex_examples.pdf", height = 20, width = 15)
+do.call(grid.arrange,  ME_plot[MEvarex_dataTable$rxNum[1:n_example_plots]])
+dev.off()
+
+# write a summary table
+
+ME_summary_table <- ME_assoc[,c('rx', 'metabolite', 'enzyme', 'corr', 'corr_pvalue', 'corr_qvalue', 'varEx', 'varex_pvalue', 'varex_qvalue')]
+ME_summary_table$corr_qvalue <- round(ME_summary_table$corr_qvalue, 3)
+ME_summary_table$varex_qvalue <- round(ME_summary_table$varex_qvalue, 3)
+
+write.table(ME_summary_table, file = "FluxVersusME.tsv", sep = "\t", col.names = T, row.names = F, quote = F)
+
+
+##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@###@
 ##### Determine which metabolite or protein is most correlated with pathway flux for each pathway #####
+##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@###@
+
 # topology: metabolism_stoichiometry - set of all directed reactions
 
-library(igraph)
 
-load("flux_cache/yeast_stoi_directed.Rdata") # S: metabolism stoichiometry
-load("flux_cache/reconstructionWithCustom.Rdata") # metabolic reconstruction files
+load("../flux_cache/yeast_stoi_directed.Rdata") # S: metabolism stoichiometry
+load("../flux_cache/reconstructionWithCustom.Rdata") # metabolic reconstruction files
 
-carried_flux <- read.table("Flux_analysis/fluxCarriedSimple.tsv", header = T, sep = "\t")
+carried_flux <- read.table("../flux_cache/fluxCarriedSimple.tsv", header = T, sep = "\t")
 S_carried <- S; colnames(S_carried) <- sub('_[FR]$', '', colnames(S_carried))
 S_carried <- S_carried[,colnames(S_carried) %in% rownames(carried_flux)] # reactions which carry flux
 S_carried <- S_carried[rowSums(S_carried != 0) != 0,] # metabolites which are utilized
@@ -189,11 +294,12 @@ for(clust_n in 1:reaction_clusters$no){
 
 # load metabolomics and proteomics
 
-metabolite_abundance <- read.delim('flux_cache/tab_boer_log2rel.txt')
+rxn_pathways <- read.delim("../flux_cache/reactionPathways.tsv")
+metabolite_abundance <- read.delim('../flux_cache/tab_boer_log2rel.txt')
 
-enzyme_abund <- read.delim("./companionFiles/proteinAbundance.tsv")
+enzyme_abund <- read.delim("../companionFiles/proteinAbundance.tsv")
 rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
-rxn_enzyme_groups <- read.delim("./flux_cache/rxn_enzyme_groups.tsv")
+rxn_enzyme_groups <- read.delim("../flux_cache/rxn_enzyme_groups.tsv")
   
 nbs <- 10000
 
@@ -296,10 +402,29 @@ for(a_pathway in 1:length(pathway_set)){
 
 library(qvalue)
 
-pw_associations <- sapply(1:length(pathway_set), function(x){pathway_set[[x]][[2]]})
+pw_associations <- sapply(1:length(pathway_set), function(x){pathway_set[[x]]$corr})
+#pw_associations <- sapply(1:length(pathway_set), function(x){pathway_set[[x]][[2]]})
 pw_associations <- do.call(rbind, pw_associations)
 pw_associations <- as.data.frame(apply(pw_associations, c(1,2), as.character))
 pw_associations$qval <- qvalue(as.numeric(pw_associations$pval))$qvalues
+
+pw_associations <- data.table(pw_associations)
+pw_associations <- pw_associations[order(-qval)]
+
+pw_associations$color <- ifelse(pw_associations$qval > 0.1, "darkgray", NA)
+pw_associations$color[is.na(pw_associations$color)] <- ifelse(pw_associations$corr[is.na(pw_associations$color)] > 0, "darkgoldenrod1", "cornflowerblue")
+
+# Correlation between pathway flux and pathway metabolites or enzymes
+ggplot() + geom_point(data = pw_associations, aes(y = -1*log(as.numeric(pval), base = 10), x = as.numeric(corr), color = color, alpha = 0.7, shape = class), size = 4) + geom_hline(yintercept = c(0, 2, 4)) + geom_vline(xintercept = seq(-1,1,by = 0.5)) +
+  geom_hline(y = -1*log(max(as.numeric(pw_associations$pval)[pw_associations$qval < 0.1]), base = 10), color = "RED", size = 2) +
+  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0,0), breaks = c(0, 2, 4), limits = c(0,4)) + scale_x_continuous("Pearson Correlation", limits = c(-1, 1), expand = c(0,0)) +
+  scale_alpha_identity() + scale_color_identity() + scale_size_identity() +
+  scatterPlotTheme
+
+
+
+
+
 
 # some metabolites track flux through pathways but many enzymes and metabolites are anti-correlated with flux-carried
 
@@ -322,8 +447,8 @@ pw_flux <- pw_flux * ifelse(median(pw_flux) < 0, -1, 1) # set positive direction
 
 
 library(colorRamps)
-heatmap.2(abs(cor(t(carried_flux))), trace = "none", col = blue2yellow(100))
-heatmap.2((fluxCorrelation > 0.999)*1, trace = "none", col = green2red(2))
+heatmap.2(abs(cor(t(carried_flux))), trace = "none")
+heatmap.2((fluxCorrelation > 0.999)*1, trace = "none")
 table(abs(cor(t(carried_flux))) > 0.999)
 
 
