@@ -13,14 +13,18 @@ library(data.table)
 library(gridExtra) # for combining ggplot objects
 library(reshape2)
 library(igraph)
+library(org.Sc.sgd.db)
+
+source("../FBA_lib.R")
 
 options(stringsAsFactors = F)
 
-scatterPlotTheme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(color = "black", fill = "white"), legend.position = "none", 
+scatterPlotTheme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(color = "black", fill = "white"), legend.position = "none",
+                          axis.title.x = element_text(vjust = -0.3), axis.title.y = element_text(vjust = 0.25),
                           panel.grid.minor = element_blank(), legend.key.width = unit(6, "line"), panel.grid.major = element_line(colour = "black"), axis.ticks = element_line(colour = "black"), strip.background = element_rect(fill = "cyan"),
                           axis.text = element_text(color = "blacK")) 
 
-JME_plot <- function(J,M,E){
+JME_plot <- function(J,M,E,comp_summary){
   
   JMEdf <- data.frame(J = J, ME = M + E)
   JMEdf <- JMEdf - rep(1, nrow(JMEdf)) %*% t(apply(JMEdf, 2, mean)) # center flux and M*E
@@ -35,7 +39,7 @@ JME_plot <- function(J,M,E){
   
   ggplot(JMEdf, aes(x = ME, y = J, color = limitation, size = size)) + geom_point() + geom_abline(intercept = 0, slope = 1) +
     scatterPlotTheme + scale_color_brewer(palette = "Set2") + scale_size_identity() +
-    scale_y_continuous(expression(log[2]~Flux)) + scale_x_continuous(expression(log[2]~Enzyme + log[2]~Substrate))
+    scale_y_continuous(nameReformat(comp_summary$rx, 30)) + scale_x_continuous(paste(comp_summary$enzyme_common, comp_summary$metabolite, sep = " & "))
   
 }
 
@@ -45,6 +49,8 @@ JME_plot <- function(J,M,E){
 
 load("../flux_cache/paramCI.Rdata")
 load("../paramOptim.Rdata")
+
+c2o <- toTable(org.Sc.sgdCOMMON2ORF) # mapping between systematic and common yeast names
 
 MEreactionMechs <- reactionInfo$rMech[reactionInfo$modification == ""]
 
@@ -59,7 +65,8 @@ MEreactionData <- rxnList_form[names(rxnList_form) %in% MEreactionMechs]
 # % variance explained from explained SS / TSS | slope = 1
 # p-value via permutation testing 
 
-nbs_perm <- 10000
+nbs_perm <- 10^6 # runtime ~6h
+#nbs_perm <- 10000
 ME_assoc <- NULL
 ME_plot <- list()
 
@@ -71,7 +78,7 @@ for(i in 1:length(MEreactionData)){
   
   relFlux <- (a_reactionData$flux$FVAmax + a_reactionData$flux$FVAmin)/2
   
-  if(!(all(relFlux > 0) | all(relFlux < 0))){
+  if(!(all(rowSums(a_reactionData$flux > 0) == 3) | all(rowSums(a_reactionData$flux < 0) == 3))){
     # if reaction net flux direction depends on condition then skip reaction
     # log is taken to stabilize variance and remove multiplicative constant
     next    
@@ -89,7 +96,7 @@ for(i in 1:length(MEreactionData)){
     next # no substrates
   }
   
-  rxnEnzymes <- t(a_reactionData$enzymeComplexes)
+  rxnEnzymes <- t(a_reactionData$enzymeAbund)
   
   MEcombos <- expand.grid(1:ncol(rxnSubstrates), 1:ncol(rxnEnzymes))
   for(k in 1:nrow(MEcombos)){
@@ -118,23 +125,26 @@ for(i in 1:length(MEreactionData)){
       rs <- sample(1:length(J), replace = F)
       MEperm <- c(M+E)[rs]
       (sum((J - mean(J))^2) - sum((J - MEperm - mean(J - MEperm))^2))/sum((J - mean(J))^2)  # (TSS - RSS)/TSS
-      })
+    })
     
     varEx_sig <- min((sum(varEx < varEx_perm) + 1)/nbs_perm, 1)
     
-    ME_assoc <- rbind(ME_assoc, 
-                      data.frame(
-                        rxNum = ifelse(is.null(ME_assoc), 1, nrow(ME_assoc) + 1),
-                        rx = a_reactionData$reaction, 
-                        metabolite = a_reactionData$metNames[names(a_reactionData$metNames) == colnames(rxnSubstrates)[MEcombos[k,1]]],
-                        enzyme = colnames(rxnEnzymes)[MEcombos[k,2]], 
-                        corr = MEcor, corr_pvalue = cor_sig,
-                        varEx = varEx, varex_pvalue = varEx_sig)
-    )
+    comp_summary <- data.frame(
+      rxNum = ifelse(is.null(ME_assoc), 1, nrow(ME_assoc) + 1),
+      rx = a_reactionData$reaction, 
+      metabolite = a_reactionData$metNames[names(a_reactionData$metNames) == colnames(rxnSubstrates)[MEcombos[k,1]]],
+      enzyme_systematic = colnames(rxnEnzymes)[MEcombos[k,2]],
+      enzyme_common = c2o$gene_name[chmatch(colnames(rxnEnzymes)[MEcombos[k,2]], c2o$systematic_name)],
+      corr = MEcor, corr_pvalue = cor_sig,
+      varEx = varEx, varex_pvalue = varEx_sig)
     
-    ME_plot[[length(ME_plot)+1]] <- JME_plot(J,M,E)
-   
+    ME_assoc <- rbind(ME_assoc, comp_summary)
+    
+    ME_plot[[length(ME_plot)+1]] <- JME_plot(J,M,E,comp_summary)
+    
   }
+  
+  print(paste(i, "reactions done"))
 }
 
 ME_assoc$corr_qvalue <- qvalue(ME_assoc$corr_pvalue)$q
@@ -146,9 +156,9 @@ ME_assoc$corr_color[is.na(ME_assoc$corr_color)] <- ifelse(ME_assoc$corr[is.na(ME
 ME_assoc$varex_color <- ifelse(ME_assoc$varex_qvalue > 0.1, "darkgray", "darkgoldenrod1")
 
 # Correlation between M+E and Flux
-ggplot() + geom_point(data = ME_assoc, aes(y = -1*log(corr_pvalue, base = 10), x = corr, color = corr_color, alpha = 0.7), size = 4) + geom_hline(yintercept = c(0, 2, 4)) + geom_vline(xintercept = seq(-1,1,by = 0.5)) +
+ggplot() + geom_point(data = ME_assoc, aes(y = -1*log(corr_pvalue, base = 10), x = corr, color = corr_color, alpha = 0.7), size = 4) + geom_hline(yintercept = c(0, 2, 4, 6)) + geom_vline(xintercept = seq(-1,1,by = 0.5)) +
   geom_hline(y = -1*log(max(ME_assoc$corr_pvalue[ME_assoc$corr_qvalue < 0.1]), base = 10), color = "RED", size = 2) +
-  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0,0), breaks = c(0, 2, 4), limits = c(0,4)) + scale_x_continuous("Pearson Correlation", limits = c(-1, 1), expand = c(0,0)) +
+  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0,0), breaks = c(0, 2, 4, 6), limits = c(0,6)) + scale_x_continuous("Pearson Correlation", limits = c(-1, 1), expand = c(0,0)) +
   scale_alpha_identity() + scale_color_identity() + scale_size_identity() +
   scatterPlotTheme
 ggsave("MEcorr.pdf", height = 8, width = 8)
@@ -158,7 +168,7 @@ best_corr <- sapply(unique(ME_assoc$rx), function(x){
   ME_assoc$rxNum[ME_assoc$rx == x][which.max(abs(ME_assoc$corr[ME_assoc$rx == x]))]
 })
 
-MEcorr_dataTable <- data.table(ME_assoc[best_corr, c('rxNum', 'rx', 'metabolite', 'enzyme', 'corr', 'corr_pvalue', 'corr_qvalue')])
+MEcorr_dataTable <- data.table(ME_assoc[best_corr, c('rxNum', 'rx', 'metabolite', 'enzyme_systematic', 'corr', 'corr_pvalue', 'corr_qvalue')])
 MEcorr_dataTable <- MEcorr_dataTable[corr_qvalue < 0.1,]
 MEcorr_dataTable[, absCorr := abs(corr) ,]
 
@@ -174,11 +184,11 @@ dev.off()
 # Fraction of variance explained given proportionality
 #ME_assoc$varEx[ME_assoc$varEx < 0] <- 0 # For associations that predict worse than the mean, floor them to this value
 
-ggplot() + geom_hline(yintercept = seq(0,4, by = 1)) + geom_vline(xintercept = seq(0,1,by = 0.25)) +
+ggplot() + geom_hline(yintercept = seq(0,6, by = 1)) + geom_vline(xintercept = seq(0,1,by = 0.25)) +
   geom_point(data = ME_assoc, aes(y = -1*log(varex_pvalue, base = 10), x = varEx), color = "black", size = 6, alpha = 1) +
   geom_point(data = ME_assoc, aes(y = -1*log(varex_pvalue, base = 10), x = varEx, color = varex_color), size = 5, alpha = 1) +
   geom_hline(y = -1*log(max(ME_assoc$varex_pvalue[ME_assoc$varex_qvalue < 0.1]), base = 10), color = "RED", size = 2) +
-  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0.01,0), breaks = c(0, 2, 4), limits = c(0,4)) + scale_x_continuous("Variance Explained", limits = c(0, 1), expand = c(0.01,0), labels = percent) +
+  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0.01,0), breaks = c(0, 2, 4, 6), limits = c(0,6)) + scale_x_continuous("Variance Explained", limits = c(0, 1), expand = c(0.01,0), labels = percent) +
   scale_alpha_identity() + scale_color_identity() + scale_size_identity() +
   scatterPlotTheme 
 ggsave("MEvarex.pdf", height = 12, width = 12)
@@ -188,7 +198,7 @@ best_varex <- sapply(unique(ME_assoc$rx), function(x){
   ME_assoc$rxNum[ME_assoc$rx == x][which.max(ME_assoc$varEx[ME_assoc$rx == x])]
 })
 
-MEvarex_dataTable <- data.table(ME_assoc[best_varex, c('rxNum', 'rx', 'metabolite', 'enzyme', 'varEx', 'varex_pvalue', 'varex_qvalue')])
+MEvarex_dataTable <- data.table(ME_assoc[best_varex, c('rxNum', 'rx', 'metabolite', 'enzyme_systematic', 'varEx', 'varex_pvalue', 'varex_qvalue')])
 MEvarex_dataTable <- MEvarex_dataTable[varex_qvalue < 0.1,]
 
 MEvarex_dataTable <- MEvarex_dataTable[order(-varEx)]
@@ -199,7 +209,7 @@ dev.off()
 
 # write a summary table
 
-ME_summary_table <- ME_assoc[,c('rx', 'metabolite', 'enzyme', 'corr', 'corr_pvalue', 'corr_qvalue', 'varEx', 'varex_pvalue', 'varex_qvalue')]
+ME_summary_table <- ME_assoc[,c('rx', 'metabolite', 'enzyme_common', 'enzyme_systematic', 'corr', 'corr_pvalue', 'corr_qvalue', 'varEx', 'varex_pvalue', 'varex_qvalue')]
 ME_summary_table$corr_qvalue <- round(ME_summary_table$corr_qvalue, 3)
 ME_summary_table$varex_qvalue <- round(ME_summary_table$varex_qvalue, 3)
 
