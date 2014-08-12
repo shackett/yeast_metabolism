@@ -384,11 +384,16 @@ for(a_pathway in 1:length(pathway_set)){
       
       pw_reg <- lm(pw_flux ~ matching_met_matrix[a_row,])
       reg_resids <- pw_reg$resid * sqrt(length(pw_flux)/pw_reg$df.residual)
+       
+      X <- as.matrix(cbind(1, matching_met_matrix[a_row,]))
       
       pivotal_t <- t(sapply(1:nbs, function(z){ 
         pw_null <- I(pw_reg$fitted + sample(reg_resids, replace = T))
-        summary(lm(pw_null ~ matching_met_matrix[a_row,]))$coef[2,1:2]
+        B = solve(t(X)%*%X)%*%t(X)%*%pw_null # solve for regression coefficients
+        c(B[2],
+        sqrt(sum((pw_null - X%*%B)^2)/(ncol(matching_enzyme_matrix) - 2) * solve(t(X)%*%X)[2,2])) # solve for se of slope
       }))
+      
       pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
       
       data.frame(pwnum = a_pathway, class = "metabolite", specie = matching_met_df$Metabolite[a_row], corr = cor(pw_flux, matching_met_matrix[a_row,]), pval = (1  - abs(0.5 - sum(pivotal_dist > 0)/nbs)*2) + (1/nbs))
@@ -426,10 +431,15 @@ for(a_pathway in 1:length(pathway_set)){
       pw_reg <- lm(pw_flux ~ matching_enzyme_matrix[a_row,])
       reg_resids <- pw_reg$resid * sqrt(length(pw_flux)/pw_reg$df.residual)
       
+      X <- as.matrix(cbind(1, matching_enzyme_matrix[a_row,]))
+      
       pivotal_t <- t(sapply(1:nbs, function(z){ 
         pw_null <- I(pw_reg$fitted + sample(reg_resids, replace = T))
-        summary(lm(pw_null ~ matching_enzyme_matrix[a_row,]))$coef[2,1:2]
+        B = solve(t(X)%*%X)%*%t(X)%*%pw_null # solve for regression coefficients
+        c(B[2],
+        sqrt(sum((pw_null - X%*%B)^2)/(ncol(matching_enzyme_matrix) - 2) * solve(t(X)%*%X)[2,2])) # solve for se of slope
       }))
+      
       pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
       
       data.frame(pwnum = a_pathway, class = "enzyme", specie = rownames(matching_enzyme_matrix)[a_row], corr = cor(pw_flux, matching_enzyme_matrix[a_row,]), pval = (1  - abs(0.5 - sum(pivotal_dist > 0)/nbs)*2) + (1/nbs))
@@ -503,8 +513,9 @@ do.call(grid.arrange,
   })
 )
 dev.off()
-  
-  
+
+# write pathway associations to a file
+pw_associations
 
 
 
