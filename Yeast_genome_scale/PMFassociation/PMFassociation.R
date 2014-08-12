@@ -43,6 +43,8 @@ JME_plot <- function(J,M,E,comp_summary){
   
 }
 
+n_example_plots <- 6
+
 ##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
 ##### Trade-offs between metabolite abundances and enzyme levels maintain robustness in flux ######
 ##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
@@ -174,8 +176,6 @@ MEcorr_dataTable[, absCorr := abs(corr) ,]
 
 MEcorr_dataTable <- MEcorr_dataTable[order(-absCorr)]
 
-n_example_plots <- 6
-
 pdf(file = "MEcorr_examples.pdf", height = 20, width = 15)
 do.call(grid.arrange,  ME_plot[MEcorr_dataTable$rxNum[1:n_example_plots]])
 dev.off()
@@ -220,8 +220,29 @@ write.table(ME_summary_table, file = "FluxVersusME.tsv", sep = "\t", col.names =
 ##### Determine which metabolite or protein is most correlated with pathway flux for each pathway #####
 ##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@###@
 
-# topology: metabolism_stoichiometry - set of all directed reactions
+JMorE_plot <- function(PWname, PWflux, predictorName, predictorConc){
+  
+  # scale predictor by median and express flux as fraction of maximal activity
+  JMorEdf <- data.frame(J = PWflux / max(abs(PWflux)), predictor = predictorConc / median(predictorConc))
+  
+  # aesthetics
+  
+  sampleInfo <- data.frame(condition = rownames(JMorEdf), limitation = substr(rownames(JMorEdf), 1, 1), DR = substr(rownames(JMorEdf), 2, 5))
+  sampleInfo$limitation <- factor(sampleInfo$limitation, levels = unique(sampleInfo$limitation))
+  sampleInfo$size <- sqrt(as.numeric(sampleInfo$DR)*200)
+  
+  JMorEdf <- cbind(JMorEdf, sampleInfo)
+  
+  dependence_regression <- lm(data = JMorEdf, J ~ predictor)$coef
+  
+  ggplot(JMorEdf, aes(x = predictor, y = J, color = limitation, size = size)) + geom_point() + geom_abline(intercept = dependence_regression[1], slope = dependence_regression[2], color = "darkgoldenrod3", size = 2) +
+    geom_hline(y = 0, size = 1) + geom_vline(x = 0, size = 1) + 
+    scatterPlotTheme + scale_color_brewer(palette = "Set2") + scale_size_identity() + expand_limits(x = 0, y = 0) +
+    scale_y_continuous(nameReformat(PWname, 30), expand = c(0.01,0), label = percent) + scale_x_continuous(predictorName, expand = c(0.01,0))
+  
+}
 
+# topology: metabolism_stoichiometry - set of all directed reactions
 
 load("../flux_cache/yeast_stoi_directed.Rdata") # S: metabolism stoichiometry
 load("../flux_cache/reconstructionWithCustom.Rdata") # metabolic reconstruction files
@@ -260,9 +281,10 @@ reaction_clusters <- igraph::clusters(reaction_adjacency, mode = "weak") # find 
 # identify connected subgraphs using a subset of reactions defined by these correlated reaction clusters (without restricting metabolities)
 
 pathway_set <- list()
+
 for(clust_n in 1:reaction_clusters$no){
   
-  if(length(V(reaction_adjacency)$name[reaction_clusters$membership == clust_n]) < 3){next} # catch minute clusters
+  if(length(V(reaction_adjacency)$name[reaction_clusters$membership == clust_n]) < 3){next} # skip minute clusters
   
   # reduce stoichiometric matrix to the relevent set of reactions
   pw_subset <- S_carried[,colnames(S_carried) %in% V(reaction_adjacency)$name[reaction_clusters$membership == clust_n]]
@@ -302,6 +324,8 @@ for(clust_n in 1:reaction_clusters$no){
     }
   }
 
+
+
 # load metabolomics and proteomics
 
 rxn_pathways <- read.delim("../flux_cache/reactionPathways.tsv")
@@ -313,11 +337,11 @@ rxn_enzyme_groups <- read.delim("../flux_cache/rxn_enzyme_groups.tsv")
   
 nbs <- 10000
 
- 
 rxn_pathways_carryFlux <- rxn_pathways[rxn_pathways$reactionID %in% rownames(carried_flux),]
 rxn_pathways_class_list <- sapply(rxn_pathways_carryFlux$pathway, function(x){strsplit(x, split = '__')[[1]]})
 names(rxn_pathways_class_list) <- rxn_pathways_carryFlux$reactionID
 pw_counts <- table(unlist(rxn_pathways_class_list))
+
 
 for(a_pathway in 1:length(pathway_set)){
   stoi_subset <- pathway_set[[a_pathway]]
@@ -338,17 +362,21 @@ for(a_pathway in 1:length(pathway_set)){
     }
     pw <- names(pw_annot[pw_p == min(pw_p)][which.max(pw_annot[pw_p == min(pw_p)])])
   }
+  pw <- paste0(pw, " (", ncol(stoi_subset), ")") 
+  
   
   rx_names <- unique(rxnFile$Reaction[rxnFile$ReactionID %in% colnames(stoi_subset)])  
   
-# metabolites
+  # metabolites
   matching_met_index <- sapply(unique(corrFile$SpeciesType[corrFile$SpeciesID %in% rownames(stoi_subset)]), function(a_met){grep(a_met, metabolite_abundance$tID)})
   matching_met_df <- metabolite_abundance[unique(unlist(matching_met_index)),, drop = F]
+  
+  metabolite_figs <- list()
   
   if(nrow(matching_met_df) > 0){
     matching_met_matrix <- 2^matching_met_df[,grep('[PCNLU][0-9.]{4}', colnames(matching_met_df))]
     if(!all(names(pw_flux) %in% colnames(matching_met_matrix))){stop("check ordering")}
-    matching_met_matrix <- matching_met_matrix[,chmatch(colnames(matching_met_matrix), names(pw_flux)), drop = F]
+    matching_met_matrix <- matching_met_matrix[,chmatch(names(pw_flux), colnames(matching_met_matrix)), drop = F]
     
     pathway_corr <- t(sapply(1:nrow(matching_met_matrix), function(a_row){
       # regress metabolite/enzyme on flux 
@@ -360,29 +388,36 @@ for(a_pathway in 1:length(pathway_set)){
       pivotal_t <- t(sapply(1:nbs, function(z){ 
         pw_null <- I(pw_reg$fitted + sample(reg_resids, replace = T))
         summary(lm(pw_null ~ matching_met_matrix[a_row,]))$coef[2,1:2]
-        }))
+      }))
       pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
       
       data.frame(pwnum = a_pathway, class = "metabolite", specie = matching_met_df$Metabolite[a_row], corr = cor(pw_flux, matching_met_matrix[a_row,]), pval = (1  - abs(0.5 - sum(pivotal_dist > 0)/nbs)*2) + (1/nbs))
       
-      }))
-      
-    #pathway_corr <- t(sapply(1:nrow(matching_met_matrix), function(a_row){
-    #  null = sapply(1:nperm, function(z){cor(pw_flux, sample(matching_met_matrix[a_row,]))})
-    #  data.frame(pwnum = a_pathway, class = "metabolite", specie = matching_met_df$Metabolite[a_row], corr = cor(pw_flux, matching_met_matrix[a_row,]), pval = 1 - sum(cor(pw_flux, matching_met_matrix[a_row,]) > null)/(nperm + 1))
-    #  }))
+    }))
     
-    }else{
-      pathway_corr <- NULL
+    # pairwise-comparisons of M and P
+    
+    for(a_met in 1:nrow(matching_met_matrix)){
+      
+      metabolite_figs[[matching_met_df$Metabolite[a_met]]] <- JMorE_plot(PWname = pw, PWflux = pw_flux,
+                                                                         predictorName = matching_met_df$Metabolite[a_met],
+                                                                         predictorConc = matching_met_matrix[a_met,])
+      
     }
+    
+  }else{
+    pathway_corr <- NULL
+  }
   
   # enzymes
   enzyme_subset <- 2^enzyme_abund[rownames(enzyme_abund) %in% unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% colnames(stoi_subset)]),,drop = F]
   colnames(enzyme_subset) <- toupper(colnames(enzyme_subset))
   
+  enzyme_figs <- list()
+  
   if(nrow(enzyme_subset) > 0){
-    if(!all(names(pw_flux) %in% colnames(enzyme_subset))){stop("check ordering")}
-    matching_enzyme_matrix <- enzyme_subset[,chmatch(colnames(enzyme_subset), names(pw_flux)), drop = F]
+    if(!all(names(pw_flux) %in% colnames(enzyme_subset))){stop("check naming")}
+    matching_enzyme_matrix <- enzyme_subset[,chmatch(names(pw_flux), colnames(enzyme_subset)), drop = F]
     
     enzyme_corr <- t(sapply(1:nrow(matching_enzyme_matrix), function(a_row){
       # regress metabolite/enzyme on flux 
@@ -394,46 +429,89 @@ for(a_pathway in 1:length(pathway_set)){
       pivotal_t <- t(sapply(1:nbs, function(z){ 
         pw_null <- I(pw_reg$fitted + sample(reg_resids, replace = T))
         summary(lm(pw_null ~ matching_enzyme_matrix[a_row,]))$coef[2,1:2]
-        }))
+      }))
       pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
       
       data.frame(pwnum = a_pathway, class = "enzyme", specie = rownames(matching_enzyme_matrix)[a_row], corr = cor(pw_flux, matching_enzyme_matrix[a_row,]), pval = (1  - abs(0.5 - sum(pivotal_dist > 0)/nbs)*2) + (1/nbs))
       
-      }))
+    }))
     
-    #enzyme_corr <- t(sapply(1:nrow(matching_enzyme_matrix), function(a_row){
-    #  null = sapply(1:nperm, function(z){cor(pw_flux, sample(matching_enzyme_matrix[a_row,]))})
-    #  data.frame(pwnum = a_pathway, class = "enzyme", specie = rownames(matching_enzyme_matrix)[a_row], corr = cor(pw_flux, matching_enzyme_matrix[a_row,]), pval = 1 - sum(cor(pw_flux, matching_enzyme_matrix[a_row,]) > null)/(nperm + 1))
-    #  }))
     pathway_corr <- rbind(pathway_corr, enzyme_corr)
+    
+    # pairwise-comparisons of M and P
+    
+    for(a_enz in 1:nrow(enzyme_subset)){
+      
+      enzyme_figs[[rownames(enzyme_subset)[a_enz]]] <- JMorE_plot(PWname = pw, PWflux = pw_flux,
+                                                                  predictorName = c2o$gene_name[chmatch(rownames(enzyme_subset)[a_enz], c2o$systematic_name)],
+                                                                  predictorConc = enzyme_subset[a_enz,])
+      
     }
-  pathway_set[[a_pathway]] <- list(pw_name = pw, rx_names = rx_names, stoi = pathway_set[[a_pathway]], corr = pathway_corr, flux = pw_flux)
+    
+    
+  }
+  pathway_set[[a_pathway]] <- list(pw_name = pw, rx_names = rx_names, stoi = pathway_set[[a_pathway]], corr = pathway_corr, flux = pw_flux, metabolite_figures = metabolite_figs, enzyme_figures = enzyme_figs)
 }
 
-library(qvalue)
 
 pw_associations <- sapply(1:length(pathway_set), function(x){pathway_set[[x]]$corr})
-#pw_associations <- sapply(1:length(pathway_set), function(x){pathway_set[[x]][[2]]})
 pw_associations <- do.call(rbind, pw_associations)
 pw_associations <- as.data.frame(apply(pw_associations, c(1,2), as.character))
 pw_associations$qval <- qvalue(as.numeric(pw_associations$pval))$qvalues
-
-pw_associations <- data.table(pw_associations)
-pw_associations <- pw_associations[order(-qval)]
 
 pw_associations$color <- ifelse(pw_associations$qval > 0.1, "darkgray", NA)
 pw_associations$color[is.na(pw_associations$color)] <- ifelse(pw_associations$corr[is.na(pw_associations$color)] > 0, "darkgoldenrod1", "cornflowerblue")
 
 # Correlation between pathway flux and pathway metabolites or enzymes
 ggplot() + geom_point(data = pw_associations, aes(y = -1*log(as.numeric(pval), base = 10), x = as.numeric(corr), color = color, alpha = 0.7, shape = class), size = 4) + geom_hline(yintercept = c(0, 2, 4)) + geom_vline(xintercept = seq(-1,1,by = 0.5)) +
-  geom_hline(y = -1*log(max(as.numeric(pw_associations$pval)[pw_associations$qval < 0.1]), base = 10), color = "RED", size = 2) +
-  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0,0), breaks = c(0, 2, 4), limits = c(0,4)) + scale_x_continuous("Pearson Correlation", limits = c(-1, 1), expand = c(0,0)) +
+  geom_hline(y = -1*log(max(as.numeric(pw_associations$pval)[pw_associations$qval < 0.1]), base = 10), color = "RED", size = 2) + facet_grid(class ~ .) + 
+  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0.01,0), breaks = c(0, 2, 4), limits = c(0,4)) + scale_x_continuous("Pearson Correlation", limits = c(-1, 1), expand = c(0,0)) +
   scale_alpha_identity() + scale_color_identity() + scale_size_identity() +
   scatterPlotTheme
 
+# Look at examples of the most correlated (- or +) metabolites or enzymes with pathway flux
+
+pw_associations <- data.table(pw_associations)
+pw_associations[,pwnum := as.numeric(pwnum)]; pw_associations[,corr := as.numeric(corr)] ; pw_associations[,pval := as.numeric(pval)] ; pw_associations[,qval := as.numeric(qval)]
+
+
+pw_associations_strongest <- pw_associations[,list(specie = specie[which.max(abs(corr))],
+                                                   corr = corr[which.max(abs(corr))],
+                                                   pval = pval[which.max(abs(corr))],
+                                                   qval = qval[which.max(abs(corr))]
+), by = c("pwnum", "class")]
+
+  
+met_subset <- pw_associations_strongest[class == "metabolite",]
+met_subset <- met_subset[order(-abs(corr))]
+
+pdf(file = "pathwayCorr_mets.pdf", height = 20, width = 15)
+do.call(grid.arrange,
+  lapply(1:n_example_plots, function(i){
+    pathway_set[[met_subset[i,pwnum]]]$metabolite_figures[[met_subset[i,specie]]]
+  })
+)
+dev.off()
+  
+enz_subset <- pw_associations_strongest[class == "enzyme",]
+enz_subset <- enz_subset[order(-abs(corr))]
+
+pdf(file = "pathwayCorr_enzs.pdf", height = 20, width = 15)
+do.call(grid.arrange,
+  lapply(1:n_example_plots, function(i){
+    pathway_set[[enz_subset[i,pwnum]]]$enzyme_figures[[enz_subset[i,specie]]]
+  })
+)
+dev.off()
+  
+  
 
 
 
+
+
+
+enzy_subset <- pw_associations[pw_associations$class == "enzyme",]
 
 
 # some metabolites track flux through pathways but many enzymes and metabolites are anti-correlated with flux-carried
