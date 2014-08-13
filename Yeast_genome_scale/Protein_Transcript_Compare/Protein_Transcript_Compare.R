@@ -331,8 +331,9 @@ write.output.preclustered(t(impSVD_pcs), "Output/ptDiffPCs.cdt", gap = c(5,10,15
 library(reshape2)
 library(data.table)
 library(ggplot2)
-library(eigenR2)
+#library(eigenR2)
 library(impute)
+library(scales)
 
 options(stringsAsFactor = F)
 
@@ -384,11 +385,11 @@ transcript_subset <- transcript_RA
 transcript_subset <- transcript_subset[Feature %in% protein_RA$Feature,]
 
 transcript_RA[,Experiment := 'Transcripts']
-transcript_subset[,Experiment := 'Transcript (measured protein subset)']
+transcript_subset[,Experiment := 'Transcripts\n[proteomics subset]']
 protein_RA[,Experiment := 'Proteins']
 boer_metab[,Experiment := 'Metabolites'] 
 flux_rel[,Experiment := 'Fluxes']
-pt_diff_rel[,Experiment := 'Proteins-per-transcript']
+pt_diff_rel[,Experiment := 'Proteins\nper\ntranscript']
 
 aggregated_omics <- rbind(transcript_RA, protein_RA, transcript_subset, pt_diff_rel, boer_metab, flux_rel, use.names = T)
 
@@ -416,12 +417,9 @@ for(exp in unique(aggregated_omics$Experiment)){
   # Test effect of GR as DR + 1 vs. 1
   
   DReffect <- model.matrix(~ omics_covariates$DR + 1) # 2 df
-  eigen_summary <- eigenR2(omics_subset, model = DReffect, adjust = T, eigen.sig = 0.05)
-  eigenR2summary$GR[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2
-  eigenR2_per_df$GR[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2/(ncol(DReffect) - 1)
   
   DR_RSS <- sum(apply(omics_subset, 1, function(x){sum(lm(x ~ DReffect + 0)$resid^2)}))
-  DR_Rsquared <- 1 - (DR_RSS/(25-ncol(DReffect)) / (TSS/24))
+  DR_Rsquared <- 1 - DR_RSS/TSS #(DR_RSS/(ncol(omics_subset)-ncol(DReffect)) / (TSS/(ncol(omics_subset)-1)))
   
   eigenR2summary$GR[eigenR2summary$Experiment == exp] <- DR_Rsquared
   eigenR2_per_df$GR[eigenR2summary$Experiment == exp] <- DR_Rsquared/(ncol(DReffect) - 1)
@@ -434,12 +432,9 @@ for(exp in unique(aggregated_omics$Experiment)){
   # add in limitation-specific intercept
   
   LimDReffect <- model.matrix(~ omics_covariates$Lim + omics_covariates$DR + 1) # 6 df
-  eigen_summary <- eigenR2(omics_subset, model = LimDReffect, null.model = DReffect, adjust = T, eigen.sig = 0.05)
-  eigenR2summary$Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2
-  eigenR2_per_df$Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2/(ncol(LimDReffect) - ncol(DReffect))
   
   LimDR_RSS <- sum(apply(omics_subset, 1, function(x){sum(lm(x ~ LimDReffect + 0)$resid^2)}))
-  LimDR_Rsquared <- 1 - (LimDR_RSS/(25-ncol(LimDReffect)) / (TSS/24))
+  LimDR_Rsquared <- 1 - LimDR_RSS/TSS #(LimDR_RSS/(25-ncol(LimDReffect)) / (TSS/24))
   
   eigenR2summary$Lim[eigenR2summary$Experiment == exp] <- LimDR_Rsquared - DR_Rsquared
   eigenR2_per_df$Lim[eigenR2summary$Experiment == exp] <- (LimDR_Rsquared - DR_Rsquared)/(ncol(LimDReffect) - ncol(DReffect))
@@ -447,16 +442,12 @@ for(exp in unique(aggregated_omics$Experiment)){
   # add in limitation-specific slope
   
   LimDRInteffect <- model.matrix(~ omics_covariates$Lim * omics_covariates$DR + 1) # 10 df
-  eigen_summary <- eigenR2(omics_subset, model = LimDRInteffect, null.model = LimDReffect, adjust = T, eigen.sig = 0.05)
-  eigenR2summary$GR_Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2
-  eigenR2_per_df$GR_Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2/(ncol(LimDRInteffect) - ncol(LimDReffect))
   
   LimDRInt_RSS <- sum(apply(omics_subset, 1, function(x){sum(lm(x ~ LimDRInteffect + 0)$resid^2)}))
-  LimDRInt_Rsquared <- 1 - (LimDRInt_RSS/(25-ncol(LimDRInteffect)) / (TSS/24))
-  LimDRInt_Rsquared - LimDR_Rsquared
-  eigenR2summary$GR_Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2
-  eigenR2_per_df$GR_Lim[eigenR2summary$Experiment == exp] <- eigen_summary$eigenR2/(ncol(LimDRInteffect) - ncol(LimDReffect))
+  LimDRInt_Rsquared <- 1 - LimDRInt_RSS/TSS#(LimDRInt_RSS/(25-ncol(LimDRInteffect)) / (TSS/24))
   
+  eigenR2summary$GR_Lim[eigenR2summary$Experiment == exp] <- LimDRInt_Rsquared - LimDR_Rsquared
+  eigenR2_per_df$GR_Lim[eigenR2summary$Experiment == exp] <- (LimDRInt_Rsquared - LimDR_Rsquared)/(ncol(LimDRInteffect) - ncol(LimDReffect))
   
   }
 
@@ -464,15 +455,118 @@ for(exp in unique(aggregated_omics$Experiment)){
 eigen_melt <- melt(eigenR2summary)
 eigen_melt <- eigen_melt[eigen_melt$Experiment != "Fluxes",]
 
-eigen_melt$Experiment <- factor(eigen_melt$Experiment, levels = c("Transcripts", "Transcript (measured protein subset)",
-                                                                  "Proteins", "Proteins-per-transcript", "Metabolites"))
+eigen_melt$Experiment <- factor(eigen_melt$Experiment, levels = c("Transcripts", "Transcripts\n[proteomics subset]",
+                                                                  "Proteins", "Proteins\nper\ntranscript", "Metabolites"))
 
 eigen_melt <- data.table(eigen_melt)
 eigen_melt[,scaled := value/sum(value), by = "Experiment"]
 
-ggplot(eigen_melt, aes(x = Experiment, y = value, fill = variable)) + geom_bar() +
- scale_fill_brewer(palette = "Set1") + expand_limits(y = c(0,1)) +
- scale_y_continuous("Variance Explained by Experimental Design") +
- scale_x_discrete(NULL)
+eigen_bar_label <- eigen_melt[eigen_melt$variable != "GR_Lim",]
+eigen_bar_label$value[eigen_bar_label$variable == "Lim"] <- eigen_bar_label$value[eigen_bar_label$variable == "Lim"] + eigen_bar_label$value[eigen_bar_label$variable == "GR"]
+eigen_bar_label$scaled[eigen_bar_label$variable == "Lim"] <- eigen_bar_label$scaled[eigen_bar_label$variable == "Lim"] + eigen_bar_label$scaled[eigen_bar_label$variable == "GR"]
+eigen_bar_label$label = paste0(round(eigen_bar_label$scaled*100, 1), "%")
+
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+                       panel.background = element_rect(fill = "gray80"), legend.position = "top", 
+                       axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black"),
+                       axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 60, hjust = 0.5, vjust = 0.5),
+                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank(), legend.key = element_rect(color = "white")
+                       )
+
+ggplot(eigen_melt, aes(x = Experiment, y = value, fill = variable)) + 
+  geom_bar(stat = "identity") +
+  geom_text(data = eigen_bar_label, aes(label = label, y = value), vjust = -0.2) + 
+  scale_fill_brewer(palette = "Set2", breaks = c("GR", "Lim", "GR_Lim"), labels = c("Growth-rate dependence", "Limitation dependence", "Limitation specific growth-rate dependence")) + expand_limits(y = c(0,1)) +
+  scale_y_continuous("Variance Explained by\nExperimental Design", labels = percent_format(), expand = c(0,0)) +
+  scale_x_discrete("") + barplot_theme + guides(fill = guide_legend(nrow = 2, byrow = T))
+
+ggsave("Output/omicsVarianceExplained.pdf", width = 9, height = 7)
 
 
+
+omics_comparison <- list()
+
+# Summarize amount of variability in each data set
+# bootstrapped quantiles of CV #
+
+omics_CV <- aggregated_omics[, list(SD = sd(RA, na.rm = T)), by = c("Feature", "Experiment")]
+
+omics_CV <- omics_CV[Experiment != "Fluxes",]
+omics_CV$Experiment <- factor(omics_CV$Experiment, levels = c("Transcripts", "Transcripts\n[proteomics subset]",
+                                                              "Proteins", "Proteins\nper\ntranscript", "Metabolites"))
+
+omics_quantile_bs <- NULL
+
+nbs <- 1000
+for(exp in levels(omics_CV$Experiment)){
+  
+  exp_data <- omics_CV$SD[omics_CV$Experiment == exp]
+  SD_bs_quantiles <- sapply(1:nbs, function(x){quantile(sample(exp_data, size = length(exp_data), replace = T), probs = c(0.5, 0.95))})
+  
+  quantile_CI <- apply(SD_bs_quantiles, 1, function(x){quantile(x, probs = c(0.025, 0.975))})
+  rownames(quantile_CI) <- c("min", "max")
+  m_quantile_CI <- melt(quantile_CI); colnames(m_quantile_CI) <- c("bound", "quantile", "value")
+  
+  omics_quantile_bs <- rbind(omics_quantile_bs, data.frame(Experiment = exp, m_quantile_CI))
+  
+  }
+
+omics_quantile_bs <- dcast(omics_quantile_bs, "Experiment + quantile ~ bound", value.var = "value")
+
+omics_quantile_bs$Experiment <- factor(omics_quantile_bs$Experiment, levels = c("Transcripts", "Transcripts\n[proteomics subset]",
+                                                                                "Proteins", "Proteins\nper\ntranscript", "Metabolites"))
+omics_comparison$omics_variability <- 
+  ggplot() + geom_violin(data = omics_CV, aes(x = Experiment, y = SD), fill = "turquoise3") +
+  #geom_errorbar(data = omics_quantile_bs, aes(x = Experiment, ymin = min, ymax = max, group = quantile), size = 1, color = "purple4") +
+  scale_y_continuous(expression('Standard Deviation of' ~ log[2] ~ 'abundances') , expand = c(0,0)) +
+  scale_x_discrete("") + barplot_theme + expand_limits(y = 0)
+
+
+omics_varianceExplained <-  eigen_melt[, list(value = sum(value)), by = "Experiment"]
+
+omics_comparison$variance_explained <- ggplot(omics_varianceExplained, aes(x = Experiment, y = value)) + 
+  geom_bar(stat = "identity", fill = "chocolate1") +
+  expand_limits(y = c(0,1)) +
+  scale_y_continuous("Fraction of total variance explained\nby experimental design", labels = percent_format(), expand = c(0,0)) +
+  scale_x_discrete("") + barplot_theme
+
+omics_comparison$variance_partition <- ggplot(eigen_melt[variable == "GR",,], aes(x = Experiment, y = scaled, fill = variable)) + 
+  geom_bar(stat = "identity") +
+  scale_fill_brewer(palette = "Set2", breaks = c("GR", "Lim", "GR_Lim"), labels = c("Growth-rate dependence", "Limitation dependence", "Limitation specific growth-rate dependence"), guide = F) +
+  scale_y_continuous("Fraction of explained variance\ndue to growth-rate", labels = percent_format(), expand = c(0,0)) +
+  scale_x_discrete("") + barplot_theme
+
+#ggplot(eigen_melt[variable == "GR",,], aes(x = Experiment, y = scaled, fill = variable)) + 
+#  geom_bar(stat = "identity") +
+#  scale_fill_brewer(palette = "Set2", breaks = c("GR", "Lim", "GR_Lim"), labels = c("Growth-rate dependence", "Limitation dependence", "Limitation specific growth-rate dependence")) + expand_limits(y = c(0,1)) +
+#  scale_y_continuous("Fraction of explained variance\ndue to growth-rate", labels = percent_format(), expand = c(0,0)) +
+#  scale_x_discrete("") + barplot_theme + guides(fill = guide_legend(nrow = 2, byrow = T))
+
+explained_per_df_melt <- melt(eigenR2_per_df)
+explained_per_df_melt <- explained_per_df_melt[explained_per_df_melt$Experiment != "Fluxes",]
+
+explained_per_df_melt$Experiment <- factor(explained_per_df_melt$Experiment, levels = c("Transcripts", "Transcripts\n[proteomics subset]",
+                                                                  "Proteins", "Proteins\nper\ntranscript", "Metabolites"))
+explained_per_df_melt <- data.table(explained_per_df_melt)
+explained_per_df_melt[,scaled := value/sum(value), by = "Experiment"]
+
+#omics_comparison$variance_partition <- ggplot(explained_per_df_melt, aes(x = Experiment, y = scaled, fill = variable)) + 
+#  geom_bar(stat = "identity") +
+#  scale_fill_brewer(palette = "Set2", breaks = c("GR", "Lim", "GR_Lim"), labels = c("Growth-rate dependence", "Limitation dependence", "Limitation specific growth-rate dependence")) + expand_limits(y = c(0,1)) +
+#  scale_y_continuous("Variance Explained by\nExperimental Design", labels = percent_format(), expand = c(0,0)) +
+#  scale_x_discrete("") + barplot_theme + guides(fill = guide_legend(nrow = 2, byrow = T))
+
+
+
+library(gridExtra)
+
+pdf(file = "Output/omics_layout.pdf", height = 25, width = 9)
+do.call(grid.arrange,  omics_comparison)
+dev.off()
+
+for(a_plot in names(omics_comparison)){
+  
+  ggsave(omics_comparison[[a_plot]], file = paste0("Output/", a_plot, ".pdf"), width = 9, height = 7)
+
+}
