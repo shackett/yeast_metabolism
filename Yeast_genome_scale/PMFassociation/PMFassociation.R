@@ -22,7 +22,20 @@ options(stringsAsFactors = F)
 scatterPlotTheme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(color = "black", fill = "white"), legend.position = "none",
                           axis.title.x = element_text(vjust = -0.3), axis.title.y = element_text(vjust = 0.25),
                           panel.grid.minor = element_blank(), legend.key.width = unit(6, "line"), panel.grid.major = element_line(colour = "black"), axis.ticks = element_line(colour = "black"), strip.background = element_rect(fill = "cyan"),
-                          axis.text = element_text(color = "blacK")) 
+                          axis.text = element_text(color = "blacK"),
+                          panel.margin = unit(2, "lines")) 
+
+n_example_plots <- 6
+
+c2o <- toTable(org.Sc.sgdCOMMON2ORF) # mapping between systematic and common yeast names
+
+
+##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
+##### Trade-offs between metabolite abundances and enzyme levels maintain robustness in flux ######
+##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
+
+load("../flux_cache/paramCI.Rdata")
+load("../paramOptim.Rdata")
 
 JME_plot <- function(J,M,E,comp_summary){
   
@@ -42,17 +55,6 @@ JME_plot <- function(J,M,E,comp_summary){
     scale_y_continuous(nameReformat(comp_summary$rx, 30)) + scale_x_continuous(paste(comp_summary$enzyme_common, comp_summary$metabolite, sep = " & "))
   
 }
-
-n_example_plots <- 6
-
-##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
-##### Trade-offs between metabolite abundances and enzyme levels maintain robustness in flux ######
-##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@##@
-
-load("../flux_cache/paramCI.Rdata")
-load("../paramOptim.Rdata")
-
-c2o <- toTable(org.Sc.sgdCOMMON2ORF) # mapping between systematic and common yeast names
 
 MEreactionMechs <- reactionInfo$rMech[reactionInfo$modification == ""]
 
@@ -335,7 +337,8 @@ enzyme_abund <- read.delim("../companionFiles/proteinAbundance.tsv")
 rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
 rxn_enzyme_groups <- read.delim("../flux_cache/rxn_enzyme_groups.tsv")
   
-nbs <- 10000
+#nbs <- 10000
+nbs <- 10^6 # ~24 hours
 
 rxn_pathways_carryFlux <- rxn_pathways[rxn_pathways$reactionID %in% rownames(carried_flux),]
 rxn_pathways_class_list <- sapply(rxn_pathways_carryFlux$pathway, function(x){strsplit(x, split = '__')[[1]]})
@@ -391,7 +394,7 @@ for(a_pathway in 1:length(pathway_set)){
         pw_null <- I(pw_reg$fitted + sample(reg_resids, replace = T))
         B = solve(t(X)%*%X)%*%t(X)%*%pw_null # solve for regression coefficients
         c(B[2],
-        sqrt(sum((pw_null - X%*%B)^2)/(ncol(matching_enzyme_matrix) - 2) * solve(t(X)%*%X)[2,2])) # solve for se of slope
+        sqrt(sum((pw_null - X%*%B)^2)/(length(pw_flux) - 2) * solve(t(X)%*%X)[2,2])) # solve for se of slope
       }))
       
       pivotal_dist <- pivotal_t[,1]/pivotal_t[,2]
@@ -450,17 +453,20 @@ for(a_pathway in 1:length(pathway_set)){
     
     # pairwise-comparisons of M and P
     
-    for(a_enz in 1:nrow(enzyme_subset)){
+    for(a_enz in 1:nrow(matching_enzyme_matrix)){
       
       enzyme_figs[[rownames(enzyme_subset)[a_enz]]] <- JMorE_plot(PWname = pw, PWflux = pw_flux,
-                                                                  predictorName = c2o$gene_name[chmatch(rownames(enzyme_subset)[a_enz], c2o$systematic_name)],
-                                                                  predictorConc = enzyme_subset[a_enz,])
+                                                                  predictorName = c2o$gene_name[chmatch(rownames(matching_enzyme_matrix)[a_enz], c2o$systematic_name)],
+                                                                  predictorConc = matching_enzyme_matrix[a_enz,])
       
     }
     
     
   }
   pathway_set[[a_pathway]] <- list(pw_name = pw, rx_names = rx_names, stoi = pathway_set[[a_pathway]], corr = pathway_corr, flux = pw_flux, metabolite_figures = metabolite_figs, enzyme_figures = enzyme_figs)
+  
+  print(paste(a_pathway, "pathways analyzed"))
+  
 }
 
 
@@ -473,11 +479,13 @@ pw_associations$color <- ifelse(pw_associations$qval > 0.1, "darkgray", NA)
 pw_associations$color[is.na(pw_associations$color)] <- ifelse(pw_associations$corr[is.na(pw_associations$color)] > 0, "darkgoldenrod1", "cornflowerblue")
 
 # Correlation between pathway flux and pathway metabolites or enzymes
-ggplot() + geom_point(data = pw_associations, aes(y = -1*log(as.numeric(pval), base = 10), x = as.numeric(corr), color = color, alpha = 0.7, shape = class), size = 4) + geom_hline(yintercept = c(0, 2, 4)) + geom_vline(xintercept = seq(-1,1,by = 0.5)) +
+ggplot() + geom_point(data = pw_associations, aes(y = -1*log(as.numeric(pval), base = 10), x = as.numeric(corr), color = color, alpha = 0.7, shape = class), size = 4) + geom_hline(yintercept = c(0, 2, 4, 6)) + geom_vline(xintercept = seq(-1,1,by = 0.5)) +
   geom_hline(y = -1*log(max(as.numeric(pw_associations$pval)[pw_associations$qval < 0.1]), base = 10), color = "RED", size = 2) + facet_grid(class ~ .) + 
-  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0.01,0), breaks = c(0, 2, 4), limits = c(0,4)) + scale_x_continuous("Pearson Correlation", limits = c(-1, 1), expand = c(0,0)) +
+  scale_y_continuous(expression(-log[10]~pvalue), expand = c(0.01,0), breaks = c(0, 2, 4, 6), limits = c(0,6)) + scale_x_continuous("Pearson Correlation", limits = c(-1, 1), expand = c(0,0)) +
   scale_alpha_identity() + scale_color_identity() + scale_size_identity() +
   scatterPlotTheme
+ggsave("pathwayCorr.pdf", height = 14, width = 9)
+
 
 # Look at examples of the most correlated (- or +) metabolites or enzymes with pathway flux
 
@@ -515,26 +523,15 @@ do.call(grid.arrange,
 dev.off()
 
 # write pathway associations to a file
-pw_associations
+pw_corr_output <- pw_associations[,c('pwnum', 'class', 'specie', 'corr', 'pval', 'qval'), with = F]
 
+pw_corr_output[, pval := round(pval, 6) ]
+pw_corr_output[, qval := round(qval, 6) ]
 
+pw_corr_output[, pwName := pathway_set[[pwnum]]$pw_name, by = "pwnum"]
+pw_corr_output[, pwReactions := paste(pathway_set[[pwnum]]$rx_names, collapse = "; "), by = "pwnum"]
 
-
-
-
-enzy_subset <- pw_associations[pw_associations$class == "enzyme",]
-
-
-# some metabolites track flux through pathways but many enzymes and metabolites are anti-correlated with flux-carried
-
-sig_pw_associations <- pw_associations[pw_associations$qval < 0.05,]
-
-sig_met_pw_associations <- sig_pw_associations[sig_pw_associations$class == "metabolite",]
-
-# plot significant examples
-
-pw_flux <- apply(carried_flux[rownames(carried_flux) %in% colnames(stoi_subset),], 2, median)
-pw_flux <- pw_flux * ifelse(median(pw_flux) < 0, -1, 1) # set positive direction as direction carried in the majority of conditions
+write.table(pw_corr_output, file = "PW_corr_table.tsv", sep = "\t", row.names = F, col.names = T, quote = F)
 
 
 

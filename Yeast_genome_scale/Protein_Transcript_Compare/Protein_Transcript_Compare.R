@@ -11,6 +11,8 @@ library(grid)
 library(data.table)
 library(ggplot2)
 library(reshape2)
+library(scales)
+library(gridExtra) # for combining ggplot objects
 
 load("../../ChemicalSpeciesQuant/Proteomics/EMoutputDeg.Rdata")
 load("../../ChemicalSpeciesQuant/Proteomics/EMimport.Rdata")
@@ -276,7 +278,73 @@ scatter_theme <- theme(text = element_text(size = 23), title = element_text(size
                        legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "navy"), axis.ticks = element_blank(),
                        axis.text = element_text(color = "black")) 
 
-ggplot(ScreePlots, aes(x = PC, y = VarianceFraction*100, color = DataType)) + geom_point(size = 5) + scatter_theme + scale_color_brewer(palette = "Set2")
+ggplot(ScreePlots, aes(x = PC, y = VarianceFraction*100, color = DataType)) + geom_point(size = 5) + scatter_theme + scale_color_brewer(palette = "Set2") + expand_limits(y = 0)
+
+### PC-based summary of proteomics data
+
+# Scree
+# PCA scores plot: PC1 ~ PC2
+# Major PCs
+
+proteomicsPC_plots <- list()
+
+proteomics_svd <- svd(proteomics_reduced[,cond_reorder])
+proteomics_PCs <-proteomics_svd$v[,1:6]
+colnames(proteomics_PCs) <- paste0("PC", 1:6)
+rownames(proteomics_PCs) <- colnames(proteomics_reduced)[cond_reorder]
+
+scatterPlotTheme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(color = "black", fill = "white"), legend.position = "none",
+                          axis.title.x = element_text(vjust = -0.3), axis.title.y = element_text(vjust = 0.25),
+                          panel.grid.minor = element_blank(), legend.key.width = unit(6, "line"), panel.grid.major = element_line(colour = "black"), axis.ticks = element_line(colour = "black"), strip.background = element_rect(fill = "cyan"),
+                          axis.text = element_text(color = "blacK")) 
+
+
+ScreePlot <- data.frame(PC = 1:25, P = proteomics_svd$d^2 / sum(proteomics_svd$d^2))
+ScreePlot$color <- ifelse(ScreePlot$PC <= npc, "RED", "BLACK")
+
+proteomicsPC_plots$Scree <- ggplot(ScreePlot, aes(x = PC, y = P, color = color)) + geom_point(size = 5) + scatterPlotTheme + scale_color_identity() + expand_limits(y = c(0, max(ScreePlot$P)*1.04)) +
+  scale_y_continuous("Fraction of variance explained", labels = percent, breaks = seq(0,0.25, by = 0.05), expand = c(0,0)) +
+  scale_x_discrete("Principal component", breaks = c(1,5,10,15,20,25))
+
+# PCA scores
+proteomics_design <- data.frame(condition = rownames(proteomics_PCs), limitation = toupper(substr(rownames(proteomics_PCs), 1, 1)), DR = substr(rownames(proteomics_PCs), 2, 5))
+proteomics_design$size <- sqrt(as.numeric(proteomics_design$DR)*1000)
+proteomics_design$limitation <- factor(proteomics_design$limitation, levels = unique(proteomics_design$limitation))
+
+proteomics_PC_aug <- data.frame(proteomics_PCs, proteomics_design)
+
+proteomicsPC_plots$PCA_scores <- ggplot(proteomics_PC_aug, aes(x = PC2, y = PC1, color = limitation, size = size)) + geom_point(shape = 20, alpha = 0.7) + scale_size_identity() + 
+  scale_color_brewer(palette = "Set2") + scatterPlotTheme +
+  scale_x_continuous("Principal component 2") + scale_y_continuous("Principal component 1")
+
+#library(gplots)
+#heatmap.2(cor(proteomics_reduced[,cond_reorder]), trace = "none", Rowv = F, Colv = F)
+
+# Proteomics PCs
+
+scatterPlotTheme_facet <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(color = "black", fill = "cornsilk1"), legend.position = "none",
+                          axis.title.x = element_text(vjust = -0.3), axis.title.y = element_text(vjust = 0.25), panel.grid.major = element_blank(),
+                          panel.grid.minor = element_blank(), axis.ticks = element_blank(), strip.background = element_rect(fill = "burlywood1"),
+                          axis.text = element_text(color = "black"), axis.text.x = element_text(angle = 90)) 
+
+
+proteomics_PC_melt <- melt(proteomics_PC_aug, id.vars = colnames(proteomics_design))
+proteomics_PC_melt$condition <- factor(proteomics_PC_melt$condition, levels = unique(proteomics_PC_melt$condition))
+proteomics_PC_melt$limitation <- factor(proteomics_PC_melt$limitation, levels = unique(proteomics_PC_melt$limitation))
+
+proteomicsPC_plots$protPCs <- ggplot(proteomics_PC_melt, aes(x = condition, y = value, group = limitation, col = limitation)) + facet_grid(variable ~ ., scales = "free_y") + 
+  geom_hline(yintercept = 0, size = 1) +
+  geom_point(size = 4) + geom_line(size = 2) + scatterPlotTheme_facet + scale_color_brewer(palette = "Set2") +
+  scale_size_identity()
+  
+proteomicsPC_plots$ncol <- 3
+
+pdf(file = "Output/ProteomicsPCsummary.pdf", height = 7, width = 21)
+do.call(grid.arrange,  proteomicsPC_plots)
+dev.off()
+
+
+
 
 
 #### Plot proteomics principal components ####
@@ -537,27 +605,6 @@ omics_comparison$variance_partition <- ggplot(eigen_melt[variable == "GR",,], ae
   scale_y_continuous("Fraction of explained variance\ndue to growth-rate", labels = percent_format(), expand = c(0,0)) +
   scale_x_discrete("") + barplot_theme
 
-#ggplot(eigen_melt[variable == "GR",,], aes(x = Experiment, y = scaled, fill = variable)) + 
-#  geom_bar(stat = "identity") +
-#  scale_fill_brewer(palette = "Set2", breaks = c("GR", "Lim", "GR_Lim"), labels = c("Growth-rate dependence", "Limitation dependence", "Limitation specific growth-rate dependence")) + expand_limits(y = c(0,1)) +
-#  scale_y_continuous("Fraction of explained variance\ndue to growth-rate", labels = percent_format(), expand = c(0,0)) +
-#  scale_x_discrete("") + barplot_theme + guides(fill = guide_legend(nrow = 2, byrow = T))
-
-explained_per_df_melt <- melt(eigenR2_per_df)
-explained_per_df_melt <- explained_per_df_melt[explained_per_df_melt$Experiment != "Fluxes",]
-
-explained_per_df_melt$Experiment <- factor(explained_per_df_melt$Experiment, levels = c("Transcripts", "Transcripts\n[proteomics subset]",
-                                                                  "Proteins", "Proteins\nper\ntranscript", "Metabolites"))
-explained_per_df_melt <- data.table(explained_per_df_melt)
-explained_per_df_melt[,scaled := value/sum(value), by = "Experiment"]
-
-#omics_comparison$variance_partition <- ggplot(explained_per_df_melt, aes(x = Experiment, y = scaled, fill = variable)) + 
-#  geom_bar(stat = "identity") +
-#  scale_fill_brewer(palette = "Set2", breaks = c("GR", "Lim", "GR_Lim"), labels = c("Growth-rate dependence", "Limitation dependence", "Limitation specific growth-rate dependence")) + expand_limits(y = c(0,1)) +
-#  scale_y_continuous("Variance Explained by\nExperimental Design", labels = percent_format(), expand = c(0,0)) +
-#  scale_x_discrete("") + barplot_theme + guides(fill = guide_legend(nrow = 2, byrow = T))
-
-
 
 library(gridExtra)
 
@@ -570,3 +617,38 @@ for(a_plot in names(omics_comparison)){
   ggsave(omics_comparison[[a_plot]], file = paste0("Output/", a_plot, ".pdf"), width = 9, height = 7)
 
 }
+
+
+#### PCs of multi-omics ####
+
+omic_PCcomp <- NULL
+
+for(exp in unique(aggregated_omics$Experiment)){
+  
+  omics_subset <- acast(aggregated_omics[Experiment == exp,], Feature ~ Lim + DR, value.var = "RA")
+  omics_subset <- omics_subset[rowSums(!is.na(omics_subset)) >= ncol(omics_subset)/2,]
+  omics_subset <- impute.knn(omics_subset)$data # this will only effect the brauer transcriptomics dataset
+  
+  # center each row
+  omics_subset <- omics_subset - rowMeans(omics_subset)
+  
+  omics_covariates <- as.data.frame(t(sapply(colnames(omics_subset), function(x){strsplit(x, '_')[[1]]})))
+  colnames(omics_covariates) <- c("Lim", "DR")
+  omics_covariates$DR <- as.numeric(as.character(omics_covariates$DR))
+  
+  omic_svd <- as.data.frame(svd(omics_subset)$v[,1:3])
+  colnames(omic_svd) <- c("PC1", "PC2", "PC3")
+  
+  omics_summary <- data.frame(omic_svd, omics_covariates)
+  
+  omics_summary$Lim <- factor(omics_summary$Lim, levels = c("P","C","N","L","U"))
+
+  omic_PCcomp <- rbind(omic_PCcomp, data.frame(omic = exp, omics_summary))
+  
+  }
+
+ggplot(data = omic_PCcomp, aes(x = PC1, y = PC2, color = Lim, size = DR)) + geom_point() + facet_wrap(~ omic)
+  
+
+
+
