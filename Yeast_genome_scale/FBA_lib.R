@@ -1928,8 +1928,8 @@ reactionProperties <-  function(){
   #WICSS <- apply(condSD^2, 2, sum)
   #OCSS <- apply((all_exp_species - rep(1,nrow(all_exp_species)) %*% t(apply(all_exp_species, 2, mean)))^2, 2, sum)
   
-  
-  SDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, var)), dim = dim(mcmc_elasticity))
+  # weighting by sd of log abundances is similar to weighting by IQR
+  SDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(mcmc_elasticity)) 
   
   we_melt <- data.table(melt(SDweightedElasticity))
   
