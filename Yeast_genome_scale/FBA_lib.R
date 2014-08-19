@@ -2740,4 +2740,57 @@ nameReformat <- function(names, totalChar){
   }
   nameLengths$name
 }
+
+########## Functions used for summarizing behavior of sets of reactions ############
+
+color_simplex <- function(res = 100, control_co = 0.1){
+  
+  # generate a color profile that can be used to express a consensus color based upon the relative
+  # value of 3 measures summing to one.
+  # res - how many bins divide the space into
+  # contorl_co - values less than contorl co will display as white
+  
+  require(reshape2)
+  require(data.table)
+  require(scales)
+  
+  color_simplex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "white"), 
+                               legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
+                               panel.grid.major = element_blank(), axis.line = element_blank(), axis.text = element_text(color = "black"), axis.ticks = element_line(color = "black", size = 2)) 
+  
+  
+  color_summary <- list()
+  
+  control_lattice <- matrix(NA, ncol = res+1, nrow = res+1)
+  rownames(control_lattice) <- seq(0,1,by = 1/res) # parts enzyme - red
+  colnames(control_lattice) <- seq(0,1,by = 1/res) # parts allostery - blue
+  
+  control_colors <- melt(control_lattice)
+  colnames(control_colors) <- c("enzyme", "allostery", "color")
+  control_colors <- data.table(control_colors)
+  
+  control_colors <- control_colors[enzyme + allostery <= 1,]
+  control_colors[,residual := round(1-allostery-enzyme, 4)]
+  control_colors$residual[control_colors$residual < 0.2] <- 0.2
+  
+  #control_colors[,angle := ifelse(enzyme + allostery != 0, 120*allostery/(allostery+enzyme), 360)]
+  #control_colors[,angle := ifelse(enzyme + allostery != 0, 360 - 120*allostery/(allostery+enzyme), 360)]
+  control_colors[,angle := ifelse(enzyme + allostery != 0, 240 + 120*allostery/(allostery+enzyme), 360)]
+  #control_colors[,angle := ifelse(enzyme + allostery != 0, 0 + 240*allostery/(allostery+enzyme), 360)]
+  
+  control_colors[,color := hcl(h = angle, c = 100, l = 100*residual),]
+  control_colors[,alpha := (1-residual+0.2)^(1/3)]
+  control_colors$color[control_colors$residual > 1-control_co] <- "#FFFFFF"
+  
+  color_summary$Figure <- ggplot(control_colors, aes(x = enzyme, y = allostery, fill = color)) + geom_tile() + scale_fill_identity() +
+    color_simplex_theme + scale_x_continuous("Enzyme Control", label = percent, expand = c(0,0)) +
+    scale_y_continuous("Allosteric Control", label = percent, expand = c(0,0)) +
+    geom_hline(yintercept = 0, size = 3) + geom_vline(xintercept = 0, size = 3) +
+    geom_abline(intercept = 1, slope = -1, size = 3) + geom_abline(intercept = control_co, slope = -1, size = 3)
+  
+  color_summary$Table <- control_colors
+  
+  return(color_summary)
+}
+
   

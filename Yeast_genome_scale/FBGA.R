@@ -651,7 +651,7 @@ for(arxn in reactionInfo$rMech){
   #param_dist <- param_compare()
   #ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
   #ggsave(shiny_flux_data[[arxn]]$plotChoices$Likelihood, file = paste0("tmp/", arxn, "_likViolin.pdf"), width = 16, height = 10)
-           
+  
   #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <-  param_compare() # these plots makes the resulting list huge, but they are awesome ...
   
   # when all of the reaction forms for a given reaction have been plotted, then export them as a group
@@ -735,9 +735,15 @@ validRxnA <- sapply(rxnList_form[names(rxnList_form) %in% RMMrxns], function(x){
 validRxnB <- rxn_fits$parSpearman[chmatch(RMMrxns, rxn_fits$rxn)] > 0.6
 
 valid_rxns <- substr(RMMrxns[validRxnA | validRxnB], 1, 6)
+rmCond_rxns <- unique(reactionInfo$reaction[grep('rmCond', reactionInfo$modification)]) # reactions which carry zero flux under some conditions - consider only non-zero reactions
 
 optimal_rxn_form <- sapply(valid_rxns, function(x){
+  
   rx_forms <- reactionInfo[reactionInfo$reaction == x,]
+  if(x %in% rmCond_rxns){
+    rx_forms <- rx_forms[grep('rmCond', rx_forms$modification),]
+    }
+  
   rx_forms <- rx_forms[grep('t_metX', rx_forms$modification, invert = T),]
   rx_best_mod <- rx_forms$rMech[!is.na(rx_forms$Qvalue)][which.min(rx_forms$Qvalue[!is.na(rx_forms$Qvalue)])]
   if(length(rx_best_mod) == 0){
@@ -745,9 +751,10 @@ optimal_rxn_form <- sapply(valid_rxns, function(x){
   }else if(rx_forms$Qvalue[rx_forms$rMech == rx_best_mod] < 0.05){
     rx_best_mod
   }else{
-    rx_forms$rMech[rx_forms$modification == ""]
+    rx_forms$rMech[rx_forms$modification %in% c("rmCond", "")]
   }
 })
+
 
 #reactionInfo[chmatch(optimal_rxn_form, reactionInfo$rMech),]
 
@@ -822,6 +829,26 @@ ggplot() + geom_bar(data = spearman_MM_df, aes(x = x, y = spearman_MM), stat = "
  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Spearman correlation: prediction ~ FBA", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1)) + scale_fill_identity() + expand_limits(y = c(0,1))
 ggsave("Figures/MMspearmanCorr.pdf", height = 12, width = 13)
 
+##### Summary based on spearman correlation for MM or significant regulator #####
+
+spearman_MMandReg <- data.table(data.frame(reactionInfo[,c('reaction', 'modification', 'Qvalue')], spearman = rxn_fits[,'parSpearman'])) # all reactions
+spearman_MMandReg <- spearman_MMandReg[grep('t_metX', spearman_MMandReg$modification, invert = T),] # filter hypothetical regulators
+
+spearman_MMandReg <- spearman_MMandReg[spearman_MMandReg$Qvalue < 0.1 | is.na(spearman_MMandReg$Qvalue),] # filter for MM or regulation with Qvalue < 0.1
+spearman_MMandReg$row <- 1:nrow(spearman_MMandReg)
+
+spearman_MMandReg <- spearman_MMandReg[spearman_MMandReg[, row[which.max(spearman)], by = "reaction"]$V1,]
+spearman_MMandReg <- spearman_MMandReg[spearman > 0,]
+setkey(spearman_MMandReg, "spearman")
+spearman_MMandReg$Type <- ifelse(spearman_MMandReg$modification == "", "rMM", "regulator")
+
+spearman_MMandReg$reaction <- factor(spearman_MMandReg$reaction, levels = spearman_MMandReg$reaction)
+
+ggplot() + geom_bar(data = spearman_MMandReg , aes(x = reaction, y = spearman, fill = Type), stat = "identity", position = "dodge", width = 0.85) + barplot_theme +
+  scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1)) +
+  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_brewer("", palette = "Set1", label = c("Allosteric Regulator", "Reversible Michaelis-Menten")) +
+  ggtitle('Correlation between measured and predicted flux') + expand_limits(y = c(0,1))
+ggsave("Figures/MM_reg_spearmanCorr.pdf", height = 12, width = 13)
 
 ##### Generate figure summarizing metabolic leverage for a condition #####
 
@@ -980,6 +1007,8 @@ for(i in 1:nrow(TF_ML_assoc)){
   TF_ML_assoc$p[i] <- wilcox.test(ML_inducibility_summary$ML_mean[refVec == 1], ML_inducibility_summary$ML_mean[refVec == 0], alternative = "two.sided")$p.value
 }
 
+library(qvalue)
+
 TF_ML_assoc$q <- qvalue(TF_ML_assoc$p)$q
 TF_ML_assoc <- TF_ML_assoc[TF_ML_assoc$q < 0.1,] # look at TFs with an FDR of less than 0.1
 TF_ML_assoc$label <- paste(sub('p$', '', TF_ML_assoc$TF), TF_ML_assoc$Effect, sep = "-")
@@ -1004,6 +1033,7 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
                        axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
                        )
 
+write.table(ML_inducibility_summary, file = "flux_cache/ML_inducibility_summary.tsv", quote = F, row.names = F, col.names = T, sep = "\t")
 
 ggplot() + geom_pointrange(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max), size = 2, color = "blue3") +
   scale_x_discrete("Reactions", breaks = ML_inducibility_summary$rxn, labels = ML_inducibility_summary$genes) + scale_y_continuous("Enyzme Metabolic Leverage", breaks = seq(0,0.8, by = 0.2), expand = c(0,0)) +
@@ -1013,7 +1043,37 @@ ggplot() + geom_pointrange(data = ML_inducibility_summary, aes(x = rxn, y = ML_m
   
 ggsave("Figures/MLstrength.pdf", height = 10, width = 14)
 
-  
+######## Split ML of well-fit reactions into enzyme and allosteric control ###########
+
+ML_rxn_summary <- MLdata[reaction %in% adequate_fit_optimal_rxn_form,,]
+ML_rxn_summary$Type[ML_rxn_summary$Type %in% c("substrate", "product")] <- "rxn_metabolite"
+ML_rxn_summary$Type[!(ML_rxn_summary$Type %in% c("rxn_metabolite", "enzyme"))] <- "regulator"
+
+ML_rxn_summary <- ML_rxn_summary[,list(ML = sum(get("0.5"))), by = c("reaction", "Type", "condition")]
+ML_rxn_summary <- ML_rxn_summary[,list(ML = median(ML)), by = c("reaction", "Type")]
+
+ML_rxn_summary[,MLrenorm := ML/sum(ML), by = "reaction"]
+
+ML_rxn_summary <- data.table(dcast(ML_rxn_summary, reaction ~ Type, value.var = "MLrenorm", fill = 0)) # each rxn with assocaited enzyme, regulator and metabolic control fraction
+ML_rxn_summary[,rID := substr(reaction, 1, 6),]
+ML_rxn_summary$genes <- ML_inducibility_summary$genes[chmatch(ML_rxn_summary$reaction, ML_inducibility_summary$reaction)]
+
+setkeyv(ML_rxn_summary, "rxn_metabolite")
+
+color_key <- color_simplex(100, 0)
+
+color_index <- mapply(function(x,y){
+  which.min(abs(color_key$Table$enzyme - x) + abs(color_key$Table$allostery - y))
+}, x = ML_rxn_summary$enzyme, y = ML_rxn_summary$regulator)
+
+ML_rxn_summary <- cbind(ML_rxn_summary, color_key$Table[color_index, c("color", "alpha"), with = F])
+
+#plot(1:45, 1:45, col = ML_rxn_summary$color, pch = 16, cex = 2)
+ggsave("Figures/MLcolorKey.pdf", color_key$Figure, height = 7, width = 7)
+
+ML_rxn_summary$reaction_info <- reactionInfo$FullName[chmatch(ML_rxn_summary$reaction, reactionInfo$rMech)]
+
+write.table(ML_rxn_summary, "flux_cache/control_layout.tsv", col.names = T, row.names = F, quote = F, sep = "\t")
 
 
 ######### Compare Km values found through optimization to those from literature ################
