@@ -1,12 +1,4 @@
-## Current objectives ##
-
-2013-10-28 posted:
-* Establish boundary constraints
-* Finalize flux distribution & FVA
-* Determine posterior distributions
-* Compare optimized affinities to literature.  Compare keq to free energy
-
----
+This repository contains the family of scripts which integrate a yeast SBML model with experimentally constrained fluxes and then relate these fluxes to experimentally-measured metabolomics and proteomics
 
 ## Standard Workflow ##
 
@@ -37,7 +29,7 @@ Relative or absolute quantification of various crucial species:
     * Specifies the costs associated with the production of each biomass component (such as GTP and ATP used for protein synthesis)
     * Generates boundaryFluxes.Rdata - a file which stand-alone summarizes each chemostats boundary flux expectation and coefficient of variation
 * brauer-microarray: RNA abundance across 36 chemostat conditions
-* <font color='red'>FTIR: attempt to measure composition using FTIR (not used)</font>
+* ~~FTIR: attempt to measure composition using FTIR (not used)~~
 * BulkComposition: measuring the dry weight and absolute amounts of abundant macromolecules which go into making more yeast
     * Protein
     * RNA
