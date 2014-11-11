@@ -58,8 +58,8 @@ Relative or absolute quantification of various crucial species:
 
 * ~~CTSpy.py (written by Dave Robinson): All conversions between metabolite names & standards were done using the chemical translation service (CTS).~~
 * ~~ecoliYeastMatch.py: Because the same chemical can have multiple ChEBI or KEGG ids, the association is made more degenerate by first searching ChEBI ids to metabolite synonyms and then re-searching these against KEGG ids, to get a set of possible KEGG ids.~~
-* ~~ecoliNameDict.txt - correspondence between geneID (unknown standard) and gene name. Downloaded from: http://coli.berkeley.edu/ecoli/gene.txt~~
 * ~~gene-links.dat - correspondence between geneIDs and gene name, etc.  Downloaded from BioCyc~~
+* ~~ecoliNameDict.txt - correspondence between geneID (unknown standard) and gene name. Downloaded from: http://coli.berkeley.edu/ecoli/gene.txt~~
 ---
 **~~gibbsAnalysis.R~~**
 
@@ -81,7 +81,7 @@ Relational files associating KEGG IDs and yeast systematic names
 **sbml_FBA_parser.py and SBML_genome_scale.py**
 
 XML parsers which generate four files:
-* The species involved in a reation - proteins and metabolites
+* The species involved in a reaction - proteins and metabolites
 * The reaction, its stoichiometry and the compartment where it occurs
 * Annotations of the protein and metabolite identity
 * Mapping between a compartment designation and common name
@@ -92,11 +92,10 @@ SBML reconstructions of several organisms from bioModels
 
 ---
 
-## Thermo (No longer used) ##
+## ~~Thermo (No longer used)~~##
 
-Prepare the absolute concentrations of metabolites, so that these can be used to modify the reaction free energy
-
-* yeastNames.py - conversion between names of metabolites and possible ChEBI and KEGG ids
+~~Prepare the absolute concentrations of metabolites, so that these can be used to modify the reaction free energy~~
+* ~~yeastNames.py - conversion between names of metabolites and possible ChEBI and KEGG ids~~
 
 ---
 
