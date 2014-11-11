@@ -33,8 +33,11 @@
 
 Relative or absolute quantification of various crucial species:
 
+* boundaryDataBlender.R - Aggregates measurements of cellular composition and media depletion to summarize all of the major metabolic sources and sinks as specific fluxes
+    * Specifies the costs associated with the production of each biomass component (such as GTP and ATP used for protein synthesis)
+    * Generates boundaryFluxes.Rdata - a file which stand-alone summarizes each chemostats boundary flux expectation and coefficient of variation
 * brauer-microarray: RNA abundance across 36 chemostat conditions
-* FTIR: attempt to measure composition using FTIR (not used)
+* <font color='red'>FTIR: attempt to measure composition using FTIR (not used)</font>
 * BulkComposition: measuring the dry weight and absolute amounts of abundant macromolecules which go into making more yeast
     * Protein
     * RNA
@@ -47,18 +50,15 @@ Relative or absolute quantification of various crucial species:
 * Metabolites: Boer relative abundances of metabolites.  Yeast absolute concentration yifan absolute measures of metabolite abundance which need to be associated with Boer data using a paired comparison.
     * boerquant - reanalysis of boer et al. 2010 data in order to determine point estimate, SD and corr.
     * yeast_absolute_concentration_chemo.txt - scaling of metabolite relative abundance to absolute abundances.
-       * Comparison of N15-labelled batch to C-limited chemostat in order to use metabolite concentrations from batch culture
+       * Comparison of N15-labelled batch to C-limited chemostat in order to use metabolite concentrations from batch culture.
+       * N15-labelled phosphate-limited chemostats compared to unlabelled spike-in amino acid standards. 
 * Proteomics: Relative abundance of ~1200 proteins across 25 chemostat conditions.
 * Lipids: Absolute quantification of abundant fatty acid.  Relative measurements of low abundance fatty acids.  
 
-**boundaryDataBlender.R**
-
-Integrate composition data to establish uptake, excretion and biomass assimilation fluxes (moles/h) per mL intracellular volume.  Establish which species correspond to individual experimental measurements, so that their departures will covary to an extent constrained by the empirical coefficient of variation.
-Generates boundaryFluxes.Rdata
 
 
 ---
-
+<font color='red'>
 ## EcoliYeastMatch (Replaced by direct annotation using component-contribution)##
 
 In order to incorporate thermodynamic information into the yeast flux-balance model, the gibbs free energy's available for ecoli rxns and species must be associated with the corresponding yeast ids.
@@ -68,9 +68,7 @@ This involves converting yeast ChEBI IDs to KEGG ids and then associating these 
 * ecoliYeastMatch.py: Because the same chemical can have multiple ChEBI or KEGG ids, the association is made more degenerate by first searching ChEBI ids to metabolite synonyms and then re-searching these against KEGG ids, to get a set of possible KEGG ids.
 * ecoliNameDict.txt - correspondence between geneID (unknown standard) and gene name. Downloaded from: http://coli.berkeley.edu/ecoli/gene.txt
 * gene-links.dat - correspondence between geneIDs and gene name, etc.  Downloaded from BioCyc
-
 ---
-
 **gibbsAnalysis.R**
 
 Applies two measures of thermodynamic reaction reversibility to predict the reversibility of yeast reactions
@@ -78,7 +76,8 @@ Applies two measures of thermodynamic reaction reversibility to predict the reve
 * Match yeast genes -> E.C. and compare to e. coli genes -> E. C. to pass e. coli annotated free energy of reaction to yeast reactions.  This flips free energy to match substrates and products between corresponding yeast and e. coli reactions.
 * Predict free energy of reaction from free energy of formation.
 * Write revRxns.tsv, showing the free energy quantiles from these methods as well as the directionality from the Shlomi e. coli model 
-  
+</font>
+
 ---
 
 ## KEGGrxns ##
