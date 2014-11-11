@@ -50,25 +50,24 @@ Relative or absolute quantification of various crucial species:
 
 
 ---
-<font color='red'>
-## EcoliYeastMatch (Replaced by direct annotation using component-contribution)##
 
-In order to incorporate thermodynamic information into the yeast flux-balance model, the gibbs free energy's available for ecoli rxns and species must be associated with the corresponding yeast ids.
-This involves converting yeast ChEBI IDs to KEGG ids and then associating these yeast KEGG ids with ecoli KEGG ids
+## ~~EcoliYeastMatch (Replaced by direct annotation using component-contribution)~~##
 
-* CTSpy.py (written by Dave Robinson): All conversions between metabolite names & standards were done using the chemical translation service (CTS).
-* ecoliYeastMatch.py: Because the same chemical can have multiple ChEBI or KEGG ids, the association is made more degenerate by first searching ChEBI ids to metabolite synonyms and then re-searching these against KEGG ids, to get a set of possible KEGG ids.
-* ecoliNameDict.txt - correspondence between geneID (unknown standard) and gene name. Downloaded from: http://coli.berkeley.edu/ecoli/gene.txt
-* gene-links.dat - correspondence between geneIDs and gene name, etc.  Downloaded from BioCyc
+~~In order to incorporate thermodynamic information into the yeast flux-balance model, the gibbs free energy's available for ecoli rxns and species must be associated with the corresponding yeast ids.~~
+~~This involves converting yeast ChEBI IDs to KEGG ids and then associating these yeast KEGG ids with ecoli KEGG ids~~
+
+* ~~CTSpy.py (written by Dave Robinson): All conversions between metabolite names & standards were done using the chemical translation service (CTS).~~
+* ~~ecoliYeastMatch.py: Because the same chemical can have multiple ChEBI or KEGG ids, the association is made more degenerate by first searching ChEBI ids to metabolite synonyms and then re-searching these against KEGG ids, to get a set of possible KEGG ids.~~
+* ~~ecoliNameDict.txt - correspondence between geneID (unknown standard) and gene name. Downloaded from: http://coli.berkeley.edu/ecoli/gene.txt~~
+* ~~gene-links.dat - correspondence between geneIDs and gene name, etc.  Downloaded from BioCyc~~
 ---
-**gibbsAnalysis.R**
+**~~gibbsAnalysis.R~~**
 
-Applies two measures of thermodynamic reaction reversibility to predict the reversibility of yeast reactions
+~~Applies two measures of thermodynamic reaction reversibility to predict the reversibility of yeast reactions~~
 
-* Match yeast genes -> E.C. and compare to e. coli genes -> E. C. to pass e. coli annotated free energy of reaction to yeast reactions.  This flips free energy to match substrates and products between corresponding yeast and e. coli reactions.
-* Predict free energy of reaction from free energy of formation.
-* Write revRxns.tsv, showing the free energy quantiles from these methods as well as the directionality from the Shlomi e. coli model 
-</font>
+* ~~Match yeast genes -> E.C. and compare to e. coli genes -> E. C. to pass e. coli annotated free energy of reaction to yeast reactions.  This flips free energy to match substrates and products between corresponding yeast and e. coli reactions.~~
+* ~~Predict free energy of reaction from free energy of formation.~~
+* ~~Write revRxns.tsv, showing the free energy quantiles from these methods as well as the directionality from the Shlomi e. coli model ~~
 
 ---
 
