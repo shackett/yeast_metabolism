@@ -58,8 +58,10 @@ Relative or absolute quantification of various crucial species:
 
 * ~~CTSpy.py (written by Dave Robinson): All conversions between metabolite names & standards were done using the chemical translation service (CTS).~~
 * ~~ecoliYeastMatch.py: Because the same chemical can have multiple ChEBI or KEGG ids, the association is made more degenerate by first searching ChEBI ids to metabolite synonyms and then re-searching these against KEGG ids, to get a set of possible KEGG ids.~~
-* ~~gene-links.dat - correspondence between geneIDs and gene name, etc.  Downloaded from BioCyc~~
 * ~~ecoliNameDict.txt - correspondence between geneID (unknown standard) and gene name. Downloaded from: http://coli.berkeley.edu/ecoli/gene.txt~~
+
+* ~~gene-links.dat - correspondence between geneIDs and gene name, etc.  Downloaded from BioCyc~~
+
 ---
 **~~gibbsAnalysis.R~~**
 
