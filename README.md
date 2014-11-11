@@ -80,6 +80,15 @@ Relational files associating KEGG IDs and yeast systematic names
 
 ---
 
+## MCA ##
+
+Use reaction elasticities for adjacent reactions to calculate control coefficients for a subset of pathways
+
+** MCA_SRH ** This script takes specified pathway models (currently hard-coded) and constructs 3-dimensional arrays populated by elasticities - following inversion these give pathway and concentration control coefficients.
+
+---
+
+
 **sbml_FBA_parser.py and SBML_genome_scale.py**
 
 XML parsers which generate four files:
@@ -100,6 +109,11 @@ SBML reconstructions of several organisms from bioModels
 * ~~yeastNames.py - conversion between names of metabolites and possible ChEBI and KEGG ids~~
 
 ---
+
+## Validations ##
+
+Targeted experiments to follow up on the predictions of rOCA
+
 
 ## Yeast_genome_scale ##
 
