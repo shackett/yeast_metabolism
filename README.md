@@ -34,15 +34,20 @@
 Relative or absolute quantification of various crucial species:
 
 * brauer-microarray: RNA abundance across 36 chemostat conditions
-* FTIR: attempt to measure composition using FTIR
+* FTIR: attempt to measure composition using FTIR (not used)
 * BulkComposition: measuring the dry weight and absolute amounts of abundant macromolecules which go into making more yeast
     * Protein
     * RNA
     * Carbohydrates
     * Polyphosphate
+* chemostatInformation: Indicating which chemostat samples will be used for subsequent analysis and in the case of a subset of samples where boundary fluxes and composition fluxes were taken from different chemostats, the way in which these samples are combined is indicated
+    * ListOfChemostats.txt - manually annotated data frame indicating for each chemostat where the relevant cell density, DR and NMR-based fluxes are found
+    * ListOfChemostats_augmented.txt - ListOfChemostats.txt with cell density, volume and flow rate added from the relevant files
+    * summarize_chemostat.R -  processes ListOfChemostats.txt into ListOfChemostats_augmented.txt
 * Metabolites: Boer relative abundances of metabolites.  Yeast absolute concentration yifan absolute measures of metabolite abundance which need to be associated with Boer data using a paired comparison.
     * boerquant - reanalysis of boer et al. 2010 data in order to determine point estimate, SD and corr.
     * yeast_absolute_concentration_chemo.txt - scaling of metabolite relative abundance to absolute abundances.
+       * Comparison of N15-labelled batch to C-limited chemostat in order to use metabolite concentrations from batch culture
 * Proteomics: Relative abundance of ~1200 proteins across 25 chemostat conditions.
 * Lipids: Absolute quantification of abundant fatty acid.  Relative measurements of low abundance fatty acids.  
 
