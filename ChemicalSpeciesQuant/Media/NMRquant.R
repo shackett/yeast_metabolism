@@ -15,7 +15,6 @@ library(reshape2)
 library(gplots)
 library(ggplot2)
 library(data.table)
-library(colorRamps)
 
 ##### Analysis #######
 
@@ -213,8 +212,6 @@ NMRsample_conc[NMRsamples$condition == 'u0.30_1' & NMRsamples$date == "2013_12",
 NMRsample_conc[NMRsamples$condition == 'c0.30_2','Ethanol'] <- NA # more C in ethanol measured than in provided glucose
 NMRsample_conc[NMRsamples$condition == 'u0.05_1','Ethanol'] <- NA
 NMRsample_conc[NMRsamples$condition == 'u0.30_1' & NMRsamples$date == "2013_04_27",'Ethanol'] <- NA
-NMRsample_conc[NMRsamples$condition == 'u0.30_2' & NMRsamples$date == "2013_12",'Glucose'] <- NA
-
 
 #### Summarize concentration by chemostat and generate summary figures of knowns + unknowns and just knowns ####
 
@@ -223,6 +220,11 @@ sampleAug <- data.frame(NMRsamples[,c('SampleType', 'date', 'limitation', 'DR')]
 sampleMelt <- data.table(melt(sampleAug, id.vars = c('SampleType', 'date', 'limitation', 'DR'), variable.name = "peak", value.name = 'estimate'))
 
 NMR_point_estimate <- sampleMelt[,list(estimate = mean(estimate, na.rm = T), se = sd(estimate, na.rm = T)/sqrt(length(estimate[!is.na(estimate)]))), by = c("SampleType", "peak", "date", "limitation", "DR")]
+NMR_point_estimate$estimate[NMR_point_estimate$peak == 'Ethanol' & NMR_point_estimate$SampleType == "N0.30"] <- NMRsample_conc[NMRsamples$condition == 'n0.30_2','Ethanol']
+NMR_point_estimate$estimate[NMR_point_estimate$peak == 'Glucose' & NMR_point_estimate$SampleType == "N0.30"] <- NMRsample_conc[NMRsamples$condition == 'n0.30_1','Glucose']
+NMR_point_estimate$estimate[NMR_point_estimate$peak == 'Glucose' & NMR_point_estimate$SampleType == "U0.30" & NMR_point_estimate$date == "2013_12"] <- mean(NMRsample_conc[c(1:nrow(NMRsamples)) %in% grep('u0.30_[34]', NMRsamples$condition) & NMRsamples$date == "2013_12",'Glucose'])
+
+
 NMR_point_estimate[,lb := estimate - 1.96*se]
 NMR_point_estimate[,ub := estimate + 1.96*se]
 
