@@ -6,10 +6,10 @@ source("Yeast_genome_scale/FBA_lib.R")
 inputFilebase = "yeast"
 run_full = FALSE
 
-rxnFile = read.delim(paste("Yeast_genome_scale/rxn_", inputFilebase, ".tsv", sep = ""))
-rxnparFile = read.delim(paste("Yeast_genome_scale/species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE)
-corrFile = read.delim(paste("Yeast_genome_scale/spec_", inputFilebase, ".tsv", sep = ""))
-compFile <- read.delim(paste("Yeast_genome_scale/comp_", inputFilebase, ".tsv", sep = ""))
+rxnFile = read.delim(paste("Yeast_genome_scale/companionFiles/rxn_", inputFilebase, ".tsv", sep = ""))
+rxnparFile = read.delim(paste("Yeast_genome_scale/companionFiles/species_par_", inputFilebase, ".tsv", sep = ""), header = FALSE)
+corrFile = read.delim(paste("Yeast_genome_scale/companionFiles/spec_", inputFilebase, ".tsv", sep = ""))
+compFile <- read.delim(paste("Yeast_genome_scale/companionFiles/comp_", inputFilebase, ".tsv", sep = ""))
 
 reactions = unique(rxnFile$ReactionID)
 rxnStoi <- rxnFile[is.na(rxnFile$StoiCoef) == FALSE,]
