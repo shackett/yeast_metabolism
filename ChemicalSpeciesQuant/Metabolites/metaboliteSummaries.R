@@ -9,21 +9,29 @@ library(nlme)
 library(data.table)
 library(corpcor)
 library(colorRamps)
+library(dplyr)
 
 #source("http://bioconductor.org/biocLite.R")
 #biocLite("impute")
 library(impute) #impute missing values using knn imputation
 
-# 4 datasets #
+### 4 datasets ###
 #1) Reanalysis of original Boer data for metabolite relative abundances (and precision)
 #2) Conversion to align chemostat and batch samples to use Yifan concentrations
 #3) Yifan absolute quantification of metabolite abundance in batch culture
 #4) Measurement of amino acid concentrations in N-labelled chemostats
 
+# Import relationship between metabolite names, model name, and KEGG/ChEBI IDs
+source("../../Yeast_genome_scale/cleanNalign.R", chdir = T)
+# each metabolomics dataset is seperately matched to model IDs and then different metabolite measurements
+# such as relative and absolute can be combined by virtue of their model IDs
+# Dataset 2 & 3 are directly matched to each other before they are matched to the genome scale model
+
 ##### 1) Reanalysis of original Boer data for metabolite relative abundances (and precision) #####
 
 tab_allBoer <- read.delim('./boerquant/boer_data_2.txt',header=T,sep='\t')
 tab_allBoerNames <- read.delim('./boerquant/boer_data_2.txt',sep='\t', header = F, nrows = 1)
+boerMeta <- read.delim("BoerMetabolites.txt")[-1,1:2]
 boerHeatmap <- read.delim("BoerMetabolites.txt")[-1,-c(2:3)]
 
 ## Approach 1: get relative abundances by dividing through the reference condition
@@ -187,14 +195,14 @@ heatmap.2(residualCorr, trace = "none") # correlation of residuals
 residualStackDF <- impute.knn(residualStackDF, rowmax = 0.7)$data
 
 shrunkCorr <- cor.shrink(t(residualStackDF)) # shrink residual correlation matrix towards identity
-pdf("boerCorr.pdf", height = 10, width = 10)
+pdf("metaboliteSummaries/boerCorr.pdf", height = 10, width = 10)
 heatmap.2(shrunkCorr, trace = "none", symbreaks = T, col = blue2yellow(100)) 
 dev.off()
 
 partialCorrs <- cor2pcor(shrunkCorr) # partial correlation matrix
 diag(partialCorrs) <- NA
 rownames(partialCorrs) <- colnames(partialCorrs) <- rownames(shrunkCorr)
-pdf("boerPartialcorr.pdf", height = 10, width = 10)
+pdf("metaboliteSummaries/boerPartialcorr.pdf", height = 10, width = 10)
 heatmap.2(partialCorrs, trace = "none", symbreaks = T, col = blue2yellow(100))
 dev.off()
 ####
@@ -205,9 +213,53 @@ for(a_row in 1:nrow(metSD)){ # use metabolite specific standard deviation as the
   metSD[a_row, is.na(metSD[a_row,])] <- SDbyMet$medianScale[a_row]
   }
 
-write.table(metRA, "boerMean.tsv", quote = F, col.names = T, row.names = T, sep = "\t")
-write.table(metSD, "boerSD.tsv", quote = F, col.names = T, row.names = T, sep = "\t")
-write.table(shrunkCorr, "boerCorr.tsv", quote = F, col.names = T, row.names = T, sep = "\t")
+write.table(metRA, "metaboliteSummaries/boerMean.tsv", quote = F, col.names = T, row.names = T, sep = "\t")
+write.table(metSD, "metaboliteSummaries/boerSD.tsv", quote = F, col.names = T, row.names = T, sep = "\t")
+write.table(shrunkCorr, "metaboliteSummaries/boerCorr.tsv", quote = F, col.names = T, row.names = T, sep = "\t")
+
+boerSummary <- melt(metRA, value.name = "log2_RA") %>% tbl_df() %>% inner_join(
+  melt(metSD, value.name = "log2_CV") %>% tbl_df()) %>% select(compound = Var1, condition = Var2, log2_RA, log2_CV) %>%
+  mutate(compound = as.character(compound), condition = as.character(condition))
+
+### Now relate these species to the model based on their name to attribute a model name and other systematic IDs ###
+
+boerMeta_expanded <- lapply(1:nrow(boerMeta), function(i){
+  data.frame(boerRow = i, expand.grid(Metabolite = strsplit(boerMeta$Metabolite[i], split = '/')[[1]], KEGG = strsplit(boerMeta$KEGG[i], split = '/')[[1]]))
+})
+boerMeta_expanded <- do.call("rbind", boerMeta_expanded)
+boerMeta_expanded[,2:3] <- apply(boerMeta_expanded[,2:3], c(1,2), as.character)
+
+boerMeta_expanded$CHEBI <- sapply(boerMeta_expanded$KEGG,Kegg2chebi)
+
+# match the few yet unmatched by name
+boerMeta_expanded$CHEBI[is.na(boerMeta_expanded$CHEBI)] <- sapply(boerMeta_expanded$Metabolite[is.na(boerMeta_expanded$CHEBI)],MatchName2Chebi)
+boerMeta_expanded$fuzCHEBI <- sapply(boerMeta_expanded$CHEBI,Chebi2fuzchebi) # the primary chebi synonym corresponding to each CHEBI
+boerMeta_expanded$fuzmCHEBI <- sapply(boerMeta_expanded$Metabolite,MatchName2Chebi) # best string match of metabolite names to a chebi metabolite name
+
+# match IDs by KEGG-
+boerMeta_expanded_KEGGmatch <- boerMeta_expanded %>% tbl_df() %>% left_join(listTID, by = "KEGG") %>%
+  filter(!is.na(SpeciesName))
+boerMeta_expanded_KEGGmatch %>% View()
+
+# match IDs by CHEBI
+boerMeta_resid <- boerMeta_expanded %>% filter(!(KEGG %in% boerMeta_expanded_KEGGmatch$KEGG))
+boerMeta_expanded_CHEBImatch <- left_join(boerMeta_resid, listTID, by = "fuzCHEBI") %>% filter(!is.na(SpeciesName))
+boerMeta_expanded_CHEBImatch %>% View()
+
+# manually annotate remainder or ignore them if they are not in the model
+# D-gluconate, glycerate, N-acetyl-glutamine, & dimethylglycine are not currently used
+
+boerMeta_resid <- boerMeta_expanded %>% filter(!((KEGG %in% boerMeta_expanded_KEGGmatch$KEGG) | (fuzCHEBI %in% boerMeta_expanded_CHEBImatch$fuzCHEBI)))
+
+# Combine metabolites back together
+boerMeta_annotated <- rbind(
+  boerMeta_expanded_KEGGmatch %>% select(boerRow, Metabolite, KEGG, CHEBI = CHEBI.y, SpeciesName, SpeciesType),
+  boerMeta_expanded_CHEBImatch %>% select(boerRow, Metabolite, KEGG=KEGG.y, CHEBI = CHEBI.y, SpeciesName, SpeciesType),
+  boerMeta_resid %>% select(boerRow:CHEBI) %>% mutate(SpeciesName = NA, SpeciesType = NA) 
+) %>% arrange(boerRow)
+
+
+
 
 ##### 2) Conversion to align chemostat and batch samples to use Yifan concentrations #####
 
@@ -236,7 +288,7 @@ ExactiveMatrix <- ExactiveMatrix[,colnames(ExactiveMatrix) %in% ExactiveDesign$s
 
 ### setup max data and formatting ###
 
-Max <- read.table("Max_2013_05_03-highestPeaks.csv", sep = ",", header = F)
+Max <- read.table("absolute_quant_compare/Max_2013_05_03-highestPeaks.csv", sep = ",", header = F)
 MaxDesign <- data.table(sample = as.character(Max[1,-(1:5)]))
 MaxDesign <- MaxDesign[MaxDesign[,grep('chemo|batchL|batchH', sample),],]
 MaxDesign[,sampleType := regmatches(sample, regexpr('chemo|batchL|batchH', sample)),]
@@ -282,7 +334,7 @@ metScaling[,logScaling := (chemostatLogAbund - met_scale_lm$intercept)/met_scale
 
 ##### 3) Yifan absolute quantification of metabolite abundance in batch culture #####
 
-yifanConc <- read.delim("../yeast_absolute_concentration_yifan.txt")
+yifanConc <- read.delim("yeast_absolute_concentration_yifan.txt")
 
 equivalent_compounds <- c("2,3-diphosphoglycerate" = "2_3-Diphosphoglyceric acid", "Acetyl-CoA" = "acetyl-CoA", "Alanine" = "alanine", "D-Gluconic acid" = "D-gluconate", 
   "dihydroxyacetone-phosphate" = "dihydroxy-acetone-phosphate", "fructose-1-6-bisphosphate" = "fructose bisphosphate", "fumarate" = "fumarate 3-3", "leucine" = "leucine/isoleucine",
@@ -306,5 +358,54 @@ yifanConc$c_lim_scaling[yifanConc$Compound == "Alanine"] <- 0 # low-ball estimat
 
 yifanConc$c_lim_conc <- yifanConc$Glucose * 2^yifanConc$c_lim_scaling / 1000 #concentation in M
 
-write.table(yifanConc[!is.na(yifanConc$c_lim_conc),], file = "../yeast_absolute_concentration_chemo.txt", sep = "\t", quote = F, col.names = TRUE, row.names = F)
+yifanConc <- yifanConc[!is.na(yifanConc$c_lim_conc),]
+
+yifanConc <- yifanConc %>% tbl_df() %>% mutate(condition = "C0.30") %>% select(compound = Compound, Instrument, Mixed, ChEBI, KEGG, condition, concentration = c_lim_conc)
+
+write.table(yifanConc, file = "metaboliteSummaries/yeast_absolute_concentration_chemo.txt", sep = "\t", quote = F, col.names = TRUE, row.names = F)
+
+# Pass model IDs to Yifan compounds
+
+yifan_meta <- yifanConc %>% select(compound, Instrument, Mixed, CHEBI = ChEBI, KEGG)
+
+
+
+##### 4) Measurement of amino acid concentrations in N-labelled chemostats #####
+
+AA_absolute_quant <- read.delim('./absolute_quant_compare/N15chemoAA/N15absoluteQuant.txt') %>% tbl_df()
+
+# separate leucine and isoleucine into discrete metabolites
+AA_absolute_quant <- AA_absolute_quant %>% filter(compound != "leucine-isoleucine") %>% rbind(
+  AA_absolute_quant[AA_absolute_quant$compound == "leucine-isoleucine",] %>% mutate(compound = "leucine"),
+  AA_absolute_quant[AA_absolute_quant$compound == "leucine-isoleucine",] %>% mutate(compound = "isoleucine"))
+
+
+# Pass model IDs to N15-AA quant experiment (based on pre-specified KEGG IDs)
+N15AA_mets_meta <- AA_absolute_quant %>% select(compound, KEGG) %>% unique()
+
+N15AA_mets_meta_expanded <- lapply(1:nrow(N15AA_mets_meta), function(i){
+  data.frame(row = i, expand.grid(Metabolite = strsplit(N15AA_mets_meta$compound[i], split = '/')[[1]], KEGG = strsplit(N15AA_mets_meta$KEGG[i], split = '/')[[1]]))
+})
+N15AA_mets_meta_expanded <- do.call("rbind", N15AA_mets_meta_expanded)
+
+N15AA_mets_meta_expanded <- N15AA_mets_meta_expanded %>% left_join(listTID) 
+N15AA_mets_meta_expanded %>% View()
+
+N15AA_mets_meta_expanded %>% select(row, KEGG, CHEBI, SpeciesName, SpeciesType)
+
+
+##### Source cleanNalign so that tIDs corresponding to each metabolite can be found #### 
+
+
+
+boerSummary %>% rowwise() %>% mutate(chebi = MatchName2Chebi(unique(compound),1))
+
+boerSummary %>% group_by(compound) %>% mutate(chebi = MatchName2Chebi(unique(compound),1))
+name <- "1,3-diphopshateglycerate"
+
+sapply(AA_absolute_quant$compound, function(x){MatchName2Chebi(x,1)})
+
+listTID
+
+yifanConc %>% tbl_df() %>% rowwise() %>% mutate(chebi = MatchName2Chebi(Compound,1))
 
