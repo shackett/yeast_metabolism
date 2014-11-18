@@ -334,7 +334,7 @@ metScaling[,logScaling := (chemostatLogAbund - met_scale_lm$intercept)/met_scale
 
 ##### 3) Yifan absolute quantification of metabolite abundance in batch culture #####
 
-yifanConc <- read.delim("yeast_absolute_concentration_yifan.txt")
+yifanConc <- read.delim("yeast absolute concentration yifan 1.1.txt")
 
 equivalent_compounds <- c("2,3-diphosphoglycerate" = "2_3-Diphosphoglyceric acid", "Acetyl-CoA" = "acetyl-CoA", "Alanine" = "alanine", "D-Gluconic acid" = "D-gluconate", 
   "dihydroxyacetone-phosphate" = "dihydroxy-acetone-phosphate", "fructose-1-6-bisphosphate" = "fructose bisphosphate", "fumarate" = "fumarate 3-3", "leucine" = "leucine/isoleucine",
@@ -362,12 +362,71 @@ yifanConc <- yifanConc[!is.na(yifanConc$c_lim_conc),]
 
 yifanConc <- yifanConc %>% tbl_df() %>% mutate(condition = "C0.30") %>% select(compound = Compound, Instrument, Mixed, ChEBI, KEGG, condition, concentration = c_lim_conc)
 
-write.table(yifanConc, file = "metaboliteSummaries/yeast_absolute_concentration_chemo.txt", sep = "\t", quote = F, col.names = TRUE, row.names = F)
+#write.table(yifanConc, file = "metaboliteSummaries/yeast_absolute_concentration_chemo.txt", sep = "\t", quote = F, col.names = TRUE, row.names = F)
 
 # Pass model IDs to Yifan compounds
 
 yifan_meta <- yifanConc %>% select(compound, Instrument, Mixed, CHEBI = ChEBI, KEGG)
 
+# Match each metabolites KEGG compounds to the model and find those IDs that match
+yifan_meta$KEGGmatch <- sapply(yifan_meta$KEGG, function(x){
+  KEGGs <- strsplit(x, split = ', ')[[1]]
+  KEGGreturn <- KEGGs[KEGGs %in% listTID$KEGG]
+  if(length(KEGGreturn) > 1){
+   paste(KEGGreturn, collapse = '_') 
+  }else if(length(KEGGreturn) == 0){
+    NA
+  }else{
+    KEGGreturn
+  }
+})
+
+# For metabolites without a KEGG match, try the same with CHEBI
+yifan_meta$CHEBImatch <- sapply(yifan_meta$CHEBI, function(x){
+  CHEBIs <- strsplit(x, split = ', ')[[1]]
+  CHEBIreturn <- CHEBIs[CHEBIs %in% c(listTID$CHEBI, listTID$fuzCHEBI)]
+  if(length(CHEBIreturn) > 1){
+   paste(CHEBIreturn, collapse = '_') 
+  }else if(length(CHEBIreturn) == 0){
+    NA
+  }else{
+    CHEBIreturn
+  }
+})
+
+# orphaned metabolites - Gluconate (gluconic acid), Hydroxyisocaproic acid, N-acetyl-glutamine, N-Acetyl-L-alanine, xylose 5P
+
+yifan_meta %>% filter(is.na(KEGGmatch) & is.na(CHEBImatch))
+table(!is.na(yifan_meta$KEGGmatch), !is.na(yifan_meta$CHEBImatch))
+
+# add model IDs based on matched KEGG and CHEBI IDs
+
+# KEGG
+yifan_meta_KEGG <- yifan_meta %>% filter(!is.na(KEGGmatch)) %>% select(compound, Instrument, Mixed, KEGG = KEGGmatch)
+yifan_meta_KEGG_unfold <- lapply(1:nrow(yifan_meta_KEGG), function(i){
+  data.frame(yifan_meta_KEGG[i,colnames(yifan_meta_KEGG) != 'KEGG'], KEGG = strsplit(yifan_meta_KEGG[i,'KEGG'] %>% unlist(), split = '_')[[1]])
+})
+yifan_meta_KEGG_unfold <- do.call("rbind", yifan_meta_KEGG_unfold)
+yifan_meta_KEGG_unfold <- yifan_meta_KEGG_unfold %>% left_join(listTID)
+
+yifan_meta_KEGG_unfold <- yifan_meta_KEGG_unfold %>% select(compound, Instrument, SpeciesType)
+
+# CHEBI where KEGG is not matched
+yifan_meta_CHEBI <- yifan_meta %>% filter(is.na(KEGGmatch), !is.na(CHEBImatch)) %>% select(compound, Instrument, Mixed, CHEBI = CHEBImatch)
+
+# pull down the CHEBI or fuzCHEBI matches
+model_yifanCHEBImatches <- listTID %>% filter(CHEBI %in% yifan_meta_CHEBI$CHEBI | fuzCHEBI %in% yifan_meta_CHEBI$CHEBI)
+
+yifan_meta_CHEBI_unfold <- lapply(1:nrow(yifan_meta_CHEBI), function(i){
+  CHEBIs <- strsplit(yifan_meta_CHEBI$CHEBI[i], split = "_")[[1]]
+  cbind(model_yifanCHEBImatches %>% filter(CHEBI %in% CHEBIs | fuzCHEBI %in% CHEBIs), 
+        yifan_meta_CHEBI[i,] %>% select(-CHEBI))
+})
+yifan_meta_CHEBI_unfold <-  do.call("rbind", yifan_meta_CHEBI_unfold)
+
+yifan_meta_CHEBI_unfold <- yifan_meta_CHEBI_unfold %>% select(compound, Instrument, SpeciesType)
+
+rbind(yifan_meta_KEGG_unfold, yifan_meta_CHEBI_unfold)
 
 
 ##### 4) Measurement of amino acid concentrations in N-labelled chemostats #####
