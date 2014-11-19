@@ -256,9 +256,29 @@ boerMeta_annotated <- rbind(
   boerMeta_expanded_KEGGmatch %>% select(boerRow, Metabolite, KEGG, CHEBI = CHEBI.y, SpeciesName, SpeciesType),
   boerMeta_expanded_CHEBImatch %>% select(boerRow, Metabolite, KEGG=KEGG.y, CHEBI = CHEBI.y, SpeciesName, SpeciesType),
   boerMeta_resid %>% select(boerRow:CHEBI) %>% mutate(SpeciesName = NA, SpeciesType = NA) 
-) %>% arrange(boerRow)
+) %>% arrange(boerRow) %>% filter(!is.na(SpeciesName))
 
-
+if(!all(table(boerMeta_annotated$SpeciesType) == 1)){
+  degenerate_compounds <- names(which(table(boerMeta_annotated$SpeciesType) > 1))
+  best_matched_compounds <- NULL
+  for(a_cmpd in degenerate_compounds){
+    # find the best match based upon string similarity
+    sim_subset <- boerMeta_annotated %>% filter(SpeciesType == a_cmpd) %>% mutate(stringSim = levenshteinDist(Metabolite, SpeciesName)) %>%
+      filter(stringSim == min(stringSim)) %>% select(-stringSim)
+    if(nrow(sim_subset) != 1){
+      # take the peak that is uniquely identified in case one compound is a mixture on a subset of instruments
+      sim_subset <- sim_subset %>% group_by(boerRow) %>% mutate(nShared = length(boerMeta_annotated$boerRow[boerMeta_annotated$boerRow == boerRow])) %>%
+        group_by() %>% filter(nShared == min(nShared)) %>% select(-nShared)
+      if(nrow(sim_subset) != 1){
+        warning("Multiple metabolite measurements must be combined before this point to generate a dataset level consensus")
+        }
+      }
+    best_matched_compounds <- rbind(best_matched_compounds, sim_subset)
+  }
+  
+  boerMeta_annotated <- boerMeta_annotated %>% filter(!(SpeciesType %in% degenerate_compounds)) %>%
+    rbind(best_matched_compounds)
+}
 
 
 ##### 2) Conversion to align chemostat and batch samples to use Yifan concentrations #####
@@ -332,6 +352,7 @@ metScaling$batchSlope <- met_scale_lm$slope
 
 metScaling[,logScaling := (chemostatLogAbund - met_scale_lm$intercept)/met_scale_lm$slope - log2(0.73),]
 
+
 ##### 3) Yifan absolute quantification of metabolite abundance in batch culture #####
 
 yifanConc <- read.delim("yeast absolute concentration yifan 1.1.txt")
@@ -366,7 +387,7 @@ yifanConc <- yifanConc %>% tbl_df() %>% mutate(condition = "C0.30") %>% select(c
 
 # Pass model IDs to Yifan compounds
 
-yifan_meta <- yifanConc %>% select(compound, Instrument, Mixed, CHEBI = ChEBI, KEGG)
+yifan_meta <- yifanConc %>% mutate(row = 1:nrow(yifanConc)) %>% select(row, compound, Instrument, Mixed, CHEBI = ChEBI, KEGG)
 
 # Match each metabolites KEGG compounds to the model and find those IDs that match
 yifan_meta$KEGGmatch <- sapply(yifan_meta$KEGG, function(x){
@@ -402,17 +423,17 @@ table(!is.na(yifan_meta$KEGGmatch), !is.na(yifan_meta$CHEBImatch))
 # add model IDs based on matched KEGG and CHEBI IDs
 
 # KEGG
-yifan_meta_KEGG <- yifan_meta %>% filter(!is.na(KEGGmatch)) %>% select(compound, Instrument, Mixed, KEGG = KEGGmatch)
+yifan_meta_KEGG <- yifan_meta %>% filter(!is.na(KEGGmatch)) %>% select(row, compound, Instrument, Mixed, KEGG = KEGGmatch)
 yifan_meta_KEGG_unfold <- lapply(1:nrow(yifan_meta_KEGG), function(i){
   data.frame(yifan_meta_KEGG[i,colnames(yifan_meta_KEGG) != 'KEGG'], KEGG = strsplit(yifan_meta_KEGG[i,'KEGG'] %>% unlist(), split = '_')[[1]])
 })
 yifan_meta_KEGG_unfold <- do.call("rbind", yifan_meta_KEGG_unfold)
 yifan_meta_KEGG_unfold <- yifan_meta_KEGG_unfold %>% left_join(listTID)
 
-yifan_meta_KEGG_unfold <- yifan_meta_KEGG_unfold %>% select(compound, Instrument, SpeciesType)
+yifan_meta_KEGG_unfold <- yifan_meta_KEGG_unfold %>% select(row, Metabolite = compound, Instrument, SpeciesName, SpeciesType)
 
 # CHEBI where KEGG is not matched
-yifan_meta_CHEBI <- yifan_meta %>% filter(is.na(KEGGmatch), !is.na(CHEBImatch)) %>% select(compound, Instrument, Mixed, CHEBI = CHEBImatch)
+yifan_meta_CHEBI <- yifan_meta %>% filter(is.na(KEGGmatch), !is.na(CHEBImatch)) %>% select(row, compound, Instrument, Mixed, CHEBI = CHEBImatch)
 
 # pull down the CHEBI or fuzCHEBI matches
 model_yifanCHEBImatches <- listTID %>% filter(CHEBI %in% yifan_meta_CHEBI$CHEBI | fuzCHEBI %in% yifan_meta_CHEBI$CHEBI)
@@ -424,9 +445,14 @@ yifan_meta_CHEBI_unfold <- lapply(1:nrow(yifan_meta_CHEBI), function(i){
 })
 yifan_meta_CHEBI_unfold <-  do.call("rbind", yifan_meta_CHEBI_unfold)
 
-yifan_meta_CHEBI_unfold <- yifan_meta_CHEBI_unfold %>% select(compound, Instrument, SpeciesType)
+yifan_meta_CHEBI_unfold <- yifan_meta_CHEBI_unfold %>% select(row, Metabolite = compound, Instrument, SpeciesName, SpeciesType)
 
-rbind(yifan_meta_KEGG_unfold, yifan_meta_CHEBI_unfold)
+yifan_meta_correspondence <- rbind(yifan_meta_KEGG_unfold, yifan_meta_CHEBI_unfold)
+
+# Ensure that reverse mapping of t_IDs to metabolites is unique
+if(!all(table(yifan_meta_correspondence$SpeciesType) == 1)){
+  stop("Each tID must be matched to a single compound in this dataset")
+  }
 
 
 ##### 4) Measurement of amino acid concentrations in N-labelled chemostats #####
@@ -450,8 +476,44 @@ N15AA_mets_meta_expanded <- do.call("rbind", N15AA_mets_meta_expanded)
 N15AA_mets_meta_expanded <- N15AA_mets_meta_expanded %>% left_join(listTID) 
 N15AA_mets_meta_expanded %>% View()
 
-N15AA_mets_meta_expanded %>% select(row, KEGG, CHEBI, SpeciesName, SpeciesType)
+N15AA_mets_meta_expanded <- N15AA_mets_meta_expanded %>% select(row, Metabolite, KEGG, CHEBI, SpeciesName, SpeciesType)
 
+
+if(!all(table(N15AA_mets_meta_expanded$SpeciesType) == 1)){
+  degenerate_compounds <- names(which(table(N15AA_mets_meta_expanded$SpeciesType) > 1))
+  best_matched_compounds <- NULL
+  for(a_cmpd in degenerate_compounds){
+    # find the best match based upon string similarity
+    sim_subset <- N15AA_mets_meta_expanded %>% filter(SpeciesType == a_cmpd) %>% mutate(stringSim = levenshteinDist(Metabolite, SpeciesName)) %>%
+      filter(stringSim == min(stringSim)) %>% select(-stringSim)
+    if(nrow(sim_subset) != 1){
+      # take the peak that is uniquely identified in case one compound is a mixture on a subset of instruments
+      sim_subset <- sim_subset %>% group_by(boerRow) %>% mutate(nShared = length(boerMeta_annotated$boerRow[boerMeta_annotated$boerRow == boerRow])) %>%
+        group_by() %>% filter(nShared == min(nShared)) %>% select(-nShared)
+      if(nrow(sim_subset) != 1){
+        warning("Multiple metabolite measurements must be combined before this point to generate a dataset level consensus")
+        }
+      }
+    best_matched_compounds <- rbind(best_matched_compounds, sim_subset)
+  }
+  
+  N15AA_mets_meta_expanded <- N15AA_mets_meta_expanded %>% filter(!(SpeciesType %in% degenerate_compounds)) %>%
+    rbind(best_matched_compounds)
+  
+}
+
+##### Compare model matched metabolites for each dataset so that 
+
+# data.frames to be compared
+metabolite_datasets_meta <- c("boerMeta_annotated", "yifan_meta_correspondence", "N15AA_mets_meta_expanded")
+
+metabolite_dataset_summary <- lapply(metabolite_datasets_meta, function(x){
+  get(x) %>% select(Metabolite, SpeciesName, SpeciesType) %>% mutate(dataset = x)
+})
+metabolite_dataset_summary <- do.call("rbind", metabolite_dataset_summary)
+
+metabolite_dataset_summary <- dcast(metabolite_dataset_summary, SpeciesName ~ dataset, value.var = "Metabolite")
+View(metabolite_dataset_summary)
 
 ##### Source cleanNalign so that tIDs corresponding to each metabolite can be found #### 
 
