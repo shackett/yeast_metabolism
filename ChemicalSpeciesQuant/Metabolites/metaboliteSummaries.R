@@ -225,6 +225,10 @@ boerSummary <- melt(metRA, value.name = "log2_RA") %>% tbl_df() %>% inner_join(
   melt(metSD, value.name = "log2_CV") %>% tbl_df()) %>% select(compound = Var1, condition = Var2, log2_RA, log2_CV) %>%
   mutate(compound = as.character(compound), condition = as.character(condition))
 
+### Reserve space for metabolties which are inferred in other ways ###
+
+boerMeta <- boerMeta %>% rbind(data.frame(Metabolite = c("phosphate", "phosphoenolpyruvate"), KEGG = c("C00009", "C00074")))
+
 # filter one slow-growth p-limited chemostat
 boerSummary <- boerSummary %>% filter(condition != "PO4.0.061")
 
@@ -524,6 +528,11 @@ metabolite_dataset_summary <- do.call("rbind", metabolite_dataset_summary)
 metabolite_dataset_summary <- dcast(metabolite_dataset_summary, SpeciesName ~ dataset, value.var = "Metabolite")
 View(metabolite_dataset_summary)
 
+tIDtoMet <- metabolite_dataset_summary %>% filter(dataset == "boerMeta_annotated") 
+if(any(table(tIDtoMet$SpeciesType) != 1)){
+ stop("Find a unique mapping between tIDs and metabolites")
+}
+
 ##### Match experimental designs of each dataset #####
 # so that a consensus relative abundance and conversion to absolute abundance can be made
 
@@ -648,9 +657,14 @@ colnames(remapped_metabolites) <- colnames(remapped_SD) <- goal_conditions$Chemo
 metSVD <- svd(remapped_metabolites, nu = npc.cons, nv = npc.cons) # SVD of remapped metabolite -> save so that the principal components of met relative abundance can be used
 rownames(metSVD$v) <- colnames(remapped_metabolites)
   
-tab_boer <- data.frame(metabolomicsData[,1:3], remapped_metabolites)
   
+inferred_mets <- matrix(NA, nrow = 2, ncol = ncol(metRA))
+rownames(inferred_mets) <- c("phosphate", "phosphoenolpyruvate"); colnames(inferred_mets) <- colnames(metRA)
+
+boerSummary <- boerSummary %>% rbind(melt(inferred_mets) %>% select(compound = Var1, condition = Var2) %>% mutate(log2_RA = NA, log2_CV = NA))
+
   
+
 
 tMet[,colnames(tab_boer)[!colnames(tab_boer) %in% colnames(tMet)]] <- NA # metabolites whose abundances are reconstructed as a function of other measurements
   tab_boer <- rbind(tab_boer,tMet)
