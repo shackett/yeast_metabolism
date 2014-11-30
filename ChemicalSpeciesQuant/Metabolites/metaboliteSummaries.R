@@ -4,16 +4,20 @@
 setwd("/Users/Sean/Desktop/Rabinowitz/FBA_SRH/ChemicalSpeciesQuant/Metabolites")
 options(stringsAsFactors = F)
 
-library(reshape2)
-library(nlme)
-library(data.table)
-library(corpcor)
-library(colorRamps)
+# data manipulation
 library(dplyr)
+library(reshape2)
+library(data.table)
+
+library(nlme)
+library(corpcor) # estimation of residual covariance matrix (with shrinkage)
+library(gplots) # for generating heatmaps
+library(colorRamps) # alternative heatmap color gradients
+library(missMDA) # for doing cross-validation based estimation of number of significant PCs
 
 #source("http://bioconductor.org/biocLite.R")
 #biocLite("impute")
-library(impute) #impute missing values using knn imputation
+library(impute) # impute missing values using knn imputation
 
 ### 4 datasets ###
 #1) Reanalysis of original Boer data for metabolite relative abundances (and precision)
@@ -220,6 +224,10 @@ write.table(shrunkCorr, "metaboliteSummaries/boerCorr.tsv", quote = F, col.names
 boerSummary <- melt(metRA, value.name = "log2_RA") %>% tbl_df() %>% inner_join(
   melt(metSD, value.name = "log2_CV") %>% tbl_df()) %>% select(compound = Var1, condition = Var2, log2_RA, log2_CV) %>%
   mutate(compound = as.character(compound), condition = as.character(condition))
+
+# filter one slow-growth p-limited chemostat
+boerSummary <- boerSummary %>% filter(condition != "PO4.0.061")
+
 
 ### Now relate these species to the model based on their name to attribute a model name and other systematic IDs ###
 
@@ -531,24 +539,136 @@ metabolite_datasets <- c("boerSummary", "AA_absolute_quant", "yifanConc")
 metabolite_condtions <- lapply(metabolite_datasets, function(x){
   get(x) %>% select(condition) %>% unique() %>% mutate(dataset = x)
 })
-metabolite_condtions <- do.call("rbind", metabolite_condtions) %>% mutate(Limitation = NA, actualDR = NA)
+metabolite_condtions <- do.call("rbind", metabolite_condtions)
 
 # Populate dataset specific limitation and DR
-metabolite_condtions
+metabolite_condtions <- rbind(
+  # Boer
+  metabolite_condtions %>% filter(dataset == "boerSummary") %>% mutate(boer_Limitation = substr(condition, 1, 3)) %>%
+  group_by(boer_Limitation) %>% mutate(Limitation = met_cond_match$standard[met_cond_match$boer == unique(boer_Limitation)]) %>%
+  rowwise() %>% mutate(actualDR = as.numeric(substr(condition, 5, 20))) %>% select(-boer_Limitation),
+  # N15
+  metabolite_condtions %>% filter(dataset == "AA_absolute_quant") %>% rowwise() %>% mutate(Limitation = "P", actualDR = AA_absolute_quant$DR[AA_absolute_quant$condition == condition][1]),
+  # YifanAlign
+  metabolite_condtions %>% filter(dataset == "yifanConc") %>% mutate(Limitation = "C", actualDR = 0.30)
+)
+
+##### Use metabolite abundances to inform a common set of conditions #####
+
+metabolomicsMatrix <- boerSummary %>% left_join(metabolite_condtions %>% filter(dataset == "boerSummary")) %>%
+  mutate(condition = paste0(Limitation, actualDR)) %>% acast(formula = "compound ~ condition", value.var = "log2_RA")
+metabolomicsSD <- boerSummary %>% left_join(metabolite_condtions %>% filter(dataset == "boerSummary")) %>%
+  mutate(condition = paste0(Limitation, actualDR)) %>% acast(formula = "compound ~ condition", value.var = "log2_CV")
+
+if(!all(colnames(metabolomicsMatrix) == colnames(metabolomicsSD))){stop("Metabolite relative abundances and variances don't match")}
+
+n_c <- ncol(metabolomicsMatrix)
+n_m <- nrow(metabolomicsMatrix)
+  
+### Determine how many significant principal components exist in the metabolomics matrix ###
+  
+matrix_svd <- svd(metabolomicsMatrix)
+plot(matrix_svd$d^2/sum(matrix_svd$d^2)) #scree-plot - fraction of variance explained by each PC
+  
+### determine how many significant principal components should be included based on repeated random sub-sampling validation ###
+pcrange <- c(2,18)
+npc.compare <- estim_ncpPCA(metabolomicsMatrix, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 100)
+# take the value of # PCs which minimizes the 
+npc.cons <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.3 + min(npc.compare$criterion)][1]
+npc.min <- as.numeric(names(which.min(npc.compare$criterion)))
+
+### metabolomic PC summary ###
+  
+pdf(file = "metaboliteSummaries/metPCnum.pdf", height = 6, width = 6)
+plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs", main = "Optimal number of metabolomic principal components")
+abline(v = npc.cons, col = "RED", lwd = 2)
+abline(v = npc.min, col = "BLUE", lwd = 2)
+plot((matrix_svd$d)^2 / sum((matrix_svd$d)^2) ~ c(1:length(matrix_svd$d)), pch = 16, cex = 2, col = "RED", xlab = "PC Number", ylab = "Fraction of variance explained")
+dev.off()
+  
+metPCs <- matrix_svd$v[,1:npc.min]; rownames(metPCs) <- colnames(metabolomicsMatrix); colnames(metPCs) <- paste("PC", c(1:npc.min))
+pc_plot_df <- melt(metPCs)
+colnames(pc_plot_df) <- c("condition", "PC", "value")
+pc_plot_df$cond <- factor(sapply(as.character(pc_plot_df$condition), function(x){unlist(strsplit(x, ""))[1]}))
+pc_plot_df$PC <- factor(pc_plot_df$PC, levels = paste("PC", c(1:npc.min)))
+
+factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol = 2, scales = "free_y") + scale_x_discrete("Experimental condition") + scale_y_continuous("Principal Component Value") + theme(panel.grid.minor = element_blank(), panel.background = element_rect(fill = "aliceblue"), strip.background = element_rect(fill = "cadetblue1"), text = element_text(size = 15), axis.text.x = element_text(angle = 90), title = element_text(size = 25, face = "bold"))
+factor_plot + geom_line() + ggtitle("Metabolomic principal components")
+ggsave(file = "metaboliteSummaries/metPCs.pdf", height = 10, width = 12)
+
+### summary of SVD of metabolomics matrix ###
+reorgMets <- metabolomicsMatrix[hclust(d = dist(metabolomicsMatrix))$order,]
+reorgMetSVD <- svd(reorgMets, nu = npc.min, nv = npc.min)
+  
+pdf("metaboliteSummaries/PCsummary.pdf", height = 10, width = 10)
+  
+heatmap.2(reorgMets, Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = "Raw")
+heatmap.2(reorgMetSVD$u, Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = "U: Principal Component Loadings")
+heatmap.2(diag(reorgMetSVD$d[1:npc]), Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = "D: Principal Component Eigenvalues")
+heatmap.2(t(reorgMetSVD$v), Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = "t(V): Principal Components")
+  
+svd_projection <- reorgMetSVD$u %*% diag(reorgMetSVD$d[1:npc.min]) %*% t(reorgMetSVD$v)
+  
+heatmap.2(svd_projection, Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = paste("UDt(V) - ", npc, " dimensional summary", sep =""))
+heatmap.2(reorgMets - svd_projection, trace = "none", symkey = T, col = greenred(50), main = "Residual Variation - Reclustered")
+  
+dev.off()
+  
+##### Project boer data onto signficant principal components and then interpolate values at Lim/DR ####
+
+metSVD <- svd(metabolomicsMatrix)
+metMatrixProj <- metSVD$u[,1:npc.min] %*% diag(metSVD$d[1:npc.min]) %*% t(metSVD$v[,1:npc.min])
+  
+goal_conditions <- chemostatInfo %>% select(ChemostatCond, Limitation, actualDR)
+boer_conditions <- metabolite_condtions %>% filter(dataset == "boerSummary") %>% mutate(condition = paste0(Limitation, actualDR))
+if(nrow(goal_conditions) != nrow(boer_conditions)){
+  stop("Number of design conditions does not match the number of metabolomics conditions")
+  }
+
+# Rows are boer conditions, columns are goal conditions
+DR_change_mat <- matrix(0, nrow = n_c, ncol = n_c)
+for(cond in 1:n_c){
+  #find the 2 closest DR within the same limitation
+  c_match <- c(1:n_c)[boer_conditions$Limitation == goal_conditions$Limitation[cond]]
+  flanking_match <- c_match[order(abs(boer_conditions[c_match,]$actualDR - goal_conditions$actualDR[cond]))[1:2]]
+  
+  lb_diff <- (goal_conditions$actualDR[cond] - boer_conditions$actualDR[flanking_match][1])/diff(boer_conditions$actualDR[flanking_match])
+  DR_change_mat[flanking_match,cond] <- c((1-lb_diff), lb_diff)
+}
+
+if(!(all((boer_conditions$actualDR %*% DR_change_mat) - goal_conditions$actualDR < 10^-15))){
+ stop("Matching between conditions seems to have failed")
+}
+
+remapped_metabolites <- metMatrixProj %*% DR_change_mat
+remapped_SD <- as.matrix(metabolomicsSD) %*% DR_change_mat
+colnames(remapped_metabolites) <- colnames(remapped_SD) <- goal_conditions$ChemostatCond
+  
+# using a slightly conservative number of principal components
+metSVD <- svd(remapped_metabolites, nu = npc.cons, nv = npc.cons) # SVD of remapped metabolite -> save so that the principal components of met relative abundance can be used
+rownames(metSVD$v) <- colnames(remapped_metabolites)
+  
+tab_boer <- data.frame(metabolomicsData[,1:3], remapped_metabolites)
+  
+  
+
+tMet[,colnames(tab_boer)[!colnames(tab_boer) %in% colnames(tMet)]] <- NA # metabolites whose abundances are reconstructed as a function of other measurements
+  tab_boer <- rbind(tab_boer,tMet)
+  
+  tMet_SD <- tMet; rownames(tMet_SD) <- tMet_SD$Metabolite
+  remapped_SD <- rbind(remapped_SD, tMet_SD[,!(colnames(tMet_SD) %in% c("Metabolite", "KEGG", "altnames"))])
+  
+
+  
+
+# Convert relative to absolute abundances
+# Convert relative to absolute abundances 
 
 
 
-chemostatInfo
 
 
-boerSummary %>% rowwise() %>% mutate(chebi = MatchName2Chebi(unique(compound),1))
 
-boerSummary %>% group_by(compound) %>% mutate(chebi = MatchName2Chebi(unique(compound),1))
-name <- "1,3-diphopshateglycerate"
 
-sapply(AA_absolute_quant$compound, function(x){MatchName2Chebi(x,1)})
 
-listTID
-
-yifanConc %>% tbl_df() %>% rowwise() %>% mutate(chebi = MatchName2Chebi(Compound,1))
 
