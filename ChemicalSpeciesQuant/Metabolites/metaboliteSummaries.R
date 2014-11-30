@@ -502,7 +502,8 @@ if(!all(table(N15AA_mets_meta_expanded$SpeciesType) == 1)){
   
 }
 
-##### Compare model matched metabolites for each dataset so that 
+##### Compare model matched metabolites for each dataset #####
+# Validate the model matches the correct metabolite to each dataset
 
 # data.frames to be compared
 metabolite_datasets_meta <- c("boerMeta_annotated", "yifan_meta_correspondence", "N15AA_mets_meta_expanded")
@@ -515,8 +516,29 @@ metabolite_dataset_summary <- do.call("rbind", metabolite_dataset_summary)
 metabolite_dataset_summary <- dcast(metabolite_dataset_summary, SpeciesName ~ dataset, value.var = "Metabolite")
 View(metabolite_dataset_summary)
 
-##### Source cleanNalign so that tIDs corresponding to each metabolite can be found #### 
+##### Match experimental designs of each dataset #####
+# so that a consensus relative abundance and conversion to absolute abundance can be made
 
+met_cond_match <- data.frame(standard = c("P", "C", "N", "L", "U"), boer = c("PO4", "GLU", "NH4", "LEU", "URA"))
+
+chemostatInfo <- read.table("../chemostatInformation/ListOfChemostats_augmented.txt", sep = "\t", header = T)
+chemostatInfo <- chemostatInfo[chemostatInfo$include_this,]  
+
+# pulldown all dataset conditions
+
+metabolite_datasets <- c("boerSummary", "AA_absolute_quant", "yifanConc")
+
+metabolite_condtions <- lapply(metabolite_datasets, function(x){
+  get(x) %>% select(condition) %>% unique() %>% mutate(dataset = x)
+})
+metabolite_condtions <- do.call("rbind", metabolite_condtions) %>% mutate(Limitation = NA, actualDR = NA)
+
+# Populate dataset specific limitation and DR
+metabolite_condtions
+
+
+
+chemostatInfo
 
 
 boerSummary %>% rowwise() %>% mutate(chebi = MatchName2Chebi(unique(compound),1))
