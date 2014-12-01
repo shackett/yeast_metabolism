@@ -33,10 +33,24 @@ source("../../Yeast_genome_scale/cleanNalign.R", chdir = T)
 
 ##### 1) Reanalysis of original Boer data for metabolite relative abundances (and precision) #####
 
+# Raw data from boer et al. 2010
 tab_allBoer <- read.delim('./boerquant/boer_data_2.txt',header=T,sep='\t')
-tab_allBoerNames <- read.delim('./boerquant/boer_data_2.txt',sep='\t', header = F, nrows = 1)
+tab_allBoerNames <- unname(unlist(read.delim('./boerquant/boer_data_2.txt',sep='\t', header = F, nrows = 1)))
+# Published boer et al. 2010 heatmap and KEGG IDs for metabolites
+# annoyingly these names don't perfectly match the raw data
 boerMeta <- read.delim("BoerMetabolites.txt")[-1,1:2]
 boerHeatmap <- read.delim("BoerMetabolites.txt")[-1,-c(2:3)]
+
+# take care of that name mismatching 
+raw_boer_names <- tab_allBoerNames[8:113]
+
+unmatched_raw_names <- raw_boer_names[!(raw_boer_names %in% boerMeta$Metabolite)]
+unmatched_hm_names <- boerMeta$Metabolite[!(boerMeta$Metabolite %in% raw_boer_names)]
+# mismatched names when ordered, are correctly aligned
+# double check that the mismatched compounds are the same following ordering
+raw_hm_matches <- data.frame(Raw = sort(unmatched_raw_names), HM = sort(unmatched_hm_names)) 
+
+raw_boer_names[!(raw_boer_names %in% boerMeta$Metabolite)] <- raw_hm_matches$HM[chmatch(unmatched_raw_names, raw_hm_matches$Raw)]
 
 ## Approach 1: get relative abundances by dividing through the reference condition
 refTab <- tab_allBoer[ tab_allBoer$Exp.Ref == 'ref',-c(1,3,4,5,6)]
@@ -59,7 +73,7 @@ ntab_allBoer[,8:113] <- ntab_allBoer[,8:113]/as.matrix(refTab[rIDBoer,3:108])
 #heatmap.2(as.matrix(log2(ntab_allBoer[,8:113])), trace = "none")
 
 boerRAmat <- as.matrix(log2(ntab_allBoer[ntab_allBoer$Exp.Ref == "exp",8:113]))
-colnames(boerRAmat) <- tab_allBoerNames[8:113]
+colnames(boerRAmat) <- raw_boer_names
 boerRAmat[boerRAmat == 0] <- NA
 
 ### determine whether the experimental sample was measured (> 300 IC)
@@ -225,13 +239,14 @@ boerSummary <- melt(metRA, value.name = "log2_RA") %>% tbl_df() %>% inner_join(
   melt(metSD, value.name = "log2_CV") %>% tbl_df()) %>% select(compound = Var1, condition = Var2, log2_RA, log2_CV) %>%
   mutate(compound = as.character(compound), condition = as.character(condition))
 
-### Reserve space for metabolties which are inferred in other ways ###
+### Reserve space for metabolities which are inferred in other ways ###
 
 boerMeta <- boerMeta %>% rbind(data.frame(Metabolite = c("phosphate", "phosphoenolpyruvate"), KEGG = c("C00009", "C00074")))
 
 # filter one slow-growth p-limited chemostat
+metRA <- metRA[,!(colnames(metRA) %in% "PO4.0.061")]
+metSD <- metSD[,!(colnames(metSD) %in% "PO4.0.061")]
 boerSummary <- boerSummary %>% filter(condition != "PO4.0.061")
-
 
 ### Now relate these species to the model based on their name to attribute a model name and other systematic IDs ###
 
@@ -478,6 +493,10 @@ AA_absolute_quant <- AA_absolute_quant %>% filter(compound != "leucine-isoleucin
 
 AA_absolute_quant <- AA_absolute_quant %>% mutate(concentration = concentration_mM/1000)
 
+# Take the mean of replicates
+AA_absolute_quant <- AA_absolute_quant %>% group_by(condition, compound, KEGG, DR) %>%
+  summarize(concentration = mean(concentration)) %>% group_by()
+
 # Pass model IDs to N15-AA quant experiment (based on pre-specified KEGG IDs)
 N15AA_mets_meta <- AA_absolute_quant %>% select(compound, KEGG) %>% unique()
 
@@ -664,41 +683,35 @@ rownames(metSVD$v) <- colnames(remapped_metabolites)
 
 # add slots of inferred metabolites to quantitative data so that dimensionality matches boerMeta
 
-rownames(remapped_metabolites)
-
 inferredMets <- matrix(NA, ncol = ncol(remapped_metabolites), nrow = 2)
 rownames(inferredMets) <- c("phosphate", "phosphoenolpyruvate")
 
+if(!all(rownames(remapped_metabolites) %in% boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'])){
+  stop("Boer metabolites cannot be matched to their meta data, check when these names were aligned at the beginning of this script")
+  }
+
+remapped_metabolites <- remapped_metabolites[chmatch(boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'], rownames(remapped_metabolites)),]
+remapped_SD <- remapped_SD[chmatch(boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'], rownames(remapped_SD)),]
 remapped_metabolites <- rbind(remapped_metabolites, inferredMets)
+remapped_SD <- rbind(remapped_SD, inferredMets)
 
-boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite']
-rownames(remapped_metabolites)[!(rownames(remapped_metabolites) %in% boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'])]
+if(!(all(rownames(remapped_metabolites) == boerMeta[,'Metabolite']))){
+  stop("Names were misaligned")
+  }
 
+# Now that names are matched, the model conversions between the boer meta data and the model can be used
+remapped_metabolites <- remapped_metabolites[boerMeta_annotated$boerRow,]
+rownames(remapped_metabolites) <- boerMeta_annotated$SpeciesName
 
-rownames(remapped_metabolites)
-
-
-
-
-boerMeta_annotated$Metabolite
-
-remapped_metabolites[boerMeta_annotated$boerRow,]
-
-remapped_metabolites
-boerMeta_annotated
-
-
-
-#### convert the relative to absolute abundances (where available) ####
+#### Convert the relative to absolute abundances (where available) ####
   
 absolute_quant_datasets <- data.frame(quant_data = c("AA_absolute_quant", "yifanConc"), meta_data = c("N15AA_mets_meta_expanded", "yifan_meta_correspondence"))
 absolute_met_dataset_subset <- metabolite_dataset_summary_table[!is.na(metabolite_dataset_summary_table %>% select(boerMeta_annotated)) & rowSums(!is.na(metabolite_dataset_summary_table[,colnames(metabolite_dataset_summary_table) %in% absolute_quant_datasets$meta_data])) != 0,]
 
-# find C = [absolute met]/[relative met]
-# so [relative met] * C = [absolute met]
+# find C = [absolute met]/[2^relative met]
+# so 2^relative met * C = [absolute met]
 
-goal_conditions
-absolute_conditions <- metabolite_conditions %>% filter(dataset %in% absolute_quant_datasets$quant_data) %>% mutate(condition = paste0(Limitation, actualDR))
+absolute_conditions <- metabolite_conditions %>% filter(dataset %in% absolute_quant_datasets$quant_data)
 
 DR_change_mat <- matrix(0, nrow = n_c, ncol = nrow(absolute_conditions))
 for(cond in 1:nrow(absolute_conditions)){
@@ -710,12 +723,24 @@ for(cond in 1:nrow(absolute_conditions)){
   DR_change_mat[flanking_match,cond] <- c((1-lb_diff), lb_diff)
 }
 
-# determine metabolite relative abundance at 
+# determine metabolite relative abundance at conditions where absolute measurements were made
 absolute_boer_converts <- remapped_metabolites %*% DR_change_mat
+absolute_boer_converts <- absolute_boer_converts[rownames(absolute_boer_converts) %in% absolute_met_dataset_subset$SpeciesName,]
+colnames(absolute_boer_converts) <- absolute_conditions$condition
 
-absolute_met_dataset_subset$boerMeta_annotated
-metabolite_dataset_summary
-  
+absolute_abund_combined <- rbind(
+  AA_absolute_quant %>% mutate(Metabolite = compound) %>% left_join(N15AA_mets_meta_expanded, by = "Metabolite") %>% 
+    select(Metabolite, SpeciesName, condition, concentration) %>% mutate(dataset = "N15AA_mets_meta_expanded"),
+  yifanConc[yifan_meta_correspondence$row,] %>% mutate(Metabolite = compound) %>% left_join(yifan_meta_correspondence) %>% 
+    select(Metabolite, SpeciesName, condition, concentration) %>% mutate(dataset = "yifan_meta_correspondence")
+)
+
+absolute_rel_comp <- absolute_abund_combined %>% left_join(melt(absolute_boer_converts) %>% select(SpeciesName = Var1, condition = Var2, relConc = value))
+
+absolute_rel_comp <- absolute_rel_comp %>% group_by(SpeciesName) %>% filter(!(dataset == "yifan_meta_correspondence" & SpeciesName %in% unique(absolute_abund_combined$SpeciesName[absolute_abund_combined$dataset == "N15AA_mets_meta_expanded"]))) %>%
+  summarize(concConv = mean(concentration / 2^relConc)) %>% filter(!is.na(concConv))
+
+
 
 #####
 inferred_mets <- matrix(NA, nrow = 2, ncol = ncol(metRA))
