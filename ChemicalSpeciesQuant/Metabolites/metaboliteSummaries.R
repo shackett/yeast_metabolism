@@ -476,6 +476,7 @@ AA_absolute_quant <- AA_absolute_quant %>% filter(compound != "leucine-isoleucin
   AA_absolute_quant[AA_absolute_quant$compound == "leucine-isoleucine",] %>% mutate(compound = "leucine"),
   AA_absolute_quant[AA_absolute_quant$compound == "leucine-isoleucine",] %>% mutate(compound = "isoleucine"))
 
+AA_absolute_quant <- AA_absolute_quant %>% mutate(concentration = concentration_mM/1000)
 
 # Pass model IDs to N15-AA quant experiment (based on pre-specified KEGG IDs)
 N15AA_mets_meta <- AA_absolute_quant %>% select(compound, KEGG) %>% unique()
@@ -525,8 +526,8 @@ metabolite_dataset_summary <- lapply(metabolite_datasets_meta, function(x){
 })
 metabolite_dataset_summary <- do.call("rbind", metabolite_dataset_summary)
 
-metabolite_dataset_summary <- dcast(metabolite_dataset_summary, SpeciesName ~ dataset, value.var = "Metabolite")
-View(metabolite_dataset_summary)
+metabolite_dataset_summary_table <- dcast(metabolite_dataset_summary, SpeciesName ~ dataset, value.var = "Metabolite")
+View(metabolite_dataset_summary_table)
 
 tIDtoMet <- metabolite_dataset_summary %>% filter(dataset == "boerMeta_annotated") 
 if(any(table(tIDtoMet$SpeciesType) != 1)){
@@ -545,28 +546,28 @@ chemostatInfo <- chemostatInfo[chemostatInfo$include_this,]
 
 metabolite_datasets <- c("boerSummary", "AA_absolute_quant", "yifanConc")
 
-metabolite_condtions <- lapply(metabolite_datasets, function(x){
+metabolite_conditions <- lapply(metabolite_datasets, function(x){
   get(x) %>% select(condition) %>% unique() %>% mutate(dataset = x)
 })
-metabolite_condtions <- do.call("rbind", metabolite_condtions)
+metabolite_conditions <- do.call("rbind", metabolite_conditions)
 
 # Populate dataset specific limitation and DR
-metabolite_condtions <- rbind(
+metabolite_conditions <- rbind(
   # Boer
-  metabolite_condtions %>% filter(dataset == "boerSummary") %>% mutate(boer_Limitation = substr(condition, 1, 3)) %>%
+  metabolite_conditions %>% filter(dataset == "boerSummary") %>% mutate(boer_Limitation = substr(condition, 1, 3)) %>%
   group_by(boer_Limitation) %>% mutate(Limitation = met_cond_match$standard[met_cond_match$boer == unique(boer_Limitation)]) %>%
   rowwise() %>% mutate(actualDR = as.numeric(substr(condition, 5, 20))) %>% select(-boer_Limitation),
   # N15
-  metabolite_condtions %>% filter(dataset == "AA_absolute_quant") %>% rowwise() %>% mutate(Limitation = "P", actualDR = AA_absolute_quant$DR[AA_absolute_quant$condition == condition][1]),
+  metabolite_conditions %>% filter(dataset == "AA_absolute_quant") %>% rowwise() %>% mutate(Limitation = "P", actualDR = AA_absolute_quant$DR[AA_absolute_quant$condition == condition][1]),
   # YifanAlign
-  metabolite_condtions %>% filter(dataset == "yifanConc") %>% mutate(Limitation = "C", actualDR = 0.30)
+  metabolite_conditions %>% filter(dataset == "yifanConc") %>% mutate(Limitation = "C", actualDR = 0.30)
 )
 
 ##### Use metabolite abundances to inform a common set of conditions #####
 
-metabolomicsMatrix <- boerSummary %>% left_join(metabolite_condtions %>% filter(dataset == "boerSummary")) %>%
+metabolomicsMatrix <- boerSummary %>% left_join(metabolite_conditions %>% filter(dataset == "boerSummary")) %>%
   mutate(condition = paste0(Limitation, actualDR)) %>% acast(formula = "compound ~ condition", value.var = "log2_RA")
-metabolomicsSD <- boerSummary %>% left_join(metabolite_condtions %>% filter(dataset == "boerSummary")) %>%
+metabolomicsSD <- boerSummary %>% left_join(metabolite_conditions %>% filter(dataset == "boerSummary")) %>%
   mutate(condition = paste0(Limitation, actualDR)) %>% acast(formula = "compound ~ condition", value.var = "log2_CV")
 
 if(!all(colnames(metabolomicsMatrix) == colnames(metabolomicsSD))){stop("Metabolite relative abundances and variances don't match")}
@@ -627,9 +628,10 @@ dev.off()
 
 metSVD <- svd(metabolomicsMatrix)
 metMatrixProj <- metSVD$u[,1:npc.min] %*% diag(metSVD$d[1:npc.min]) %*% t(metSVD$v[,1:npc.min])
-  
+rownames(metMatrixProj) <- rownames(metabolomicsMatrix); colnames(metMatrixProj) <- colnames(metabolomicsMatrix)
+
 goal_conditions <- chemostatInfo %>% select(ChemostatCond, Limitation, actualDR)
-boer_conditions <- metabolite_condtions %>% filter(dataset == "boerSummary") %>% mutate(condition = paste0(Limitation, actualDR))
+boer_conditions <- metabolite_conditions %>% filter(dataset == "boerSummary") %>% mutate(condition = paste0(Limitation, actualDR))
 if(nrow(goal_conditions) != nrow(boer_conditions)){
   stop("Number of design conditions does not match the number of metabolomics conditions")
   }
@@ -652,14 +654,73 @@ if(!(all((boer_conditions$actualDR %*% DR_change_mat) - goal_conditions$actualDR
 remapped_metabolites <- metMatrixProj %*% DR_change_mat
 remapped_SD <- as.matrix(metabolomicsSD) %*% DR_change_mat
 colnames(remapped_metabolites) <- colnames(remapped_SD) <- goal_conditions$ChemostatCond
-  
+
+# SVD of remapped metabolite -> save so that the principal components of met relative abundance can be used
 # using a slightly conservative number of principal components
-metSVD <- svd(remapped_metabolites, nu = npc.cons, nv = npc.cons) # SVD of remapped metabolite -> save so that the principal components of met relative abundance can be used
+metSVD <- svd(remapped_metabolites, nu = npc.cons, nv = npc.cons)
 rownames(metSVD$v) <- colnames(remapped_metabolites)
   
+# Convert boer dataset names to model names, rows will now correspond to boerMeta_annotated
+
+# add slots of inferred metabolites to quantitative data so that dimensionality matches boerMeta
+
+rownames(remapped_metabolites)
+
+inferredMets <- matrix(NA, ncol = ncol(remapped_metabolites), nrow = 2)
+rownames(inferredMets) <- c("phosphate", "phosphoenolpyruvate")
+
+remapped_metabolites <- rbind(remapped_metabolites, inferredMets)
+
+boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite']
+rownames(remapped_metabolites)[!(rownames(remapped_metabolites) %in% boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'])]
+
+
+rownames(remapped_metabolites)
+
+
+
+
+boerMeta_annotated$Metabolite
+
+remapped_metabolites[boerMeta_annotated$boerRow,]
+
+remapped_metabolites
+boerMeta_annotated
+
+
+
+#### convert the relative to absolute abundances (where available) ####
   
+absolute_quant_datasets <- data.frame(quant_data = c("AA_absolute_quant", "yifanConc"), meta_data = c("N15AA_mets_meta_expanded", "yifan_meta_correspondence"))
+absolute_met_dataset_subset <- metabolite_dataset_summary_table[!is.na(metabolite_dataset_summary_table %>% select(boerMeta_annotated)) & rowSums(!is.na(metabolite_dataset_summary_table[,colnames(metabolite_dataset_summary_table) %in% absolute_quant_datasets$meta_data])) != 0,]
+
+# find C = [absolute met]/[relative met]
+# so [relative met] * C = [absolute met]
+
+goal_conditions
+absolute_conditions <- metabolite_conditions %>% filter(dataset %in% absolute_quant_datasets$quant_data) %>% mutate(condition = paste0(Limitation, actualDR))
+
+DR_change_mat <- matrix(0, nrow = n_c, ncol = nrow(absolute_conditions))
+for(cond in 1:nrow(absolute_conditions)){
+  #find the 2 closest DR within the same limitation
+  c_match <- c(1:n_c)[goal_conditions$Limitation == absolute_conditions$Limitation[cond]]
+  flanking_match <- c_match[order(abs(goal_conditions[c_match,]$actualDR - absolute_conditions$actualDR[cond]))[1:2]]
+  
+  lb_diff <- (absolute_conditions$actualDR[cond] - goal_conditions$actualDR[flanking_match][1])/diff(goal_conditions$actualDR[flanking_match])
+  DR_change_mat[flanking_match,cond] <- c((1-lb_diff), lb_diff)
+}
+
+# determine metabolite relative abundance at 
+absolute_boer_converts <- remapped_metabolites %*% DR_change_mat
+
+absolute_met_dataset_subset$boerMeta_annotated
+metabolite_dataset_summary
+  
+
+#####
 inferred_mets <- matrix(NA, nrow = 2, ncol = ncol(metRA))
 rownames(inferred_mets) <- c("phosphate", "phosphoenolpyruvate"); colnames(inferred_mets) <- colnames(metRA)
+
 
 boerSummary <- boerSummary %>% rbind(melt(inferred_mets) %>% select(compound = Var1, condition = Var2) %>% mutate(log2_RA = NA, log2_CV = NA))
 
