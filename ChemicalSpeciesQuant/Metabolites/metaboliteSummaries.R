@@ -602,6 +602,7 @@ plot(matrix_svd$d^2/sum(matrix_svd$d^2)) #scree-plot - fraction of variance expl
 ### determine how many significant principal components should be included based on repeated random sub-sampling validation ###
 pcrange <- c(2,18)
 npc.compare <- estim_ncpPCA(metabolomicsMatrix, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 100)
+
 # take the value of # PCs which minimizes the 
 npc.cons <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.3 + min(npc.compare$criterion)][1]
 npc.min <- as.numeric(names(which.min(npc.compare$criterion)))
@@ -692,8 +693,17 @@ if(!all(rownames(remapped_metabolites) %in% boerMeta[!(boerMeta$Metabolite %in% 
 
 remapped_metabolites <- remapped_metabolites[chmatch(boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'], rownames(remapped_metabolites)),]
 remapped_SD <- remapped_SD[chmatch(boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'], rownames(remapped_SD)),]
+
 remapped_metabolites <- rbind(remapped_metabolites, inferredMets)
 remapped_SD <- rbind(remapped_SD, inferredMets)
+
+remapped_corr <- shrunkCorr[chmatch(boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'], rownames(shrunkCorr)),
+                            chmatch(boerMeta[!(boerMeta$Metabolite %in% rownames(inferredMets)),'Metabolite'], colnames(shrunkCorr))]
+expanded_met_correlations <- matrix(NA, ncol = nrow(boerMeta), nrow = nrow(boerMeta))
+rownames(expanded_met_correlations) <- colnames(expanded_met_correlations) <- boerMeta$Metabolite
+  
+expanded_met_correlations[chmatch(rownames(shrunkCorr), boerMeta$Metabolite), chmatch(colnames(shrunkCorr), boerMeta$Metabolite)] <- shrunkCorr
+  
 
 if(!(all(rownames(remapped_metabolites) == boerMeta[,'Metabolite']))){
   stop("Names were misaligned")
@@ -701,10 +711,14 @@ if(!(all(rownames(remapped_metabolites) == boerMeta[,'Metabolite']))){
 
 # Now that names are matched, the model conversions between the boer meta data and the model can be used
 remapped_metabolites <- remapped_metabolites[boerMeta_annotated$boerRow,]
-rownames(remapped_metabolites) <- boerMeta_annotated$SpeciesName
+remapped_SD <- remapped_SD[boerMeta_annotated$boerRow,]
+expanded_met_correlations <- expanded_met_correlations[boerMeta_annotated$boerRow,boerMeta_annotated$boerRow]
+
+rownames(remapped_metabolites) <- rownames(remapped_SD) <- boerMeta_annotated$SpeciesName
+rownames(expanded_met_correlations) <- colnames(expanded_met_correlations) <- boerMeta_annotated$SpeciesName
 
 #### Convert the relative to absolute abundances (where available) ####
-  
+
 absolute_quant_datasets <- data.frame(quant_data = c("AA_absolute_quant", "yifanConc"), meta_data = c("N15AA_mets_meta_expanded", "yifan_meta_correspondence"))
 absolute_met_dataset_subset <- metabolite_dataset_summary_table[!is.na(metabolite_dataset_summary_table %>% select(boerMeta_annotated)) & rowSums(!is.na(metabolite_dataset_summary_table[,colnames(metabolite_dataset_summary_table) %in% absolute_quant_datasets$meta_data])) != 0,]
 
@@ -741,34 +755,69 @@ absolute_rel_comp <- absolute_rel_comp %>% group_by(SpeciesName) %>% filter(!(da
   summarize(concConv = mean(concentration / 2^relConc)) %>% filter(!is.na(concConv))
 
 
+##### Infer concentrations for a subset of species #####
 
-#####
-inferred_mets <- matrix(NA, nrow = 2, ncol = ncol(metRA))
-rownames(inferred_mets) <- c("phosphate", "phosphoenolpyruvate"); colnames(inferred_mets) <- colnames(metRA)
+# Recalculate the phosphate concentration with the absolute ATP/ADP values
 
+atp <- 2^remapped_metabolites[rownames(remapped_metabolites) == "ATP",]*absolute_rel_comp$concConv[absolute_rel_comp$SpeciesName == "ATP"]
+adp <- 2^remapped_metabolites[rownames(remapped_metabolites) == "ADP",]*absolute_rel_comp$concConv[absolute_rel_comp$SpeciesName == "ADP"]
+h2o <- 55 # (assumption pure water)
 
-boerSummary <- boerSummary %>% rbind(melt(inferred_mets) %>% select(compound = Var1, condition = Var2) %>% mutate(log2_RA = NA, log2_CV = NA))
+dG0 = 37.9 # kJ / mol,eQuilibrator
+dG = 57 # kJ/mol Bionumbers http://bionumbers.hms.harvard.edu//bionumber.aspx?id=100775&ver=0
+
+R = 8.3144621*10^(-3) # kJ/(mol*K)
+Tm= 310.15 # K
+
+p = (atp*h2o)/adp * exp((dG0-dG)/(R*Tm))
+
+# calculate the standard deviation of the phosphate concentration
+
+peqtn <- "log(((2^ATP)*h2o)/(2^ADP) * 2.71828^((dG0-dG)/(R*Tm)))/log(2)"
+eq <- eval(parse(text = paste('expression(',peqtn,')')))
+
+derivList <- list()
+for(spec in c('ATP', 'ADP')){
+  derivList[[spec]] <- D(eq, spec)
+}
+
+for(cond in 1:n_c){
+  standard_devs <- remapped_SD[chmatch(c('ATP', 'ADP'), rownames(remapped_SD)), cond]
+  species_corr <- shrunkCorr[chmatch(c('ATP', 'ADP'), rownames(shrunkCorr)), chmatch(c('ATP', 'ADP'), rownames(shrunkCorr))]
+  species_cov <- species_corr*(standard_devs %*% t(rep(1, 2)))*(rep(1, 2) %*% t(standard_devs))
+  cond_values <- remapped_metabolites[chmatch(c('ATP', 'ADP'), rownames(remapped_metabolites)),cond]; names(cond_values) <- c('ATP', 'ADP')
+  cond_values <- data.frame(ATP = cond_values[1], ADP = cond_values[2], h2o, dG0, dG, R, Tm)
+  
+  partial_deriv <- rep(NA, 2)
+  for(n_der in 1:length(derivList)){
+    partial_deriv[n_der] <- with(cond_values , eval(derivList[[n_der]]))
+  }
+  
+  remapped_SD[rownames(remapped_SD) == "phosphate",cond] <- sqrt(t(partial_deriv) %*% species_cov %*% partial_deriv) # save the compute log-space standard deviation
+}
+
+remapped_metabolites[rownames(remapped_metabolites) == "phosphate",] <- log2(p) - log2(p)[names(p) == "P0.05"]
+absolute_rel_comp <- rbind(absolute_rel_comp, data.frame(SpeciesName = "phosphate", concConv = p['P0.05']/2^remapped_metabolites[rownames(remapped_metabolites) == "phosphate",'P0.05']))
+
+# add 3pg as phosphoenolpyruvate
+
+remapped_metabolites[rownames(remapped_metabolites) == "phosphoenolpyruvate",] <- remapped_metabolites[rownames(remapped_metabolites) == "3-phosphoglycerate",]
+remapped_SD[rownames(remapped_SD) == "phosphoenolpyruvate",] <- remapped_SD[rownames(remapped_SD) == "3-phosphoglycerate",]
 
   
-
-
-tMet[,colnames(tab_boer)[!colnames(tab_boer) %in% colnames(tMet)]] <- NA # metabolites whose abundances are reconstructed as a function of other measurements
-  tab_boer <- rbind(tab_boer,tMet)
+# determine the correlation of added components
+expanded_met_correlations[,rownames(expanded_met_correlations) == "phosphoenolpyruvate"] <- expanded_met_correlations[rownames(expanded_met_correlations) == "phosphoenolpyruvate",] <- expanded_met_correlations[rownames(expanded_met_correlations) == "3-phosphoglycerate",]
+expanded_met_correlations[,rownames(expanded_met_correlations) == "phosphate"] <- expanded_met_correlations[rownames(expanded_met_correlations) == "phosphate",] <- 0 # Im not sure how to propagate the correlations of ATP and ADP through here
+expanded_met_correlations[rownames(expanded_met_correlations) %in% c("phosphoenolpyruvate", "phosphate"),colnames(expanded_met_correlations) %in% c("phosphoenolpyruvate", "phosphate")] <- diag(2)
   
-  tMet_SD <- tMet; rownames(tMet_SD) <- tMet_SD$Metabolite
-  remapped_SD <- rbind(remapped_SD, tMet_SD[,!(colnames(tMet_SD) %in% c("Metabolite", "KEGG", "altnames"))])
-  
+#### Save outputs ####
 
-  
+# Metabolite relative abundances at chemostat conditions with model name and ID
 
-# Convert relative to absolute abundances
-# Convert relative to absolute abundances 
+tab_boer <- boerMeta_annotated %>% select(SpeciesName, SpeciesType) %>% left_join(absolute_rel_comp) %>% cbind(remapped_metabolites)
+write.table(tab_boer, '../../Yeast_genome_scale/flux_cache/tab_boer.txt', sep='\t', row.names = F, col.names = T, quote = F)
 
+# Additional metabolite information - Coefficient of variation, residual correlations, and SVD of original metabolite matrix
 
-
-
-
-
-
-
+save(tab_boer,metSVD,remapped_SD,expanded_met_correlations,file='../../Yeast_genome_scale/flux_cache/metaboliteTables.RData')
 
