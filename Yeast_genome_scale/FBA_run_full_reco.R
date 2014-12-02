@@ -8,6 +8,7 @@ library(reshape2)
 library(RColorBrewer)
 library(stringr)
 library(grid)
+library(dplyr)
 
 source("FBA_lib.R")
 
@@ -179,12 +180,12 @@ reactionMatches$pathway = sapply(reactionMatches$KEGGrxnID, function(x){
 write.table(reactionMatches, "./flux_cache/reactionPathways.tsv", sep = "\t", col.names = T, row.names = F, quote = F)
 
 ### Determine which pathways are associated with a protein ###
-
-kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # > generated from keggIDparser.py KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
-if(is.null(kegg_enzyme_dict$PATHWAY)){
-  gene_pathways(kegg_enzyme_dict); kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv")
-}#generate a per-gene pathway annotation if one is not already generated
-
+# Is this still used ?
+#kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # > generated from keggIDparser.py KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
+#if(is.null(kegg_enzyme_dict$PATHWAY)){
+#  gene_pathways(kegg_enzyme_dict); kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv")
+#}#generate a per-gene pathway annotation if one is not already generated
+####
 
 
 
@@ -309,64 +310,29 @@ possibleAuxotrophies = c(as.character(unique(rxnFile[grep("isopropylmalate dehyd
 compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$ReactionID == x][1]})
 
 
-
 #### Define species involved in boundary-conditions ####
 
 ## extract the metabolite ID corresponding to the extracellular introduction of nutrients ##
-
-sources <- c("D-glucose", "ammonium", '^phosphate \\[extracellular\\]', "sulphate", "uracil", "L-leucine", "oxygen")
-
-resource_matches <- lapply(sources, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
-
-boundary_met <- NULL
-for(x in 1:length(sources)){
-  boundary_met <- rbind(boundary_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
-}
-if(nrow(boundary_met) != length(sources)){stop("A valid match was not found for all sources")}
+boundary_met <- treatment_par[[1]]$nutrients %>% filter(type == "uptake") %>% 
+  select(SpeciesName = specie) %>% tbl_df() %>% left_join(corrFile)
+if(nrow(boundary_met) != nrow(treatment_par[[1]]$nutrients %>% filter(type == "uptake"))){stop("A valid match was not found for all absorbed metabolites")}
 
 
 ## extract the IDs of excreted metabolites ##
-
-
-excreted <- c('ethanol \\[extracellular\\]', 'acetate \\[extracellular\\]', '\\(R\\)-lactate \\[extracellular\\]', 'glycerol \\[extracellular\\]')
-
-resource_matches <- lapply(excreted, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
-
-excreted_met <- NULL
-for(x in 1:length(excreted)){
-  excreted_met <- rbind(excreted_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
-}
-if(nrow(excreted_met) != length(excreted)){stop("A valid match was not found for all excreted metabolties")}
+excreted_met <- treatment_par[[1]]$nutrients %>% filter(type == "excretion") %>% 
+  select(SpeciesName = specie) %>% tbl_df() %>% left_join(corrFile)
+if(nrow(excreted_met) != nrow(treatment_par[[1]]$nutrients %>% filter(type == "excretion"))){stop("A valid match was not found for all excreted metabolites")}
 
 
 ## extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass ##
-
 sinks <- unique(c(comp_by_cond$compositionFile$AltName[comp_by_cond$compositionFile$FluxType == "Boundary"], colnames(comp_by_cond$biomassExtensionE)[-1]))
-
-resource_matches <- lapply(sinks, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile, reduceByLength = T)
-
-comp_met <- NULL
-for(x in 1:length(sinks)){
-  if(nrow(resource_matches[[x]]) == 1){
-    comp_met <- rbind(comp_met, resource_matches[[x]])
-  }else{
-    comp_met <- rbind(comp_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "cytoplasm"],])
-  }
-}
+comp_met <- data.frame(SpeciesName = sinks) %>% tbl_df() %>% left_join(corrFile)
 if(nrow(comp_met) != length(sinks)){stop("A valid match was not found for all sinks")}
 
 
 ## freely exchanging metabolites through extracellular compartment ##
-
-free_flux <- c("carbon dioxide", "H2O", "H+")
-
-resource_matches <- lapply(free_flux, perfect.match, query = corrFile$SpeciesName, corrFile = corrFile)
-
-freeExchange_met <- NULL
-for(x in 1:length(free_flux)){
-  freeExchange_met <- rbind(freeExchange_met, resource_matches[[x]][resource_matches[[x]]$Compartment %in% compFile$compID[compFile$compName == "extracellular"],])
-}
-if(nrow(freeExchange_met) != length(free_flux)){stop("A valid match was not found for all freebee metabolites")}
+free_flux <- c("carbon dioxide [extracellular]", "H2O [extracellular]", "H+ [extracellular]")
+freeExchange_met <- data.frame(SpeciesName = free_flux) %>% tbl_df() %>% left_join(corrFile)
 
 
 ##  a list of reactions corresponding to a measured fluxes is formed ## 
@@ -961,7 +927,7 @@ if(QPorLP == "QP"){
             pythout = FVA_setup(reduced_qpModel, useCluster)
             
           }else{
-            warning("\'fluxCarriedSimple.tsv\' is out of data, rerun after it is generated (finishing running script and it probably will be)")
+            warning("\'fluxCarriedSimple.tsv\' is out of date, rerun after it is generated (finishing running script and it probably will be)")
           }
         }else{
           warning("FVA files will not be generated until \'fluxCarriedSimple.tsv\' has been generated (finishing running script and it probably will be)")
@@ -1161,10 +1127,11 @@ write.output(std_flux_rxnName_withL1[smooth_flux_Fstat$valid_flux[grep('boundary
 flux_summary <- list()
 flux_summary$IDs = rxNames
 flux_summary$cellularFluxes = fluxMat_per_cellVol[,cond_order_check(colnames(fluxMat_per_cellVol))] # save cellular fluxes and verify correct ordering
-
+flux_summary$QPresiduals <- residual_flux_stack
+flux_summary$boundaryFluxes <- treatment_par
 
 #### summarize flux variability analysis fluxes
-fva_summary_bu -> fva_summary
+#fva_summary_bu -> fva_summary
 table(fva_summary$status) # 2 = optimal, 13 = suboptimal
 fva_summary$optim[!(fva_summary$status %in% c(2,13))] <- NA # FVA results from optimization which did not find an optimal or suboptimal solution 
 
@@ -1225,9 +1192,6 @@ for(i in 1:nrow(invalid_flux)){
   
   fva_rep <- total_flux_cast[rownames(total_flux_cast) == invalid_flux[i,1], colnames(total_flux_cast) == invalid_flux[i,2],]
   fva_rep[is.na(fva_rep)] <- fva_rep[names(fva_rep) == "standardQP"]
-  
-  #fva_rep[grep('max', names(fva_rep))][is.infinite(fva_rep[grep('max', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * 10
-  #fva_rep[grep('min', names(fva_rep))][is.infinite(fva_rep[grep('min', names(fva_rep))])] <-  abs(fva_rep[names(fva_rep) == "standardQP"]) * -10
   
   total_flux_cast[rownames(total_flux_cast) == invalid_flux[i,1], colnames(total_flux_cast) == invalid_flux[i,2],] <- fva_rep
   
