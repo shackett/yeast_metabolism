@@ -236,7 +236,7 @@ write.table(metSD, "metaboliteSummaries/boerSD.tsv", quote = F, col.names = T, r
 write.table(shrunkCorr, "metaboliteSummaries/boerCorr.tsv", quote = F, col.names = T, row.names = T, sep = "\t")
 
 boerSummary <- melt(metRA, value.name = "log2_RA") %>% tbl_df() %>% inner_join(
-  melt(metSD, value.name = "log2_CV") %>% tbl_df()) %>% select(compound = Var1, condition = Var2, log2_RA, log2_CV) %>%
+  melt(metSD, value.name = "log2_SD") %>% tbl_df()) %>% select(compound = Var1, condition = Var2, log2_RA, log2_SD) %>%
   mutate(compound = as.character(compound), condition = as.character(condition))
 
 ### Reserve space for metabolities which are inferred in other ways ###
@@ -587,7 +587,7 @@ metabolite_conditions <- rbind(
 metabolomicsMatrix <- boerSummary %>% left_join(metabolite_conditions %>% filter(dataset == "boerSummary")) %>%
   mutate(condition = paste0(Limitation, actualDR)) %>% acast(formula = "compound ~ condition", value.var = "log2_RA")
 metabolomicsSD <- boerSummary %>% left_join(metabolite_conditions %>% filter(dataset == "boerSummary")) %>%
-  mutate(condition = paste0(Limitation, actualDR)) %>% acast(formula = "compound ~ condition", value.var = "log2_CV")
+  mutate(condition = paste0(Limitation, actualDR)) %>% acast(formula = "compound ~ condition", value.var = "log2_SD")
 
 if(!all(colnames(metabolomicsMatrix) == colnames(metabolomicsSD))){stop("Metabolite relative abundances and variances don't match")}
 
@@ -817,7 +817,7 @@ expanded_met_correlations[rownames(expanded_met_correlations) %in% c("phosphoeno
 tab_boer <- boerMeta_annotated %>% select(SpeciesName, SpeciesType) %>% left_join(absolute_rel_comp) %>% cbind(remapped_metabolites)
 write.table(tab_boer, '../../Yeast_genome_scale/flux_cache/tab_boer.txt', sep='\t', row.names = F, col.names = T, quote = F)
 
-# Additional metabolite information - Coefficient of variation, residual correlations, and SVD of original metabolite matrix
+# Additional metabolite information - SD of log2 abundances, residual correlations, and SVD of original metabolite matrix
 
 save(tab_boer,metSVD,remapped_SD,expanded_met_correlations,file='../../Yeast_genome_scale/flux_cache/metaboliteTables.RData')
 
