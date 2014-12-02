@@ -8,6 +8,7 @@ library(gplots)
 library(reshape2)
 library(data.table)
 library(grid)
+library(dplyr)
 
 scatter_facet_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_blank(), 
       legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 0.5), axis.text.x = element_text(angle = 90),
@@ -225,37 +226,27 @@ comp_by_cond$moles_per_cell[compositionFile$MetName %in% c("ATP", "UTP", "CTP", 
 # from total carbohydrates to yield Mannan + Glucan + Glycogen signal
 
 # load absolute concentration of metabolites (in M:moles/L)
-metabolite_concentrations <- read.delim("../Yeast_genome_scale/flux_cache/tab_boer_abs.txt") # for [M]
+metabolite_concentrations <- read.delim("../Yeast_genome_scale/flux_cache/tab_boer.txt") # for [M]
 load("../Yeast_genome_scale/flux_cache/metaboliteTables.RData") # for SD of log2([M])
 load("../Yeast_genome_scale/flux_cache/reconstructionWithCustom.Rdata") # for correspondence between metabolite identities and model
 
 # metabolites with a median concentration of greater than 5mM and manually-defined abundant metabolites which are also anti-correlated with growth-rate
 #sort(apply(metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))], 1, median))
 
-abs_metabolite_concentrations <- metabolite_concentrations[apply(metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))], 1, median) > 0.005 | metabolite_concentrations$Metabolite %in% c("glutathione", "glutathione disulfide", "trehalose/sucrose"),]
-abs_metabolite_SD <- remapped_SD[rownames(remapped_SD) %in% abs_metabolite_concentrations$Metabolite,] * log(2) * abs_metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))] # SD(x) = SD(log2(x)) * log(2) * x
+abs_metabolite_concentrations <- metabolite_concentrations$concConv * 2^metabolite_concentrations[,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))]
+abundant_metabolites <- (apply(abs_metabolite_concentrations, 1, median) > 0.001 & rowSums(is.na(abs_metabolite_concentrations)) == 0 | metabolite_concentrations$SpeciesName %in% c("L-tyrosine", "L-phenylalanine", "keto-phenylpyruvate")) & metabolite_concentrations$SpeciesName != "phosphate"
 
-abs_metabolite_concentrations$tID[abs_metabolite_concentrations$Metabolite == "trehalose/sucrose"] <- corrFile$SpeciesType[grep('^trehalose', corrFile$SpeciesName)][1]
+abs_metabolite_SD <- remapped_SD[abundant_metabolites,] * log(2) * abs_metabolite_concentrations[abundant_metabolites,]
+abs_metabolite_concentrations <- cbind(metabolite_concentrations[abundant_metabolites,1:3], abs_metabolite_concentrations[abundant_metabolites,])
 
-IDmisdefined <- grep('^t_[0-9]{4}$', abs_metabolite_concentrations$tID, invert = T)
+IDmisdefined <- grep('^t_[0-9]{4}$', abs_metabolite_concentrations$SpeciesType, invert = T)
 if(length(IDmisdefined) != 0){
   stop(paste0("ID is misdefined: ", paste(abs_metabolite_concentrations$tID[IDmisdefined], collapse = " & "), " -> manually overwrite with appropriate single tIDs"))
   }
 
-# mitochondrial: alanine, glutamate and aspartate based on localization of enzymes it is ambiguous where transaminations will occur, but treating pools as mitochondrial will minimize
-# possible side-effects from mito->cyto transport reactions
-# cytoplasmic: all else
+# Assme that all species drain out of the cytosol
 
-abs_metabolite_concentrations$modelName <- NA
-abs_metabolite_concentrations$modelName[abs_metabolite_concentrations$Metabolite %in% c("alanine", "aspartate", "glutamate")] <- 
-  corrFile$SpeciesName[corrFile$Compartment == "c_11"][chmatch(abs_metabolite_concentrations$tID[abs_metabolite_concentrations$Metabolite %in% c("alanine", "aspartate", "glutamate")], 
-                                                               corrFile$SpeciesType[corrFile$Compartment == "c_11"])]
-
-abs_metabolite_concentrations$modelName[is.na(abs_metabolite_concentrations$modelName)] <- 
-  corrFile$SpeciesName[corrFile$Compartment == "c_03"][chmatch(abs_metabolite_concentrations$tID[is.na(abs_metabolite_concentrations$modelName)], 
-                                                               corrFile$SpeciesType[corrFile$Compartment == "c_03"])]
-
-
+abs_metabolite_concentrations <- abs_metabolite_concentrations %>% select(-SpeciesName) %>% left_join(corrFile %>% filter(Compartment == "c_03") %>% select(SpeciesName, SpeciesType))
 
 
 ##### Stand-alone abundance of fatty-acids, carbohydrate and glycerol ######
@@ -269,17 +260,18 @@ carbFrac <- carbFrac[chmatch(chemostatInfo$composition_data, carbFrac$conditions
 # subtract trehalose concentration (measured by MS) from measured TC
 # align TC and [trehalose] based upon grams per cell
 
-trehalose_g_per_cell <- abs_metabolite_concentrations[abs_metabolite_concentrations$modelName == "trehalose [cytoplasm]", grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))] *
+
+trehalose_g_per_cell <- abs_metabolite_concentrations %>% filter(SpeciesName == "trehalose [cytoplasm]") %>% select(grep('[A-Z][0-9.]{4}', colnames(abs_metabolite_concentrations))) *
   342.2965 * chemostatInfo$medcellVol * 10^-15 # convert to grams per cell
 trehalose_g_per_cell <- trehalose_g_per_cell[chmatch(names(trehalose_g_per_cell), chemostatInfo$ChemostatCond)]
 
-trehalose_cv <- abs_metabolite_SD[abs_metabolite_concentrations$modelName == "trehalose [cytoplasm]",]/abs_metabolite_concentrations[abs_metabolite_concentrations$modelName == "trehalose [cytoplasm]", grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))]
+trehalose_cv <- abs_metabolite_SD[abs_metabolite_concentrations$SpeciesName == "trehalose [cytoplasm]",]/abs_metabolite_concentrations %>% filter(SpeciesName == "trehalose [cytoplasm]") %>% select(grep('[A-Z][0-9.]{4}', colnames(abs_metabolite_concentrations)))
 trehalose_cv <- trehalose_cv[chmatch(names(trehalose_cv), chemostatInfo$ChemostatCond)]
 
 tc_g_per_cell <- (carbFrac$fraction * chemostatInfo$DWperCell)
 
 TC_minusTRE <- tc_g_per_cell - trehalose_g_per_cell
-TC_SD_minusTRE <- sqrt((tc_g_per_cell * (sqrt(carbFrac$assayVariance)/carbFrac$fraction))^2 - (trehalose_cv * trehalose_g_per_cell)^2)
+TC_SD_minusTRE <- sqrt((tc_g_per_cell * (sqrt(carbFrac$assayVariance)/carbFrac$fraction))^2 + (trehalose_cv * trehalose_g_per_cell)^2)
 
 CV_table[,"sugar polymer flux" := unlist(TC_SD_minusTRE/TC_minusTRE),]
 
@@ -337,7 +329,7 @@ for(FA in compositionFile[compositionFile$Class == "Fatty Acids",]$MetName){
 ## Revisit washout of soluble metabolites with treatmet similarly to fatty acids ##
 # programatically append added metabolites to compositionFile
 
-compositionFile_solubleAppend <- data.frame(MetName = abs_metabolite_concentrations$modelName, StoiCoef = NA, AltName = abs_metabolite_concentrations$modelName, Class = "Soluble metabolites", Abbreviated = abs_metabolite_concentrations$modelName, Polymerization_Cost = NA, MW = NA, weightPerUn = NA, index = nrow(compositionFile) + 1:nrow(abs_metabolite_concentrations))
+compositionFile_solubleAppend <- data.frame(MetName = abs_metabolite_concentrations$SpeciesName, StoiCoef = NA, AltName = abs_metabolite_concentrations$SpeciesName, Class = "Soluble metabolites", Abbreviated = abs_metabolite_concentrations$SpeciesName, Polymerization_Cost = NA, MW = NA, weightPerUn = NA, index = nrow(compositionFile) + 1:nrow(abs_metabolite_concentrations))
 
 solubleMet_molFormula <- modelMetComp[chmatch(compositionFile_solubleAppend$AltName, modelMetComp$name),]
 solubleMet_molFormula <- apply(solubleMet_molFormula[,-c(1,2)], c(1,2), as.numeric)
@@ -355,7 +347,7 @@ compositionFile <- rbind(compositionFile, compositionFile_solubleAppend)
 # fill in metabolite moles per cell and coefficient of variation
 for(MET_num in 1:nrow(compositionFile_solubleAppend)){
   
-  metSummary <- data.frame(cond = colnames(abs_metabolite_SD), molar = unlist(abs_metabolite_concentrations[MET_num,grep('[A-Z][0-9.]{4}', colnames(metabolite_concentrations))]), SD = unlist(abs_metabolite_SD[MET_num,]))
+  metSummary <- data.frame(cond = colnames(abs_metabolite_SD), molar = unlist(abs_metabolite_concentrations[MET_num,grep('[A-Z][0-9.]{4}', colnames(abs_metabolite_concentrations))]), SD = unlist(abs_metabolite_SD[MET_num,]))
   metSummary <- metSummary[chmatch(metSummary$cond, chemostatInfo$ChemostatCond),]
   
   soluble_met_info[MET_num,] <- metSummary$molar * chemostatInfo$medcellVol * 10^-15
@@ -365,9 +357,6 @@ for(MET_num in 1:nrow(compositionFile_solubleAppend)){
   }
 
 comp_by_cond$moles_per_cell <- rbind(comp_by_cond$moles_per_cell, soluble_met_info)
-
-
-
 
 
 ##### Combining observed abundances with total dry weight per cell and inferring contributions of non-measured elements based upon the assumption that they remain in constant proportions ####
@@ -559,16 +548,11 @@ composition_part <- composition_part[order(composition_part$index),colnames(comp
 
 #write.table(compositionFile_Extended, file = "../Yeast_comp_energy.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
 
-
-
-
-
 # generate weight per cellular volume
 colSums(comp_by_cond$grams_per_cell, na.rm = TRUE) / (chemostatInfo$medcellVol * 10^-15) / 10  #grams per 100mL of macromolecules - chunky but reasonable
 
 # determine the fluxes into macromolecule biosynthesis and energy per volume
 comp_by_cond$intacellularMolarity = (comp_by_cond$moles_per_cell)/(t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$medcellVol * 10^-15)
-
 
 comp_by_cond$anabolicFlux = comp_by_cond$intacellularMolarity * (t(t(rep(1, length(compositionFile[,1])))) %*% chemostatInfo$actualDR) #moles/mL intracellular volume -hr
 
@@ -582,6 +566,8 @@ comp_by_cond$cultureMolarity <- comp_by_cond$intacellularMolarity * t(t(rep(1, l
 
 
 ########### Boundary fluxes from nutrient uptake or metabolite excretion ############
+
+load("../Yeast_genome_scale/flux_cache/reconstructionWithCustom.Rdata") # for correspondence between metabolite identities and model
 
 SPM <- read.delim("Media/measuredNutrients.tsv")
 NMR <- read.delim("Media/mediaComposition_NMR.tsv")
@@ -605,9 +591,9 @@ SPM_out <- data.frame(condition = chemostatInfo$ChemostatCond, specie = "phospha
 mediaSummary <- rbind(mediaSummary, SPM_out)
 
 ### NMR data - glucose -> EtOH, Ac, glycerol 
-speciesOfInterest <- data.frame(NMRname = c("Glucose", "Ethanol", "Acetate", "Lactate", "Glycerol"), mediaName = c("D-glucose", NA, NA, NA, NA), 
-                                modelName = c("D-glucose [extracellular]", "ethanol [extracellular]", "acetate [extracellular]", "(R)-lactate [extracellular]", "glycerol [extracellular]"), 
-                                type = c("uptake", rep("excretion", 4)))
+speciesOfInterest <- data.frame(NMRname = c("Glucose", "Ethanol", "Acetate", "Lactate", "Glycerol", "Orotate", "Acetaldehyde", "Succinate"), mediaName = c("D-glucose", NA, NA, NA, NA, NA, NA, NA), 
+                                modelName = c("D-glucose [extracellular]", "ethanol [extracellular]", "acetate [extracellular]", "(R)-lactate [extracellular]", "glycerol [extracellular]", "orotate [extracellular]", "acetaldehyde [extracellular]", "succinate [extracellular]"), 
+                                type = c("uptake", rep("excretion", 7)))
 
 for(a_specie_n in 1:nrow(speciesOfInterest)){
   
@@ -644,8 +630,6 @@ boundary_ele_comp$MW <- rowSums(boundary_ele_comp[,atomicMasses$element,with = F
 mediaSummary$density <- sapply(1:nrow(mediaSummary), function(x){
   mediaSummary$change[x] * boundary_ele_comp$MW[boundary_ele_comp$specie == mediaSummary$specie[x]]
   })
-
-
 
 
 #grams per L of anabolic components
@@ -695,7 +679,7 @@ compositionFile$varCategory[compositionFile$Class == "Soluble metabolites"] <- c
 compositionFile$varCategory[compositionFile$Class == "Fatty Acids"] <- compositionFile$MetName[compositionFile$Class == "Fatty Acids"]
 
 # Specify whether fluxes are drained off of the periphery of metabolism or  tracking an internal reaction or combination of reactions
-# fatty acid incorporation was previously specified the latter way but 
+# fatty acid incorporation was previously specified the latter way but now is only being accounted for through removing fatty acids since we are not considering intact lipids
 compositionFile$FluxType <- "Boundary"
 
 
@@ -767,8 +751,6 @@ for(a_plot in unique(boundaryFluxes$type)){
   ggsave(file = paste0("summary_", a_plot, ".pdf"), width = ifelse(a_plot == "assimilation", 16, 10), height = 3 + ifelse(a_plot == "assimilation", length(levels(flux_subset$Category))/2, length(levels(flux_subset$Category)))*3)
   
   }
-
-
 
 
 # Table of measured % DW
