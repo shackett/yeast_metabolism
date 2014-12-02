@@ -34,7 +34,7 @@ FVA = 'T' # Should flux variblility analysis be performed
 FVAreduced = 'T' # If FVA is performed should it only be performed on reactions which carried non-zero flux in some condition during QP
 # this requires that the script be run twice - once to generate "rawFlux" and again to use this set of reactions to defined the reduced
 # reaction stoichiometry
-useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -72,6 +72,9 @@ metabolites <- unique(rxnStoi$Metabolite)
 
 if(!file.exists("flux_cache/yeast_stoi.Rdata")){write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)}
 load("flux_cache/yeast_stoi.Rdata")
+if(nrow(stoiMat) != length(metabolites) | ncol(stoiMat) != length(reactions)){
+  write_stoiMat(metabolites, reactions, corrFile, rxnFile, internal_names = TRUE)
+}
 
 named_stoi <- stoiMat # create a version of the stoichiometric matrix with common names for rxns and mets to allow for easier searching
 met_dict <- metIDtoSpec(rownames(named_stoi)); met_dict <- sapply(c(1:length(named_stoi[,1])), function(x){met_dict[x][[1]]})
@@ -82,8 +85,7 @@ rownames(named_stoi) <- met_dict; colnames(named_stoi) <- rxn_dict
 
 if(!file.exists("flux_cache/stoiMetsComp.tsv")){elemental_composition(metabolites)}
 modelMetComp <- read.delim("flux_cache/stoiMetsComp.tsv", header = TRUE)
-
-
+# re-run elemental_composition(metabolites) if the model changes and new metabolites are introduced
 
 
 
