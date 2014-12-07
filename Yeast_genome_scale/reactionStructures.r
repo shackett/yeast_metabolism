@@ -1,574 +1,19 @@
 #### Intended to be sourced from FBGA.R ####
+# Generate reaction forms - MM and with additional regulation
 
 options(stringsAsFactors=FALSE)
 
-source('./find_chebi/find_chebi.R', chdir = T)
+source("cleanNalign.R")
+load("flux_cache/metaboliteTables.RData")
+tab_boer <- read.delim("flux_cache/tab_boer.txt")
+load("flux_cache/yeast_stoi.Rdata")
 
-library(stringr)
+# Functions
 
-#### Load SBML files describing metabolites, rxn stoichiometry ####
-
-rxnFile <- read.delim("companionFiles/rxn_yeast.tsv")
-rxnparFile = read.delim("companionFiles/rxn_par_yeast.tsv")
-corrFile = read.delim("companionFiles/spec_yeast.tsv")
-specparFile = read.delim("companionFiles/species_par_yeast.tsv")
-fluxDirFile = read.delim("companionFiles/flux_dir_yeast.tsv")
-
-customList <- parse_custom("companionFiles/customRxns.txt")
-
-rxnFile <- rbind(rxnFile, customList$rxnFile)
-rxnparFile <- rbind(rxnparFile, customList$rxnparFile)
-corrFile <- rbind(corrFile, customList$corrFile)
-specparFile <- rbind(specparFile, customList$specparFile)
-fluxDirFile <- rbind(fluxDirFile, customList$fluxDirFile)
-
-
-
-
-tab_yifan <- read.table('companionFiles/yeast_absolute_concentration_chemo.txt', sep="\t",header=TRUE)
-# load the old boer table in order to have the meta information
-tab_boer <- read.table('companionFiles/BoerMetabolites.txt', sep="\t",header=TRUE)
-tab_boer <- tab_boer[-1,c('Metabolite','KEGG')]
-
-# load recalculated boer mean, SD and residual correlation 
-tab_boer_mean <- read.table('companionFiles/boerMean.tsv', sep="\t",header=TRUE)
-tab_boer_sd <- read.table('companionFiles/boerSD.tsv', sep="\t",header=TRUE)
-tab_boer_corr <- read.table('companionFiles/boerCorr.tsv', sep="\t",header=TRUE)
-
-# delete the condtition PO4.0.061
-tab_boer_mean <- tab_boer_mean[,-chmatch('PO4.0.061',colnames(tab_boer_mean))]
-tab_boer_sd <- tab_boer_sd[,-chmatch('PO4.0.061',colnames(tab_boer_sd))]
-# in the mean/sd files the metabolites are called slightly different, add these names to tab_boer
-namenew <- sort(tab_boer$Metabolite)
-nameold <- row.names(tab_boer_mean)
-nameold[ chmatch('OMP',nameold)] <- "orotidine-phosphate"
-nameold <- sort(nameold)
-# manually check for match!
-cbind(namenew,nameold)
-names(nameold) <- namenew
-nameold[ chmatch("orotidine-phosphate",nameold)] <-'OMP'
-tab_boer$altnames <- nameold[tab_boer$Metabolite]
-rm(nameold,namenew)
-### functions
-
-MatchLists <- function(list1,list2){
-  #compares two lists, returns a table with two columns
-  # 1. row of element in list1, 2. row of element list 2
-  pairRows <- matrix(nrow=0,ncol=2)
-  tmprow <- matrix(nrow=1,ncol=2)
-  
-  for (i in 1:length(list1)){
-    idx <- which(list2 %in% list1[i] & !is.na(list2))
-    if (length(idx) >0){
-      for(j in 1:length(idx)){
-        tmprow[1] <- i
-        tmprow[2] <- idx[j]
-        pairRows <- rbind(pairRows,tmprow)
-        
-      }
-    }
-  }
-  return(pairRows)
-}
-
-tIDToCHEBIs <- function(tIDs){
-  cfil <- grepl('chebi\\/CHEBI:',specparFile[,3])
-  chebis <- sapply(tIDs,function(tID){
-    sIDs <- corrFile$SpeciesID[ corrFile$SpeciesType == tID]
-    fil <- specparFile[,1] %in% sIDs & cfil
-    chebis <- unique(specparFile[fil,3])
-    chebis <- sapply(chebis,function(url){
-      strsplit(url,'CHEBI:')[[1]][2]
-    })
-    return(paste(chebis,collapse=';'))
-  })
-  return(chebis)
-}
-
-tIDToKEGGs <- function(tIDs){
-  kfil <- grepl('kegg\\.compound\\/',specparFile[,3])
-  keggs <- sapply(tIDs,function(tID){
-    sIDs <- corrFile$SpeciesID[ corrFile$SpeciesType == tID]
-    fil <- specparFile[,1] %in% sIDs & kfil
-    keggs <- unique(specparFile[fil,3])
-    keggs <- sapply(keggs,function(url){
-      strsplit(url,'compound/')[[1]][2]
-    })
-    return(paste(keggs,collapse=';'))
-  })
-  return(keggs)
-}
-
-## start code
-
-# Phosphate concentration can later be estimated, so reserve a line
-
-p <- tab_boer[1,]; p[] <- NA; p$Metabolite <- 'phosphate'; p$KEGG='C00009';
-tab_boer <- rbind(tab_boer,p)
-
-# add 3PG can be latter added with the values of PEP
-p <- tab_boer[1,]; p[] <- NA; p$Metabolite <- 'phosphoenolpyruvate'; p$KEGG='C00074';
-tab_boer <- rbind(tab_boer,p)
-
-rm(p)
-
-
-
-# according to the FBA_run_full_reco file the rows in the stoiMat file correspond to "metabolites <- unique(rxnStoi$Metabolite)"
-# -> the s_#### is used as an identifier
-# -> the mapping from s_#### to the name is done in the corrFile
-# -> actually the t_#### id is the one unique for the compound, s_#### ids are combination of metabolite and compartments
-# -> unique(rxnStoi$Metabolite) -> the s_#### identifier is used => as expected the model also takes account for the compartments
-
-# plan: make a table with BoerName \t YifanName \t ModelName \n with the model names using the t_### identifiers
-
-# 1) get a list of of unique t_ identifiers and their compound name
-
-listTID <- corrFile[!duplicated(corrFile$SpeciesType),c(3,1,2)]
-listTID$SpeciesName <- gsub(' \\[.*\\]$','',listTID$SpeciesName)
-
-# only metabolites
-listTID <- listTID[substr(listTID$SpeciesID,1,1) == 's',]
-
-listTID$CHEBI <- tIDToCHEBIs(listTID$SpeciesType)
-listTID$KEGG <- tIDToKEGGs(listTID$SpeciesType)
-# make sure only primary chebis are used
-listTID$CHEBI <- sapply(listTID$CHEBI, Chebi2pchebi)
-
-# match the TID without CHEBI by name pefect match only matching
-
-listTID$CHEBI[is.na(listTID$CHEBI)] <- sapply(listTID$SpeciesName[is.na(listTID$CHEBI)], function(x){MatchName2Chebi(x,1)})
-
-listTID$CHEBIname <- sapply(listTID$CHEBI, Chebi2name)
-
-# create the fuzzy chebi
-
-listTID$fuzCHEBI <- sapply(listTID$CHEBI,Chebi2fuzchebi)
-
-# # match a CHEBI for each entry that has already one Chebi measured
-# listTID$fuzmCHEBI[!is.na(listTID$CHEBI)] <-sapply(listTID$SpeciesName[!is.na(listTID$CHEBI)],function(x){
-# x<-MatchName2Chebi(x)
-# Chebi2fuzchebi(x)
-# })
-
-#a <- listTID[ listTID$fuzmCHEBI != listTID$fuzCHEBI, ]
-
-# add alist with the rownumber
-
-listTID$row <- 1:length(listTID$SpeciesType)
-
-
-# 2) make a list (listBoer) for all compounds in tab_boer, with rowBoer (row in tab_boer), name in Boer, keggID, chebiID, chebiname
-
-listBoer <- data.frame(matrix(ncol=3,nrow=0))
-tmpline <- data.frame(matrix(ncol=3,nrow=1))
-
-for (i in 1:nrow(tab_boer)){
-  tmpnames <- unlist(strsplit(tab_boer$Metabolite[i],'/'))
-  tmpkeggs <- tab_boer$KEGG[i]
-  
-  
-  if (length(tmpnames) == 1){
-    tmpline[1] <- i
-    tmpline[2] <- tmpnames
-    tmpline[3] <- tmpkeggs
-    listBoer <- rbind(listBoer,tmpline)
-  } else {
-    tmpkeggs <- unlist(strsplit(tmpkeggs,'/'))
-    for (j in 1:length(tmpnames)){
-      tmpline[1] <- i
-      tmpline[2] <- tmpnames[j]
-      tmpline[3] <- tmpkeggs[j]
-      listBoer <- rbind(listBoer,tmpline)
-    }
-  }
-}
-
-rm(tmpkeggs)
-rm(tmpnames)
-# split the yet unsplit KeggIDs in listBoer
-
-tmp <- c()
-for (i in 1:length(listBoer$X1)){
-  tmpkeggs <- listBoer[i,3]
-  tmpkeggs <- unlist(strsplit(tmpkeggs,'/'))
-  
-  if (length(tmpkeggs) > 1){
-    for (j in 1:length(tmpkeggs)){
-      tmpline[1] <- listBoer[i,1]
-      tmpline[2] <- listBoer[i,2]
-      tmpline[3] <- tmpkeggs[j]
-      listBoer <- rbind(listBoer,tmpline)
-    }
-    tmp <- c(tmp,i)
-  }
-}
-
-listBoer <- listBoer[-tmp, ]
-
-colnames(listBoer) <- c('row','name','KEGG')
-
-# get the chebi IDs
-# Try first via KEGG
-listBoer$CHEBI <- sapply(listBoer$KEGG,Kegg2chebi)
-
-# match the few yet unmatched by name
-listBoer$CHEBI[is.na(listBoer$CHEBI)] <- sapply(listBoer$name[is.na(listBoer$CHEBI)],MatchName2Chebi)
-
-# do a fuzzy chebi on the exicting chebis
-
-listBoer$fuzCHEBI <- sapply(listBoer$CHEBI,Chebi2fuzchebi)
-
-#match all boer names which already have a chebi again by name matching to create an alternative label
-
-listBoer$fuzmCHEBI <- sapply(listBoer$name,MatchName2Chebi)
-listBoer$fuzmCHEBI <- sapply(listBoer$fuzmCHEBI,Chebi2fuzchebi)
-
-
-
-#### 3) make a list (listYifan) for all compounds in tab_yifan, rowYifan (row in tab_Yifan), name in Yifan, chebiID, chebiName
-
-listYifan <- data.frame(1:length(tab_yifan$Compound),tab_yifan$Compound)
-colnames(listYifan) <- c('row','name')
-
-listYifan$CHEBI <- sapply(listYifan$name,MatchName2Chebi)
-
-listYifan$CHEBIname <-sapply(listYifan$CHEBI,Chebi2name)
-
-listYifan$fuzCHEBI <- sapply(listYifan$CHEBI,Chebi2fuzchebi)
-
-
-#### Match the lists:
-
-# match the Boer and TID
-pairRows <- MatchLists(listBoer$KEGG,listTID$KEGG)
-matchBoerTID <- cbind(listBoer$row[pairRows[,1]],listTID$row[pairRows[,2]])
-
-pairRows <- MatchLists(listBoer$fuzCHEBI,listTID$fuzCHEBI)
-matchBoerTID <- cbind(listBoer$row[pairRows[,1]],listTID$row[pairRows[,2]])
-
-pairRows <- MatchLists(listBoer$fuzmCHEBI,listTID$fuzCHEBI)
-matchBoerTID <- rbind(matchBoerTID,cbind(listBoer$row[pairRows[,1]],listTID$row[pairRows[,2]]))
-
-matchBoerTID <- unique(matchBoerTID)
-
-
-#tab_boer$Metabolite[-matchBoerTID[,1]]
-
-# match the Boer and Yifan
-
-pairRows <- MatchLists(listBoer$fuzCHEBI,listYifan$fuzCHEBI)
-matchBoerYifan <- cbind(listBoer$row[pairRows[,1]],listTID$row[pairRows[,2]])
-
-pairRows <- MatchLists(listBoer$fuzmCHEBI,listYifan$fuzCHEBI)
-matchBoerYifan <- cbind(listBoer$row[pairRows[,1]],listTID$row[pairRows[,2]])
-
-
-matchBoerYifan <- unique(matchBoerYifan)
-
-#tab_boer$Metabolite[-matchBoerYifan[,1]]
-#test <- unique(matrix(c(tab_boer$Metabolite[matchBoerYifan[ ,1]],listYifan$name[matchBoerYifan[ ,2]]),,2))
-tab_yifan$Compound[-matchBoerYifan[,2]]
-
-# match the Yifan and TID
-pairRows <- MatchLists(listYifan$CHEBI,listTID$CHEBI)
-matchYifanTID <- cbind(listYifan$row[pairRows[,1]],listTID$row[pairRows[,2]])
-
-pairRows <- MatchLists(listYifan$fuzCHEBI,listTID$fuzCHEBI)
-matchYifanTID <- cbind(listYifan$row[pairRows[,1]],listTID$row[pairRows[,2]])
-
-matchYifanTID <- unique(matchYifanTID)
-
-#tab_yifan$Compound[-matchYifanTID[,1]]
-
-
-# look at the matching with primary names
-
-test <- unique(matrix(c(tab_boer$Metabolite[matchBoerTID[ ,1]],listTID$SpeciesName[matchBoerTID[ ,2]]),,2))
-#test <- unique(matrix(c(tab_boer$Metabolite[matchBoerYifan[ ,1]],listYifan$name[matchBoerYifan[ ,2]]),,2))
-
-## create a tID to Boer table dictionary
-# go through the reactions and try to translate the sIDs to Boer measurements
-#make a temporary copy
-tmatchBoerTID <- matchBoerTID
-# every TID should correspond to only one BoerID
-# -> resolve ambiguities by allways taking the match with the most similar name
-ambRow <- tmatchBoerTID[duplicated(tmatchBoerTID[,2]),2]
-for (rowTID in ambRow){
-  fil <- tmatchBoerTID[,2] == rowTID
-  rowBoer <- tmatchBoerTID[fil,1]
-  tmp <- which.min(levenshteinDist(listTID$SpeciesName[rowTID],tab_boer$Metabolite[rowBoer]))
-  tmp <- which(tmatchBoerTID[,1] %in% rowBoer[-tmp] & fil)
-  tmatchBoerTID <- tmatchBoerTID[-tmp, ]
-}
-
-# make a tID to Boer dictionary
-dicttIDBoer <- tmatchBoerTID[,1]
-names(dicttIDBoer) <- listTID$SpeciesType[tmatchBoerTID[,2]]
-
-### Make the Boer Table absolute ###
-# 1) correct for the different dilution rates in the Boer-experiments and the experiments where the protein concentrations have been measured
-# 2) use the Yifan table to translate the metabolites to absolute values, where possible
-
-
-if (!file.exists('flux_cache/metaboliteTables.RData')){
-  
-  # the 25 chemostat conditions of interest and their actual growth rates:
-  #chemostatInfo <- chemostatInfo[!(chemostatInfo$condition %in% c("p0.05H1", "p0.05H2")),]
-  
-  # temporarly save and remove the info of the additional metabolites
-  tMet <- tab_boer[-(1:nrow(tab_boer_mean)),]
-  metabolomicsSD <- metabolomicsData <- tab_boer[(1:nrow(tab_boer_mean)),]
-  rownames(metabolomicsData) <- metabolomicsData$Metabolite
-  metabolomicsData <- cbind(metabolomicsData,tab_boer_mean[match(metabolomicsData$altnames,rownames(tab_boer_mean)),])
-  metabolomicsSD <- tab_boer_sd[match(metabolomicsData$altnames,rownames(tab_boer_mean)),]
-  
-  metabolomicsMatrix <-as.matrix(metabolomicsData[,-c(1:3)])
-  class(metabolomicsMatrix) <- "numeric"
-  rownames(metabolomicsMatrix) <- metabolomicsData$Metabolite
-  
-  met_cond_match <- data.frame(standard = c("P", "C", "N", "L", "U"), boer = c("PO4", "GLU", "NH4", "LEU", "URA"))
-  
-  metabolomics_conds <- data.frame(metCond = colnames(metabolomicsMatrix))
-  metabolomics_conds$met_cond <- sapply(metabolomics_conds$metCond, function(x){strsplit(x, split = "\\.")[[1]][1]})
-  metabolomics_conds$cond_rename <- sapply(metabolomics_conds$met_cond, function(x){met_cond_match$standard[met_cond_match$boer == x]})
-  metabolomics_conds$DR <- as.numeric(unname(sapply(metabolomics_conds$metCond, function(x){paste(strsplit(x, split = "\\.")[[1]][-1], collapse = ".")})))
-  
-  metabolomics_conds$cond_rename <- factor(metabolomics_conds$cond_rename, levels = met_cond_match$standard)
-  
-  reorder_vec <- order(metabolomics_conds$cond_rename, metabolomics_conds$cond_rename)
-  
-  metabolomics_conds <- metabolomics_conds[reorder_vec,]
-  metabolomics_conds$DRgoal <- chemostatInfo$DRgoal
-  metabolomics_conds$actualDRprot <- chemostatInfo$actualDR
-  
-  metabolomicsMatrix <- metabolomicsMatrix[,reorder_vec]
-  metabolomicsSD <- metabolomicsSD[,reorder_vec]
-  colnames(metabolomicsMatrix) <- mapply(function(x,y){paste(c(x,y), collapse = "")}, x = as.character(metabolomics_conds$cond_rename), y = metabolomics_conds$DRgoal)
-  colnames(metabolomicsSD) <- colnames(metabolomicsMatrix) <- sapply(colnames(metabolomicsMatrix),function(x){
-    while (nchar(x) <5){
-      x <- paste(x,'0',sep='')
-    }
-    return(x)
-  })
-  
-  n_c <- ncol(metabolomicsMatrix)
-  n_m <- nrow(metabolomicsMatrix)
-  
-  ### Determine how many significant principal components exist in the metabolomics matrix ###
-  
-  matrix_svd <- svd(metabolomicsMatrix)
-  plot(matrix_svd$d^2/sum(matrix_svd$d^2)) #scree-plot - fraction of variance explained by each PC
-  
-  library(missMDA)
-  ### determine how many significant principal components should be included based on repeated random sub-sampling validation ###
-  pcrange <- c(2,18)
-  npc.compare <- estim_ncpPCA(metabolomicsMatrix, ncp.min = pcrange[1], ncp.max = pcrange[2], method.cv = 'Kfold', pNA = 0.10, nbsim = 100)
-  npc <- (pcrange[1]:pcrange[2])[npc.compare$criterion < (max(npc.compare$criterion) - min(npc.compare$criterion))*0.3 + min(npc.compare$criterion)][1]
-  
-  ### metabolomic PC summary ###
-  
-  pdf(file = "Figures/metPCnum.pdf", height = 6, width = 6)
-  plot(npc.compare$criterion ~ c(pcrange[1]:pcrange[2]), pch = 16, ylab = "MS error of prediction", xlab = "number of PCs", main = "Optimal number of metabolomic principal components")
-  abline(v = npc, col = "RED", lwd = 2)
-  plot((matrix_svd$d)^2 / sum((matrix_svd$d)^2) ~ c(1:length(matrix_svd$d)), pch = 16, cex = 2, col = "RED", xlab = "PC Number", ylab = "Fraction of variance explained")
-  dev.off()
-  
-  metPCs <- matrix_svd$v[,1:npc]; rownames(metPCs) <- colnames(metabolomicsMatrix); colnames(metPCs) <- paste("PC", c(1:npc))
-  pc_plot_df <- melt(metPCs)
-  colnames(pc_plot_df) <- c("condition", "PC", "value")
-  pc_plot_df$cond <- factor(sapply(as.character(pc_plot_df$condition), function(x){unlist(strsplit(x, ""))[1]}))
-  pc_plot_df$PC <- factor(pc_plot_df$PC, levels = paste("PC", c(1:npc)))
-
-  factor_plot <- ggplot(pc_plot_df, aes(x = condition, y = value, group = cond, col = PC)) + facet_wrap(~ PC, ncol = 2, scales = "free_y") + scale_x_discrete("Experimental condition") + scale_y_continuous("Principal Component Value") + theme(panel.grid.minor = element_blank(), panel.background = element_rect(fill = "aliceblue"), strip.background = element_rect(fill = "cadetblue1"), text = element_text(size = 15), axis.text.x = element_text(angle = 90), title = element_text(size = 25, face = "bold"))
-  factor_plot + geom_line() + ggtitle("Metabolomic principal components")
-  ggsave(file = "Figures/metPCs.pdf", height = 10, width = 12)
-
-  ### summary of SVD of metabolomics matrix ###
-  reorgMets <- metabolomicsMatrix[hclust(d = dist(metabolomicsMatrix))$order,]
-  reorgMetSVD <- svd(reorgMets, nu = npc, nv = npc)
-  
-  
-  pdf("Figures/PCsummary.pdf", height = 10, width = 10)
-  
-  heatmap.2(reorgMets, Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = "Raw")
-  heatmap.2(reorgMetSVD$u, Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = "U: Principal Component Loadings")
-  heatmap.2(diag(reorgMetSVD$d[1:npc]), Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = "D: Principal Component Eigenvalues")
-  heatmap.2(t(reorgMetSVD$v), Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = "t(V): Principal Components")
-  
-  svd_projection <- reorgMetSVD$u %*% diag(reorgMetSVD$d[1:npc]) %*% t(reorgMetSVD$v)
-  
-  heatmap.2(svd_projection, Rowv = F, Colv = F, trace = "none", symkey = T, col = greenred(50), main = paste("UDt(V) - ", npc, " dimensional summary", sep =""))
-  heatmap.2(reorgMets - svd_projection, trace = "none", symkey = T, col = greenred(50), main = "Residual Variation - Reclustered")
-  
-  dev.off()
-  
-  ### remap chemostat metabolite abundances to proteomics/flux condition DR ###
-  
-  metSVD <- svd(metabolomicsMatrix)
-  metMatrixProj <- metSVD$u[,1:npc] %*% diag(metSVD$d[1:npc]) %*% t(metSVD$v[,1:npc])
-  
-  DR_change_mat <- matrix(0, nrow = n_c, ncol = n_c)
-  for(cond in 1:n_c){
-    #find the 2 closest DR within the same limitation
-    c_match <- c(1:n_c)[metabolomics_conds$cond_rename == metabolomics_conds$cond_rename[cond]]
-    flanking_match <- c_match[order(abs(metabolomics_conds[c_match,]$DR - metabolomics_conds$actualDRprot[cond]))[1:2]]
-    
-    lb_diff <- (metabolomics_conds$actualDRprot[cond] - metabolomics_conds$DR[flanking_match][1])/diff(metabolomics_conds$DR[flanking_match])
-    DR_change_mat[flanking_match,cond] <- c((1-lb_diff), lb_diff)
-  }
-  
-  remapped_metabolites <- metMatrixProj %*% DR_change_mat
-  remapped_SD <- as.matrix(metabolomicsSD) %*% DR_change_mat
-  colnames(remapped_metabolites) <- colnames(remapped_SD) <- unname(colnames(metabolomicsMatrix))
-  
-  metSVD <- svd(remapped_metabolites, nu = npc, nv = npc) # SVD of remapped metabolite -> save so that the principal components of met relative abundance can be used
-  rownames(metSVD$v) <- colnames(remapped_metabolites)
-  
-  metabolomicsData_remapped <- data.frame(metabolomicsData[,1:3], remapped_metabolites)
-  tab_boer <- metabolomicsData_remapped
-  
-  tMet[,colnames(tab_boer)[!colnames(tab_boer) %in% colnames(tMet)]] <- NA # metabolites whose abundances are reconstructed as a function of other measurements
-  tab_boer <- rbind(tab_boer,tMet)
-  
-  tMet_SD <- tMet; rownames(tMet_SD) <- tMet_SD$Metabolite
-  remapped_SD <- rbind(remapped_SD, tMet_SD[,!(colnames(tMet_SD) %in% c("Metabolite", "KEGG", "altnames"))])
-  
-  ### convert the relative to absolute abundances (where available)
-  # use the matchboeryifan dictionary created above
-  
-  nMet <- nrow(tab_boer)
-  
-  metOrigin <- rep('rel',nMet)
-  
-  metOrigin[matchBoerYifan[,1]] <- 'abs'
-  
-  
-  refCol = which(colnames(tab_boer) == 'C0.30')
-  for(i in 1:nrow(matchBoerYifan)){
-    tab_boer[matchBoerYifan[i,1],4:28] <- tab_boer[matchBoerYifan[i,1],4:28] + log2(tab_yifan$c_lim_conc[matchBoerYifan[i,2]]) - tab_boer[matchBoerYifan[i,1],refCol]
-  }
-  
-  ### Update sample correlation and standard deviations ###
-  
-  expanded_met_correlations <- matrix(NA, ncol =  nrow(remapped_SD), nrow = nrow(remapped_SD))
-  rownames(expanded_met_correlations) <- colnames(expanded_met_correlations) <- tab_boer$Metabolite
-  
-  expanded_met_correlations[chmatch(rownames(tab_boer_corr), tab_boer$altnames), chmatch(rownames(tab_boer_corr), tab_boer$altnames)] <- as.matrix(tab_boer_corr)
-  
-  
-  # Recalculate the phosphate concentration with the absolute ATP/ADP values
-  
-  atp <- 2^ as.numeric(tab_boer[ tab_boer$Metabolite == 'ATP' & !is.na(tab_boer$Metabolite),4:28]) #M
-  adp <- 2^ as.numeric(tab_boer[ tab_boer$Metabolite == 'ADP'& !is.na(tab_boer$Metabolite),4:28]) #M
-  h2o <- 1 # (assumption pure water)
-  
-  dG0 = 37.9 # kJ / mol,eQuilibrator
-  dG = 57 # kJ/mol Bionumbers http://bionumbers.hms.harvard.edu//bionumber.aspx?id=100775&ver=0
-  
-  R = 8.3144621*10^(-3) # kJ/(mol*K)
-  Tm= 310.15 # K
-  
-  p = (atp*h2o)/adp * exp((dG0-dG)/(R*Tm))
-  names(p) <- colnames(tab_boer[ tab_boer$Metabolite == 'ATP',4:28])
-  
-  # calculate the standard deviation of the phosphate concentration
-  
-  peqtn <- "log(((2^ATP)*h2o)/(2^ADP) * 2.71828^((dG0-dG)/(R*Tm)))/log(2)"
-  eq <- eval(parse(text = paste('expression(',peqtn,')')))
-  
-  derivList <- list()
-  for(spec in c('ATP', 'ADP')){
-    derivList[[spec]] <- D(eq, spec)
-    }
-  
-  for(cond in 1:n_c){
-    standard_devs <- remapped_SD[chmatch(c('ATP', 'ADP'), rownames(remapped_SD)), cond]
-    species_corr <- expanded_met_correlations[chmatch(c('ATP', 'ADP'), rownames(expanded_met_correlations)), chmatch(c('ATP', 'ADP'), rownames(expanded_met_correlations))]
-    species_cov <- species_corr*(standard_devs %*% t(rep(1, 2)))*(rep(1, 2) %*% t(standard_devs))
-    cond_values <- tab_boer[chmatch(c('ATP', 'ADP'), rownames(tab_boer)),cond + 3]; names(cond_values) <- c('ATP', 'ADP')
-    cond_values <- data.frame(ATP = cond_values[1], ADP = cond_values[2], h2o, dG0, dG, R, Tm)
-    
-    partial_deriv <- rep(NA, 2)
-    for(n_der in 1:length(derivList)){
-      partial_deriv[n_der] <- with(cond_values , eval(derivList[[n_der]]))
-      }
-    
-    remapped_SD[rownames(remapped_SD) == "phosphate",cond] <- sqrt(t(partial_deriv) %*% species_cov %*% partial_deriv) # save the compute log-space standard deviation
-    }
-  
-  tab_boer[tab_boer[,1] == 'phosphate',4:28] <- log2(p)
-  metOrigin[tab_boer[,1] == 'phosphate'] <- 'abs'
-  
-  
-  # add 3pg as phosphoenolpyruvate
-  tab_boer[tab_boer[,1] == 'phosphoenolpyruvate',4:28]<- tab_boer[tab_boer[,1] == '3-phospho-D-glycerate',4:28]
-  names(metOrigin) <- tab_boer[,1]
-  remapped_SD[rownames(remapped_SD) == "phosphoenolpyruvate",] <- remapped_SD[rownames(remapped_SD) == "3-phosphoglycerate",]
-  
-  # determine the correlation of added components
-  expanded_met_correlations[,rownames(expanded_met_correlations) == "phosphoenolpyruvate"] <- expanded_met_correlations[rownames(expanded_met_correlations) == "phosphoenolpyruvate",] <- expanded_met_correlations[rownames(expanded_met_correlations) == "3-phospho-D-glycerate",]
-  expanded_met_correlations[,rownames(expanded_met_correlations) == "phosphate"] <- expanded_met_correlations[rownames(expanded_met_correlations) == "phosphate",] <- 0 # Im not sure how to propagate the correlations of ATP and ADP through here
-  expanded_met_correlations[rownames(expanded_met_correlations) %in% c("phosphoenolpyruvate", "phosphate"),colnames(expanded_met_correlations) %in% c("phosphoenolpyruvate", "phosphate")] <- diag(2)
-  
-  
-  # save the absolute boer table
-  
-  abs_tab_boer <- tab_boer[metOrigin == 'abs',]
-  abs_tab_boer[,4:28] <- 2^abs_tab_boer[,4:28]
-  
-  abs_tab_boer$tID <- sapply(abs_tab_boer$Metabolite,function(x){
-    paste(listTID$SpeciesType[matchBoerTID[matchBoerTID[,1] == which(tab_boer$Metabolite== x ),2]],collapse=";")
-  })
-  write.table(abs_tab_boer,'flux_cache/tab_boer_abs.txt',sep='\t')
-  
-  boer_save <- cbind(tID = sapply(tab_boer$Metabolite,function(x){paste(listTID$SpeciesType[matchBoerTID[matchBoerTID[,1] == which(tab_boer$Metabolite== x ),2]],collapse=";")}), tab_boer)
-  write.table(boer_save,'flux_cache/tab_boer_log2rel.txt', sep='\t', row.names = F, col.names = T, quote = F)
-  
-  save(tab_boer,metOrigin,metSVD,remapped_SD,expanded_met_correlations,file='flux_cache/metaboliteTables.RData')
-} else load('flux_cache/metaboliteTables.RData')
-
-
-#### Check the stoichiometric model ########################
-
-# create the stoiMat
-getStoiMat<- function(metabolites, reactions, corrFile, rxnFile){
-  #create the stoichiometry matrix, indicating the change of metabolites (rows) per chemical reaction (columns)
-  stoiMat <- matrix(data = 0, ncol = length(reactions), nrow = length(metabolites))
-  rxnFile <- rxnFile[rxnFile$Metabolite %in% metabolites,]
-  rownames(stoiMat) <- metabolites
-  colnames(stoiMat) <- reactions
-  for (rxn in reactions){
-    rFil <- rxnFile$ReactionID == rxn & !is.na(rxnFile$StoiCoef)
-    mets <- rxnFile$Metabolite[rFil]
-    for (met in mets){
-      if (length(rxnFile$StoiCoef[rxnFile$Metabolite == met &rFil]) > 1){
-        print(c(met,rxn))
-      }
-      stoiMat[met,rxn] <- rxnFile$StoiCoef[rxnFile$Metabolite == met &rFil]
-      
-    }
-  }
-  return(stoiMat)
-}
-
-rxns <- sort(unique(rxnFile$ReactionID))
-mets <- sort(unique(rxnFile$Metabolite[ !is.na(rxnFile$StoiCoef)]))
-
-stoiMat <- getStoiMat(mets, rxns, corrFile, rxnFile)
-stoiMat <- apply(stoiMat, c(1,2), as.numeric)
-rm(rxns,mets)
-
-
-
-## functions:
-
-sIDtoName <-function(sID){
-  
+sIDtoName <- function(sID){
   unname(sapply(sID, function(x){
     corrFile$SpeciesName[corrFile$SpeciesID == x]
   }))
-  
 }
 
 tIDtoName <-function(tID){
@@ -632,24 +77,25 @@ name2stoi <- function(names,rxnName){
 # 3) make a filter for things that are not measured anyway (e.g. H+, Proteins)
 # 4) make a histogram of how many reactants are missing per reaction
 
-boer_t <- unique(listTID$SpeciesType[matchBoerTID[,2]])
+if(!(all(table(tab_boer$SpeciesType) == 1))){
+  stop("Non-unique mapping between metabolomics data and tID - check metaboliteSummaries.R")
+  }
 
+boer_t <- tab_boer$SpeciesType
 boer_s <- corrFile$SpeciesID[corrFile$SpeciesType %in% boer_t]
-
 boer_filt <- row.names(stoiMat) %in% boer_s
 
 # some compounds are small and thus probaly dont matter if they're missing
 # e.g. H+, H2O
 #est_names <- c("H+","water",'ammonium','diphosphate','oxygen','carbon dioxide','phosphate')
-smallMol <- c("t_0398","t_0399",'t_0233','t_0332','t_0591','t_0249','t_0608')
-est_names <-smallMol
 
-est_s <- corrFile$SpeciesID[ corrFile$SpeciesType %in% est_names]
+smallMol <- c("t_0398","t_0399",'t_0233','t_0332','t_0591','t_0249','t_0608')
+est_s <- corrFile$SpeciesID[ corrFile$SpeciesType %in% smallMol]
 est_filt <- row.names(stoiMat) %in% est_s
 
 fin_filt <- boer_filt | est_filt #| nch_filt
 
-stoiMat_bin <-stoiMat !=0
+stoiMat_bin <- stoiMat !=0
 
 stoiMat_sub <- stoiMat
 stoiMat_sub <- stoiMat_sub < 0
@@ -662,7 +108,7 @@ rxn_table<-data.frame(row.names = NULL)
 filtmin1 <- colSums(stoiMat_bin[fin_filt,]) > 0
 filtmin1sub <- colSums(stoiMat_sub[fin_filt,]) > 0
 
-rxn_none<-unname(colnames(stoiMat[,colSums(stoiMat_bin[!fin_filt,]) == 0 & filtmin1]))
+rxn_none <-unname(colnames(stoiMat[,colSums(stoiMat_bin[!fin_filt,]) == 0 & filtmin1]))
 rxn_one <- colnames(stoiMat[,colSums(stoiMat_bin[!fin_filt,]) == 1 & filtmin1])
 rxn_sub <-unname(colnames(stoiMat[,colSums(stoiMat_sub[!fin_filt,]) ==0 & filtmin1sub]))
 rxn_table <- data.frame(c(rxn_none,rxn_one,rxn_sub),row.names = NULL)
@@ -697,7 +143,7 @@ cfilt <-!rxn_table$rx %in% c('r_0255','r_0256','r_0568','r_0569') # Version 7: f
 tfilt <- !rxn_table$rx %in% TransportRxn
 rxn_table <- rxn_table[cfilt & tfilt,]
 
-rm(stoiMat_bin,,stoiMat_sub,est_filt,est_names,isTransport)
+rm(stoiMat_bin,stoiMat_sub,est_filt,isTransport)
 
 
 #### Map between reactions, Kegg RxnIDs and EC numbers ####
@@ -824,7 +270,6 @@ tmpEC <- tmpEC[!is.na(tmpEC)]
 tmpEC <- tmpEC[grep('-', tmpEC, invert = T)] # remove generic EC designations
 
 write.table(tmpEC,file= "./flux_cache/ECnr.txt", col.names=F,row.names=F, quote = F)
-
 rm(tmpEC)
 
 
