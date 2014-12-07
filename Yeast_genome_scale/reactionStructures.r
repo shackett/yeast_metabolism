@@ -795,6 +795,20 @@ write.csv(rct_s2p,"./flux_cache/rxn_bindingsites.csv")
 
 rct_val_s2p <- read.table("./flux_cache/rxn_bindingsites_validated.csv",sep="\t",header=TRUE,stringsAsFactors = FALSE)
 rct_val_s2p <- rct_val_s2p[,colnames(rct_val_s2p) != 'X']
+
+# Verfiy that these reactions are from the current version of the model
+rct_val_test <- rct_val_s2p %>% select(ReactionID, SpeciesName = Substrate) %>% left_join(corrFile %>% select(SpeciesID, SpeciesName))
+rct_val_test_match <- data.frame(rxn = unique(rct_val_test$ReactionID), rxn_match = sapply(unique(rct_val_test$ReactionID), function(aRxn){
+  nmetMatches <- rct_val_test %>% filter(ReactionID == aRxn) %>% inner_join(rxnFile %>% select(SpeciesID = Metabolite, ReactionID), by = 'SpeciesID') %>%
+    group_by(ReactionID.y) %>% dplyr::summarize(nmatch = n())
+  bestMatches <- nmetMatches %>% filter(nmatch == max(nmatch)) %>% select(ReactionID = ReactionID.y) %>% unlist() %>% unname()
+  if(aRxn %in% bestMatches){aRxn}else{bestMatches[1]}
+})
+)
+if(!all(rct_val_test_match$rxn == rct_val_test_match$rxn_match)){
+  stop("use the results of rct_val_test_match to translate the manually updated reaction to their new names")
+  }
+
 # make a list with all reactions that have been validated and all reactions that have been corrected
 
 valrxn <- unique(rct_val_s2p$ReactionID[rct_val_s2p$Validated == "manually validated"])
@@ -877,18 +891,18 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
   
   source('./match_brenda.R')
   
-
-  ### check if the modulators were measured in either the relative (boer) or absolute (yifan) abundance datasets ###
+  ### check if the modulators were measured in either the relative or absolute abundance ###
   isModMeas <- function(modTable){
-    boerTID <- listTID$SpeciesType[matchBoerTID[!matchBoerTID[,1] %in% matchBoerYifan[,1],2]]
-    yifanTID <- listTID$SpeciesType[matchBoerTID[matchBoerTID[,1] %in% matchBoerYifan[,1],2]]
+    
+    relMeas <- tab_boer$SpeciesType[is.na(tab_boer$concConv)]
+    absMeas <- tab_boer$SpeciesType[!is.na(tab_boer$concConv)]
     
     rfil <- !is.na(modTable$tID)
     for (tIDs in unique(modTable$tID[rfil])){
       tfil <- rfil & modTable$tID == tIDs
       tIDs <- splilistTID(tIDs,'/')[[1]]
-      if (any(tIDs %in% yifanTID)){ meas <- 'abs'
-      } else if (any(tIDs %in% boerTID)){ meas <- 'rel'
+      if (any(tIDs %in% absMeas)){ meas <- 'abs'
+      } else if (any(tIDs %in% relMeas)){ meas <- 'rel'
       } else {meas <- 'not'}
       modTable$measured[tfil] <- meas
     }
@@ -918,7 +932,7 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
   colnames(distmatAPt) <- cid(apset)
   trashF <- !cid(apset) %in% Name2TIDchebi(c('H2O','hydrogen sulfide','hydroxide','H+'))
   gsmF <- cid(apset) %in% listTID$CHEBI & trashF
-  measF <- cid(apset) %in% listTID$CHEBI[matchBoerTID[,2]]
+  measF <- cid(apset) %in% listTID$CHEBI[listTID$SpeciesType %in% boer_t]
   
   distmatAPt <- distmatAPt[gsmF,gsmF]
   
@@ -1025,8 +1039,8 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
 addInfo2rxnf <- function(rxnf){
   
   ## This function adds all the metabolite/enzyme/reaction info to the rxnf list
-  temprown <- colnames(tab_boer[,4:28])
-  nCond <- length(temprown)
+  temprown <- grep('[PCNLU][.0-9]{4}', colnames(tab_boer), value = T)
+  n_c <- length(temprown)
   
   # prepare the rxnParYeast
   rownames(rxnParYeast) <- rxnParYeast$ReactionID
@@ -1040,11 +1054,13 @@ addInfo2rxnf <- function(rxnf){
   
   # assert that the proteomics data is ordered the same as the metabolite data
   colnames(enzyme_abund) <- toupper(colnames(enzyme_abund))
-  idx <- sapply(colnames(tab_boer[,4:28]),function(x){
-    chmatch(x,colnames(enzyme_abund))
-  })
-  enzyme_abund <- enzyme_abund[,idx]
-  enzyme_precision <- enzyme_precision[,idx]
+  enzyme_abund <- enzyme_abund[,chmatch(temprown, colnames(enzyme_abund))]
+  
+  colnames(enzyme_precision) <- toupper(colnames(enzyme_precision))
+  enzyme_precision <- enzyme_precision[,chmatch(temprown, colnames(enzyme_precision))]
+  
+  if(!all(colnames(enzyme_abund) == colnames(enzyme_precision))){stop("proteomics point estimates and precision are misaligned")}
+  if(!all(temprown == colnames(enzyme_abund))){stop("proteomics and metabolomics are misaligned")}
   
   # Use the information from the rxnFormData to pull the rest of the data
 
@@ -1052,7 +1068,7 @@ addInfo2rxnf <- function(rxnf){
     nMet <- length(unique(rxnf[[entry]]$rxnFormData$SubstrateID))
     mettIDs <- unique(rxnf[[entry]]$rxnFormData$SubstrateID)
     # Add the metabolite table
-    rxnf[[entry]]$rxnMet <- matrix(NA,nCond,nMet)
+    rxnf[[entry]]$rxnMet <- matrix(NA,n_c,nMet)
     colnames(rxnf[[entry]]$rxnMet) <- mettIDs
     row.names(rxnf[[entry]]$rxnMet) <- temprown
     rxnf[[entry]]$rxnMet <- data.frame(rxnf[[entry]]$rxnMet)
@@ -1060,13 +1076,13 @@ addInfo2rxnf <- function(rxnf){
     names(rxnf[[entry]]$originMet) <- mettIDs
     
     for (tID in colnames(rxnf[[entry]]$rxnMet)){
-      rowBoer <- dicttIDBoer[tID]
-      if (is.na(rowBoer)){
+      rowBoer <- which(tab_boer$SpeciesType == tID)
+      if (length(rowBoer) == 0){
         rxnf[[entry]]$rxnMet[,tID] <- NA
         rxnf[[entry]]$originMet[tID] <- 'nm'
       } else {
-        rxnf[[entry]]$rxnMet[,tID] <- as.numeric(tab_boer[rowBoer,4:28])
-        rxnf[[entry]]$originMet[tID] <- metOrigin[rowBoer]
+        rxnf[[entry]]$rxnMet[,tID] <- as.numeric(tab_boer[rowBoer,colnames(tab_boer) %in% temprown])
+        rxnf[[entry]]$originMet[tID] <- ifelse(is.na(tab_boer$concConv[rowBoer]), "rel", "abs")
       }
     }
     
@@ -1074,10 +1090,10 @@ addInfo2rxnf <- function(rxnf){
     
     measuredTid <- rxnf[[entry]]$originMet[rxnf[[entry]]$originMet != "nm"]
     
-    rxnf[[entry]]$met_SD <- matrix(unlist(remapped_SD[dicttIDBoer[chmatch(names(measuredTid), names(dicttIDBoer))],]), nrow = n_c, ncol = length(measuredTid), byrow = T)
-    colnames(rxnf[[entry]]$met_SD) <- names(measuredTid)
+    rxnf[[entry]]$met_SD <- matrix(unlist(remapped_SD[chmatch(names(measuredTid), tab_boer$SpeciesType),]), nrow = n_c, ncol = length(measuredTid), byrow = T)
+    rownames(rxnf[[entry]]$met_SD) <- temprown; colnames(rxnf[[entry]]$met_SD) <- names(measuredTid)
     
-    rxnf[[entry]]$met_Corr <- expanded_met_correlations[dicttIDBoer[chmatch(names(measuredTid), names(dicttIDBoer))],dicttIDBoer[chmatch(names(measuredTid), names(dicttIDBoer))]]
+    rxnf[[entry]]$met_Corr <- expanded_met_correlations[chmatch(names(measuredTid), tab_boer$SpeciesType),chmatch(names(measuredTid), tab_boer$SpeciesType)]
     
     # Add the rxnID
     rxnf[[entry]]$rxnID <- substr(entry,1,6)
