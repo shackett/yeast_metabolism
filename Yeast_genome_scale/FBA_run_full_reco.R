@@ -34,7 +34,7 @@ FVA = 'T' # Should flux variblility analysis be performed
 FVAreduced = 'T' # If FVA is performed should it only be performed on reactions which carried non-zero flux in some condition during QP
 # this requires that the script be run twice - once to generate "rawFlux" and again to use this set of reactions to defined the reduced
 # reaction stoichiometry
-useCluster ='write' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
+useCluster ='load' # can have 'F' for false, 'write' for write the cluster input or 'load' load cluster output
 
 
 ###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@###@
@@ -930,9 +930,11 @@ if(QPorLP == "QP"){
             
           }else{
             warning("\'fluxCarriedSimple.tsv\' is out of date, rerun after it is generated (finishing running script and it probably will be)")
+          next
           }
         }else{
           warning("FVA files will not be generated until \'fluxCarriedSimple.tsv\' has been generated (finishing running script and it probably will be)")
+        next
         }
         
       }else{
@@ -1172,10 +1174,11 @@ fva_QP <- fva_summary_df[rownames(fva_summary_df) %in% sharedRx,,]
 SQPmelt <- melt(standard_QP); colnames(SQPmelt) <- c("rID", "condition", "flux"); SQPmelt$model = "standardQP"
 FVAQPmelt <- melt(fva_QP); colnames(FVAQPmelt) <- c("rID", "condition", "model", "flux")
 allFluxMelt <- rbind(SQPmelt[,chmatch(colnames(SQPmelt), colnames(FVAQPmelt))], FVAQPmelt)
-compaFluxes <- dcast(allFluxMelt, formula = "rID + condition ~ model", value.var = "flux")
+compaFluxes <- dcast(allFluxMelt, formula = "rID + condition ~ model", value.var = "flux") %>% tbl_df()
 
 # is the flux calculated using the standard QP formulation captured between the FVA upper and lower bound
-compaFluxes$fluxCap <- between(x = compaFluxes$standardQP, lower = compaFluxes$FVAmin, upper = compaFluxes$FVAmax, incbounds = T)
+
+compaFluxes$fluxCap <- data.table::between(x = compaFluxes$standardQP, lower = compaFluxes$FVAmin, upper = compaFluxes$FVAmax, incbounds = T)
 # fractional departure between QP solution and closest bound relative to ub-lb
 compaFluxes$rangefluxDeparture <- apply(abs(compaFluxes$standardQP - data.frame(compaFluxes$FVAmax, compaFluxes$FVAmin))/(compaFluxes$FVAmax - compaFluxes$FVAmin), 1, min)
 # same thing relative to maximum flux
@@ -1211,7 +1214,7 @@ save(flux_summary, file = "flux_cache/fluxSummaryQP.Rdata")
 # save some objects for use by the manuscript
 
 
-save(stoiMat, rxnparFile, corrFile, compFile, metComp, chemostatInfo, nutrientFile, reversibleRx, file = "Flux_analysis/knitrNetFilez.Rdata")
+save(stoiMat, rxnparFile, corrFile, compFile, modelMetComp, chemostatInfo, nutrientFile, reversibleRx, file = "flux_cache/Flux_analysis/knitrNetFilez.Rdata")
 
 
 
