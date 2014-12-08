@@ -2,38 +2,54 @@
 
 #qsub -l 1day -cwd -sync n Rscript FluxOptimClus.R runNum=$a_run chunk=$a_chunk
 
-setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
-#setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
-
 library(nnls)
 
 options(stringsAsFactors = FALSE)
 
-args <- commandArgs()
-runNum = as.numeric(unlist(strsplit(args[grep("runNum", args)], "="))[2])
-chunkNum = as.numeric(unlist(strsplit(args[grep("chunk", args)], "="))[2])
 
-print(paste("CHUNK NUMBER: ", chunkNum, ", RUN NUMBER: ", runNum, sep = ""))
+run_location <- "local" # either local or cluster
+if(run_location == "local"){
+  
+  setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
+  
+  runNum <- 1
+  chunkNum <- NA
+  
+  markov_pars <- list()
+  markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+  markov_pars$n_samples <- 10 #how many total markov samples are desired
+  markov_pars$burn_in <- 0 #how many initial samples should be skipped
+  
+}else if(run_location == "cluster"){
+  
+  setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
+  
+  args <- commandArgs()
+  runNum = as.numeric(unlist(strsplit(args[grep("runNum", args)], "="))[2])
+  chunkNum = as.numeric(unlist(strsplit(args[grep("chunk", args)], "="))[2])
+  
+  print(paste("CHUNK NUMBER: ", chunkNum, ", RUN NUMBER: ", runNum, sep = ""))
+  
+  markov_pars <- list()
+  markov_pars$sample_freq <- 150 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+  markov_pars$n_samples <- 200 #how many total markov samples are desired
+  markov_pars$burn_in <- 3000 #how many initial samples should be skipped
+  
+}else{
+  stop("provide a valid value to run_location") 
+}
 
 run_summary <- list() #### MCMC run output and formatted inputs
-
-markov_pars <- list()
-markov_pars$sample_freq <- 50 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-markov_pars$n_samples <- 200 #how many total markov samples are desired
-markov_pars$burn_in <- 1000 #how many initial samples should be skipped
-
-#markov_pars <- list()
-#markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-#markov_pars$n_samples <- 10 #how many total markov samples are desired
-#markov_pars$burn_in <- 0 #how many initial samples should be skipped
-
-
 run_summary$markov_pars <- markov_pars
 
-load("paramOptim.Rdata")
-rxnList_form <- rxnList_form[names(rxnList_form) %in% chunk_assignment$set[chunk_assignment$chunk == chunkNum]]
 
-if(chunkNum %in% chunk_assignment$chunk[grep('metX', chunk_assignment$set)]){
+load("paramOptim.Rdata")
+
+if(run_location == "cluster"){
+  rxnList_form <- rxnList_form[names(rxnList_form) %in% chunk_assignment$set[chunk_assignment$chunk == chunkNum]]
+}
+
+if(chunkNum %in% chunk_assignment$chunk[grep('metX', chunk_assignment$set)] | run_location == "local"){
   # If there are reactions proposing hypothetical regulators, load principal components
   load('flux_cache/metaboliteTables.RData')
   npc <- ncol(metSVD$v)
@@ -226,6 +242,8 @@ shmatch <- function(x,y){
 #             which(names(rxnList_form) == "r_0211-rm-t_0234-inh-noncomp"),
 #             which(names(rxnList_form) == "r_0250-cc")) 
 
+rxN <- 21
+rxN <- 20
 for(rxN in 1:length(rxnList_form)){
 #for(rxN in rxTests){  
   
@@ -273,8 +291,15 @@ for(rxN in 1:length(rxnList_form)){
  
   #### Describe the relevent kinetic parameters ####
   
-  kineticPars <- data.frame(rel_spec = c(rownames(rxnSummary$enzymeComplexes), rxnSummary$rxnFormData$SubstrateID), 
+  if(kinetically_differing_isoenzymes & length(grep('.[0-9]$', names(rxnSummary$rxnForm))) != 0){
+    # A single enzyme is applied to multiple expressions (ex. partial constitutive activity)
+    kineticPars <- data.frame(rel_spec = c(names(rxnSummary$rxnForm), rxnSummary$rxnFormData$SubstrateID), 
+                              SpeciesType = c(rep("Enzyme", times = length(rxnSummary$rxnForm)), rep("Metabolite", times = nrow(rxnSummary$rxnFormData))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
+  }else{
+    # One enzyme, one Kcat
+    kineticPars <- data.frame(rel_spec = c(rownames(rxnSummary$enzymeComplexes), rxnSummary$rxnFormData$SubstrateID), 
                             SpeciesType = c(rep("Enzyme", times = nrow(rxnSummary$enzymeComplexes)), rep("Metabolite", times = nrow(rxnSummary$rxnFormData))), modelName = NA, commonName = NA, formulaName = NA, measured = NA)
+  }
   kineticPars$formulaName[kineticPars$SpeciesType == "Enzyme"] <- paste(paste("E", rxnSummary$rxnID, sep = "_"), kineticPars$rel_spec[kineticPars$SpeciesType == "Enzyme"], sep = "_")
   kineticPars$modelName[kineticPars$SpeciesType == "Metabolite"] <- kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"]
   kineticPars$commonName[kineticPars$SpeciesType == "Metabolite"] <- unname(sapply(kineticPars$rel_spec[kineticPars$SpeciesType == "Metabolite"], function(x){rxnSummary$metNames[names(rxnSummary$metNames) == x]}))
@@ -302,8 +327,15 @@ for(rxN in 1:length(rxnList_form)){
   
   #### Setup metabolite concentration, enzyme abundance and flux carried ####
   
-  ### Create a matrix containing the metabolites and enzymes 
-  enzyme_abund <- t(rxnSummary$enzymeComplexes); colnames(enzyme_abund) <- all_species$rel_spec[all_species$SpeciesType == "Enzyme"]
+  ### Create a matrix containing the metabolites and enzymes
+  if(kinetically_differing_isoenzymes & length(grep('.[0-9]$', names(rxnSummary$rxnForm))) != 0){
+    # A single enzyme is applied to multiple expressions (ex. partial constitutive activity)
+    enzyme_abund <- t(rxnSummary$enzymeComplexes)[,shmatch(gsub('.[0-9]$', '', names(rxnSummary$rxnForm)), rownames(rxnSummary$enzymeComplexes))]
+    colnames(enzyme_abund) <- names(rxnSummary$rxnForm)
+  }else{
+    enzyme_abund <- t(rxnSummary$enzymeComplexes); colnames(enzyme_abund) <- all_species$rel_spec[all_species$SpeciesType == "Enzyme"]
+  }
+  
   met_abund <- rxnSummary$rxnMet
   met_abund <- met_abund[,colnames(met_abund) %in% kineticPars$rel_spec]
   
