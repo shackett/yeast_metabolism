@@ -2,8 +2,8 @@
 
 #qsub -l 1day -cwd -sync n Rscript FluxOptimClus.R runNum=$a_run chunk=$a_chunk
 
-#setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
-setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
+setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
+#setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
 
 library(nnls)
 
@@ -17,15 +17,15 @@ print(paste("CHUNK NUMBER: ", chunkNum, ", RUN NUMBER: ", runNum, sep = ""))
 
 run_summary <- list() #### MCMC run output and formatted inputs
 
-#markov_pars <- list()
-#markov_pars$sample_freq <- 50 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-#markov_pars$n_samples <- 200 #how many total markov samples are desired
-#markov_pars$burn_in <- 1000 #how many initial samples should be skipped
-
 markov_pars <- list()
-markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-markov_pars$n_samples <- 10 #how many total markov samples are desired
-markov_pars$burn_in <- 0 #how many initial samples should be skipped
+markov_pars$sample_freq <- 50 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+markov_pars$n_samples <- 200 #how many total markov samples are desired
+markov_pars$burn_in <- 1000 #how many initial samples should be skipped
+
+#markov_pars <- list()
+#markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+#markov_pars$n_samples <- 10 #how many total markov samples are desired
+#markov_pars$burn_in <- 0 #how many initial samples should be skipped
 
 
 run_summary$markov_pars <- markov_pars
