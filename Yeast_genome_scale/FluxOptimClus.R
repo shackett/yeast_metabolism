@@ -7,7 +7,7 @@ library(nnls)
 options(stringsAsFactors = FALSE)
 
 
-run_location <- "local" # either local or cluster
+run_location <- "cluster" # either local or cluster
 if(run_location == "local"){
   
   setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
@@ -23,6 +23,8 @@ if(run_location == "local"){
 }else if(run_location == "cluster"){
   
   setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
+  
+  .libPaths(append(.libPaths(), "/Genomics/grid/users/shackett/R/x86_64-unknown-linux-gnu-library/2.15"))
   
   args <- commandArgs()
   runNum = as.numeric(unlist(strsplit(args[grep("runNum", args)], "="))[2])
@@ -242,8 +244,8 @@ shmatch <- function(x,y){
 #             which(names(rxnList_form) == "r_0211-rm-t_0234-inh-noncomp"),
 #             which(names(rxnList_form) == "r_0250-cc")) 
 
-rxN <- 21
-rxN <- 20
+#rxN <- 21
+#rxN <- 20
 for(rxN in 1:length(rxnList_form)){
 #for(rxN in rxTests){  
   
@@ -332,8 +334,32 @@ for(rxN in 1:length(rxnList_form)){
     # A single enzyme is applied to multiple expressions (ex. partial constitutive activity)
     enzyme_abund <- t(rxnSummary$enzymeComplexes)[,shmatch(gsub('.[0-9]$', '', names(rxnSummary$rxnForm)), rownames(rxnSummary$enzymeComplexes))]
     colnames(enzyme_abund) <- names(rxnSummary$rxnForm)
+    
+    species_SD <- rxnSummary$all_species_SD
+    remapping_indices <- shmatch(gsub('.[0-9]$', '', names(rxnSummary$rxnForm)), colnames(species_SD)[colnames(species_SD) %in% rownames(rxnSummary$enzymeComplexes)])
+    remapping_table <- data.frame(remap = names(rxnSummary$rxnForm), enzyme = names(remapping_indices))
+    renamed_enzyme_SD <- species_SD[,colnames(species_SD) %in% rownames(rxnSummary$enzymeComplexes)][,remapping_indices]
+    colnames(renamed_enzyme_SD) <- names(rxnSummary$rxnForm)
+    species_SD <- cbind(species_SD[,!(colnames(species_SD) %in% rownames(rxnSummary$enzymeComplexes))], renamed_enzyme_SD)
+    
+    species_corr <- matrix(0, nrow = ncol(species_SD), ncol = ncol(species_SD))
+    rownames(species_corr) <- colnames(species_corr) <- colnames(species_SD)
+    species_corr[!(colnames(species_SD) %in% names(rxnSummary$rxnForm)),!(colnames(species_SD) %in% names(rxnSummary$rxnForm))] <- rxnSummary$all_species_corr[!(rownames(rxnSummary$all_species_corr) %in% rownames(rxnSummary$enzymeComplexes)),!(rownames(rxnSummary$all_species_corr) %in% rownames(rxnSummary$enzymeComplexes))]
+    
+    remapped_enzyme_corr <- species_corr[(colnames(species_SD) %in% names(rxnSummary$rxnForm)),(colnames(species_SD) %in% names(rxnSummary$rxnForm))]
+    for(i in 1:nrow(remapped_enzyme_corr)){
+      for(j in 1:ncol(remapped_enzyme_corr)){
+        remapped_enzyme_corr[i,j] <- ifelse(remapping_table$enzyme[remapping_table$remap == colnames(remapped_enzyme_corr)[j]] == remapping_table$enzyme[remapping_table$remap == rownames(remapped_enzyme_corr)[i]], 1, 0)
+      }
+    }
+    
+    species_corr[rownames(species_corr) %in% rownames(remapped_enzyme_corr), colnames(species_corr) %in% colnames(remapped_enzyme_corr)] <- remapped_enzyme_corr    
+    
   }else{
     enzyme_abund <- t(rxnSummary$enzymeComplexes); colnames(enzyme_abund) <- all_species$rel_spec[all_species$SpeciesType == "Enzyme"]
+    species_SD <- rxnSummary$all_species_SD
+    species_corr <- rxnSummary$all_species_corr
+    
   }
   
   met_abund <- rxnSummary$rxnMet
@@ -355,18 +381,13 @@ for(rxN in 1:length(rxnList_form)){
   # If FVA min flux is greater than max flux, switch them (and print a warning).
   
   if(sum(!(flux$FVAmax >= flux$FVAmin)) != 0){
-    print("maximum flux is less than minimum flux")
+    print(paste("maximum flux is less than minimum flux for", sum(!(flux$FVAmax >= flux$FVAmin)), "conditions"))
   }
   flux[!(flux$FVAmax >= flux$FVAmin),c('FVAmin', 'FVAmax')] <- flux[!(flux$FVAmax >= flux$FVAmin),c('FVAmax', 'FVAmin')]
   
   # If bounds are exactly equal, then introduce a minute spread so a range can be calculated ###
   
   flux$FVAmax[flux$FVAmax == flux$FVAmin] <- flux$FVAmax[flux$FVAmax == flux$FVAmin] + abs(flux$FVAmax[flux$FVAmax == flux$FVAmin]*10^-4)
-  
-  # Metabolite SD and correlation specified so that they can be passed to v(mets, par)
-  
-  species_SD <- rxnSummary$all_species_SD
-  species_corr <- rxnSummary$all_species_corr
   
   #### Combine enzyme(s) with non-linear portion of the kinetic form to generate final kinetic form ####
   
@@ -548,7 +569,6 @@ for(rxN in 1:length(rxnList_form)){
   run_summary[[names(rxnList_form)[rxN]]]$kineticParPrior <- data.frame(kineticPars, kineticParPrior)
   
   print(paste(names(rxnList_form)[rxN], "finished in ", round(proc.time()[3] - t_start, 0), " seconds", sep = " "))
-  
   
 }
 
