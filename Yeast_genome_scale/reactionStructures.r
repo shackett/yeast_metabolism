@@ -1375,10 +1375,75 @@ Mod2reactionEqComplex <- function(modTable){
   }
 
 
-# get the reaction forms
+##### Generate all reaction forms #####
 
-rxnf <- list() # a list 
+rxnf <- list() # a list
 
+## Generate reaction forms for reversible michaelis-menten and convenience kinetics
+rxnForms <- tab2ReactionForms(rct_s2p,'rm') # with product inhibition
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+rxnForms <- tab2ReactionForms(rct_s2p,'cc') # convinience kinetics
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+## Write all the rate laws with all Brenda modifications and all possible inhibitor modes
+rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T,T)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+## for allosteric regulators, also look at a varaible hill coefficient
+alloModTable <- modTable[ modTable$origin == 'Brenda', ]
+alloModTable$hill <- 0
+rxnForms <- Mod2reactionEq(alloModTable,'rm',F,T)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+## Write out allosteric activator and inhibitor reaction equations for a hypothetical regulator whose patterns of variation are governed by metabolomic PCs.
+deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_metX", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1)
+deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)
+deNovoRegulators$modtype <- rep(c("act", "inh"), each = length(unique(rct_s2p$ReactionID)))
+deNovoRegulators_bind <- deNovoRegulators; deNovoRegulators_bind$hill <- 0
+deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators_bind)
+rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F,T)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+## add information for the hypothetical metabolite, t_metX, to information list
+listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = "", row = nrow(listTID) + 1))
+
+## Add additional regulators of interest from manual_modTable
+manualRegulators <- read.table('companionFiles/manual_modTable.txt', sep = "\t", header = T)
+rxnForms <- Mod2reactionEq(manualRegulators,'rm',F)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+rm(rxnForms)
+
+## Supervised verification of multiple regulators or isoenzyme specific kinetics/regulation
+manualRegulators <- read.table('companionFiles/manual_ComplexRegulation.txt', sep = "\t", header = T)
+rxnForms <- Mod2reactionEqComplex(manualRegulators)
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+rm(rxnForms)
+
+# add the infos to the rxn structure
+rxnf <- addInfo2rxnf(rxnf)
+save(rxnf,file='./flux_cache/rxnf_formulametab.rdata')
+
+# output latex reaction forms
+
+outtab <- character(length(rxnf))
+for (i in 1:length(rxnf)){
+  outtab[i] <- paste(names(rxnf)[i],' ---- $',rxnf[[i]]$rxnFormTex,'$\\newline',sep='')
+}
+write.table(outtab,file='./latexformula.txt',sep='\t',row.names=F,col.names=F)
 ## Generate reaction forms for reversible michaelis-menten and convenience kinetics
 
 rxnForms <- tab2ReactionForms(rct_s2p,'rm') # with product inhibition
@@ -1422,7 +1487,7 @@ for (x in names(rxnForms)){
 }
 
 ## add information for the hypothetical metabolite, t_metX, to information list
-listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = "", row = nrow(listTID) + 1))
+listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = ""))
 
 ## Add additional regulators of interest from manual_modTable
 manualRegulators <- read.table('companionFiles/manual_modTable.txt', sep = "\t", header = T)
@@ -1436,8 +1501,6 @@ rm(rxnForms)
 
 ## Supervised verification of multiple regulators or isoenzyme specific kinetics/regulation
 manualRegulators <- read.table('companionFiles/manual_ComplexRegulation.txt', sep = "\t", header = T)
-
-
 
 rxnForms <- Mod2reactionEqComplex(manualRegulators)
 for (x in names(rxnForms)){
