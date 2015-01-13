@@ -1221,8 +1221,8 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     abs_units <- data.frame(units = as.numeric(variable_labels$units[!is.na(variable_labels$units)]), referenceSymbol = NA, referencePower = NA, scaled =  NA)
     
     abs_units[abs_units$units >= 0, 2] <- "M"; abs_units[abs_units$units >= 0, 3] <- 0
-    abs_units[between(abs_units$units, -3, -1, incbounds = T), 2] <- "mM"; abs_units[between(abs_units$units, -3, -1, incbounds = T), 3] <- -3
-    abs_units[between(abs_units$units, -6, -4, incbounds = T), 2] <- "uM"; abs_units[between(abs_units$units, -6, -4, incbounds = T), 3] <- -6
+    abs_units[data.table::between(abs_units$units, -3, -1, incbounds = T), 2] <- "mM"; abs_units[data.table::between(abs_units$units, -3, -1, incbounds = T), 3] <- -3
+    abs_units[data.table::between(abs_units$units, -6, -4, incbounds = T), 2] <- "uM"; abs_units[data.table::between(abs_units$units, -6, -4, incbounds = T), 3] <- -6
     abs_units[abs_units$units < -7, 2] <- "nM"; abs_units[abs_units$units < -7, 3] <- -9
     
     abs_units$scaled <- 10^(abs_units$units - as.numeric(abs_units$referencePower))
@@ -1450,8 +1450,8 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
   # store logQ in the keq absolute quant position - meaningful in relation to keq
   param_interval$absoluteQuant[run_rxn$kineticParPrior$SpeciesType == "keq"] <- as.character((run_rxn$kineticParPrior$par_2[run_rxn$kineticParPrior$SpeciesType == "keq"] + run_rxn$kineticParPrior$par_1[run_rxn$kineticParPrior$SpeciesType == "keq"])/2)
   
+  # Save posterior distribution summaries and meaning of parameters
   param_summary$param_interval <- param_interval
-  
   param_summary$kineticParPrior <- run_rxn$kineticParPrior
   
   param_summary$param_species <- run_rxn$rxnSummary$rxnFormData
@@ -1494,7 +1494,7 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
     predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
     enzyme_activity <- (predOcc %*% t(rep(1, ncol(enzyme_abund))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
   }else{
-    occEqtn_complex_match <- data.frame(complex = rownames(run_rxn$rxnSummary$enzymeComplexes), occEqtn = NA)
+    occEqtn_complex_match <- data.frame(complex = colnames(enzyme_abund), occEqtn = NA)
     occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
     occEqtn_complex_match$occEqtn[is.na(occEqtn_complex_match$occEqtn)] <- "other"
     
@@ -1768,11 +1768,13 @@ reactionProperties <-  function(){
   
   ### Generate plots which combine both MCMC parameter estimates and experimental data ###
   
+  output <- list()
   output_plots <- list() # the output
   
   require(data.table)
   require(ggplot2)
   require(scales) # for converting fractions to percent
+  require(reshape2)
   
   ### Define and align experimental data ###
   
@@ -1862,7 +1864,7 @@ reactionProperties <-  function(){
       predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
       enzyme_activity <- (predOcc %*% t(rep(1, ncol(enzyme_abund))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
     }else{
-      occEqtn_complex_match <- data.frame(complex = rownames(run_rxn$rxnSummary$enzymeComplexes), occEqtn = NA)
+      occEqtn_complex_match <- data.frame(complex = colnames(enzyme_abund), occEqtn = NA)
       occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
       occEqtn_complex_match$occEqtn[is.na(occEqtn_complex_match$occEqtn)] <- "other"
       
@@ -1902,6 +1904,7 @@ reactionProperties <-  function(){
   
   dimnames(mcmc_elasticity) <- list(condition = rownames(measured_mets), specie = flux_names, markovSample = c(1:nrow(dist_pars)))
   
+  output$EL_summary <- melt(mcmc_elasticity, value.name = "Elasticity") # Save full distributions of elasticitiies for MCA
   
   ### Plot elasticity of log-abundances ###
   
@@ -1960,7 +1963,8 @@ reactionProperties <-  function(){
   
   output_plots$ML_summary = ML_summary
   
-  return(output_plots)
+  output$plots <- output_plots
+  return(output)
   
 }
 
@@ -2743,7 +2747,7 @@ nameReformat <- function(names, totalChar){
 
 ########## Functions used for summarizing behavior of sets of reactions ############
 
-color_simplex <- function(res = 100, control_co = 0.1){
+color_simplex <- function(res = 100, control_co = 0.1, discretize = FALSE, dbin = 8){
   
   # generate a color profile that can be used to express a consensus color based upon the relative
   # value of 3 measures summing to one.
@@ -2771,24 +2775,61 @@ color_simplex <- function(res = 100, control_co = 0.1){
   
   control_colors <- control_colors[enzyme + allostery <= 1,]
   control_colors[,residual := round(1-allostery-enzyme, 4)]
-  control_colors$residual[control_colors$residual < 0.2] <- 0.2
   
   #control_colors[,angle := ifelse(enzyme + allostery != 0, 120*allostery/(allostery+enzyme), 360)]
   #control_colors[,angle := ifelse(enzyme + allostery != 0, 360 - 120*allostery/(allostery+enzyme), 360)]
-  control_colors[,angle := ifelse(enzyme + allostery != 0, 240 + 120*allostery/(allostery+enzyme), 360)]
+  #control_colors[,angle := ifelse(enzyme + allostery != 0, 240 + 120*allostery/(allostery+enzyme), 360)]
   #control_colors[,angle := ifelse(enzyme + allostery != 0, 0 + 240*allostery/(allostery+enzyme), 360)]
+  control_colors[,angle := ifelse(enzyme + allostery != 0, 230 + 140*allostery/(allostery+enzyme), 360)]
   
-  control_colors[,color := hcl(h = angle, c = 100, l = 100*residual),]
-  control_colors[,alpha := (1-residual+0.2)^(1/3)]
-  control_colors$color[control_colors$residual > 1-control_co] <- "#FFFFFF"
+  if(discretize == F){
+    control_colors$residual[control_colors$residual < 0.2] <- 0.2
+    control_colors[,color := hcl(h = angle, c = 100, l = 100*residual),]
+    
+    control_colors$color[control_colors$residual > 1-control_co] <- "#FFFFFF"
+    
+    color_summary$Figure <- ggplot(control_colors, aes(x = enzyme, y = allostery, fill = color)) + geom_tile() + scale_fill_identity() +
+      color_simplex_theme + scale_x_continuous("Enzyme Control", label = percent, expand = c(0,0)) +
+      scale_y_continuous("Allosteric Control", label = percent, expand = c(0,0)) +
+      geom_hline(yintercept = 0, size = 3) + geom_vline(xintercept = 0, size = 3) +
+      geom_abline(intercept = 1, slope = -1, size = 3) + geom_abline(intercept = control_co, slope = -1, size = 3)
+    
+  }else{
+    
+    # first determine control magnitude [0,1] -> mag_bin
+    # this is the distance projected from the origin, split up into dbin intervals
+    # divide angle within a magnitude bin into mag_bin pieces e.g. lowest level is a single bin, outer-most is eight
+    
+    control_colors[,mag_bin := ceiling((1-residual) * dbin),]
+    control_colors <- control_colors[mag_bin != 0,,]
+    control_colors$angle_bin <- NA
+    
+    angle_range <- range(control_colors$angle)
+    
+    for(a_mag_bin in unique(control_colors$mag_bin)){
+      angle_bin <- ceiling((control_colors[mag_bin == a_mag_bin,angle] - min(angle_range)) / (angle_range[2]-angle_range[1]) * a_mag_bin)
+      angle_bin[angle_bin == 0] <- 1
+      control_colors$angle_bin[control_colors$mag_bin == a_mag_bin] <- angle_bin
+    }
+    
+    control_colors[,consensus_angle := mean(angle), by = c("mag_bin", "angle_bin")]
+    control_colors[,consensus_residual := mean(residual), by = c("mag_bin", "angle_bin")]
+    
+    #control_colors[,color := hcl(h = consensus_angle, c = 100, l = 100*sqrt(consensus_residual)),]
+    control_colors$consensus_residual[control_colors$consensus_residual < 0.2] <- 0.2
+    control_colors[,color := hcl(h = consensus_angle, c = 100, l = 100*consensus_residual),]
+    control_colors$color[control_colors$mag_bin == 1] <- "#FFFFFF"
+    
+    color_summary$Figure <- ggplot(control_colors, aes(x = enzyme, y = allostery, fill = color)) + geom_tile() + scale_fill_identity() +
+      color_simplex_theme + scale_x_continuous("Enzyme Control", label = percent, expand = c(0,0)) +
+      scale_y_continuous("Allosteric Control", label = percent, expand = c(0,0)) +
+      geom_hline(yintercept = 0, size = 3) + geom_vline(xintercept = 0, size = 3) +
+      geom_abline(data = data.frame(int = seq(1:dbin)/dbin, slope = rep(-1, dbin)), aes(intercept = seq(1:dbin)/dbin, slope = rep(-1, dbin)), size = 2) 
+    
+   }
   
-  color_summary$Figure <- ggplot(control_colors, aes(x = enzyme, y = allostery, fill = color)) + geom_tile() + scale_fill_identity() +
-    color_simplex_theme + scale_x_continuous("Enzyme Control", label = percent, expand = c(0,0)) +
-    scale_y_continuous("Allosteric Control", label = percent, expand = c(0,0)) +
-    geom_hline(yintercept = 0, size = 3) + geom_vline(xintercept = 0, size = 3) +
-    geom_abline(intercept = 1, slope = -1, size = 3) + geom_abline(intercept = control_co, slope = -1, size = 3)
   
-  color_summary$Table <- control_colors
+  color_summary$Table <- control_colors[,list(enzyme, allostery, residual, color)]
   
   return(color_summary)
 }

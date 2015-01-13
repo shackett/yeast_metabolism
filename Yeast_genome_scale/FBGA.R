@@ -10,8 +10,9 @@ library(ggplot2)
 library(gplots) 
 library(grid) # minor use to adjust layout of ggplot2 facets
 library(coda) # for assessing mcmc convergence
+library(dplyr)
 source("FBA_lib.R")
-
+library(scales) # for quick % conversion
 
 options(stringsAsFactors = FALSE)
 
@@ -48,15 +49,16 @@ if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
 load("flux_cache/fluxSummaryQP.Rdata")
 
 
-##### Import enzyme abundances
-#enzyme_abund <- read.delim("../ChemicalSpeciesQuant/Proteomics/proteinAbundance.tsv")
-#rownames(enzyme_abund) <- enzyme_abund$Gene; enzyme_abund <- enzyme_abund[,-1]
-#enzyme_abund <- enzyme_abund[,c(16:20, 1:5, 11:15, 6:10, 21:25)] #reorder proteins so that they are the same order as fluxes and metabolites (otherwise a warning will be issued later)
-
-
 ##### Associate enzymes with pathways ######
 
-kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
+### Determine which pathways are associated with a protein ###
+# This isn't used until FBGA.R, but is convenient to generate at this point
+
+kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # > generated from keggIDparser.py KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
+if(is.null(kegg_enzyme_dict$PATHWAY)){
+  gene_pathways(kegg_enzyme_dict); kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv")
+}#generate a per-gene pathway annotation if one is not already generated
+####
 rxn_pathways <- read.delim("./flux_cache/reactionPathways.tsv")
 rxn_enzyme_measured <- read.delim("./flux_cache/prot_matches.tsv")
 
@@ -82,8 +84,9 @@ for(rxN in 1:length(valid_rxns)){
     Rxpathway <- rxn_pathways$pathway[rxn_pathways$reactionID == valid_rxns[rxN]]
   }else{Rxpathway <- ''}
   
-  if(rxnList[[idx[1]]]$genes %in% kegg_enzyme_dict$SYST){
-    geneInfo <- kegg_enzyme_dict[chmatch(rxnList[[idx[1]]]$genes[rxnList[[idx[1]]]$genes %in% kegg_enzyme_dict$SYST], kegg_enzyme_dict$SYST),]
+  rxn_genes <- strsplit(rxnList[[idx[1]]]$genes, split = '/')[[1]]
+  if(any(rxn_genes %in% kegg_enzyme_dict$SYST)){
+    geneInfo <- kegg_enzyme_dict[chmatch(rxn_genes[rxn_genes %in% kegg_enzyme_dict$SYST], kegg_enzyme_dict$SYST),]
   }else{geneInfo <- NA}
   
   rxFlux <- as.data.frame(flux_summary$total_flux_cast[rownames(flux_summary$total_flux_cast) == valid_rxns[rxN],,])
@@ -115,7 +118,6 @@ for (i in 1:nrow(rmCondList)){
     nEntry <- paste(entry,'_rmCond',sep='')
     rxnList[[nEntry]] <- rxnList[[entry]]
     conds <- strsplit(rmCondList$cond[i],';')[[1]]
-    conds <- c(conds,toupper(conds))
     rxnList[[nEntry]]$flux <- rxnList[[nEntry]]$flux[!rownames(rxnList[[nEntry]]$flux) %in% conds,]
     rxnList[[nEntry]]$rxnMet <- rxnList[[nEntry]]$rxnMet[!rownames(rxnList[[nEntry]]$rxnMet) %in% conds,]
     rxnList[[nEntry]]$all_species_SD <- rxnList[[nEntry]]$all_species_SD[!rownames(rxnList[[nEntry]]$all_species_SD) %in% conds,]
@@ -133,8 +135,7 @@ for (i in 1:nrow(rmCondList)){
 ### ensure that the ordering of conditions is the same ###
 
 cond_mapping <- data.frame(standard = chemostatInfo$ChemostatCond, e = colnames(rxnList[[1]]$enzymeComplexes), m = rownames(rxnList[[1]]$rxnMet), f = rownames(rxnList[[1]]$flux))
-
-if (!all(toupper(cond_mapping$flux_cond) == cond_mapping$enzyme_cond & cond_mapping$enzyme_cond == cond_mapping$met_cond)){
+if (!all(apply(apply(cond_mapping, c(1,2), toupper), 1, function(x){length(unique(x))}) == 1)){
   warning('There is a problem with the order of the conditions. (check cond_mapping)')
 }
 
@@ -294,9 +295,12 @@ barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
                        panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank(), panel.margin = unit(1.5, "lines"), axis.text = element_text(color = "BLACK"),
                        strip.background = element_rect(fill = "chocolate1"), strip.text = element_text(vjust = 0.6)) 
 
+# For 75 reactions, linear regression was used to determine the fraction of variation in flux that could be explained by linear combinations of metabolite and enzyme concentrations.
+# This comparison was also made to relate the log of flux carried to the log abundances of enzymes and metabolites
+
 rxnPredictionPlot <- ggplot(reaction_pred_summary_plotter, aes(x = factor(index), y = value, fill = as.factor(variable), color = "black")) + facet_grid(modelType ~ .)
 rxnPredictionPlot + geom_bar(stat ="identity", width=0.75) + barplot_theme + geom_vline(aes(xintercept = 0), size = 0.5) + geom_hline(aes(yintercept = 0), size = 0.5) + 
-  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Fraction of variance explained", expand = c(0,0), limits = c(0,1)) +
+  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "% Variance Explained", expand = c(0,0), limits = c(0,1), label = percent_format()) +
   scale_fill_brewer("Prediction Method", palette = "Set2") + scale_color_identity()
 
 #scale_fill_manual(values = c("enzymeVarianceExplained" = "sienna1", "metaboliteVarianceExplained" = "steelblue1", varianceAmbiguouslyExplained = "olivedrab3", varianceJointlyExplained = "red")) 
@@ -483,7 +487,7 @@ reactionInfo$signifCode <- sapply(reactionInfo$Qvalue, function(x){
 
 
 #### Setup indexing so that fits can be interactively analysed using a Shiny application #####
-
+  
 reactionInfo$Name = NA
 reactionInfo$Name[reactionInfo$modification %in% c('', 'rmCond') & reactionInfo$form == "rm"] <- "Reversible michaelis-menten (default)"
 reactionInfo$Name[reactionInfo$modification %in% c('', 'rmCond') & reactionInfo$form == "cc"] <- "Convenience kinetics"
@@ -571,8 +575,9 @@ shiny_flux_data <- list()
 rxn_fits <- NULL
 rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
-MLdata <- NULL
-TRdata <- NULL
+MLdata <- NULL # Save summary of metabolic leverage
+ELdata <- list() # Save full distribution of elasticities
+TRdata <- NULL # Save summary transcriptional resposiveness
 
 t_start = proc.time()[3]
 
@@ -640,8 +645,12 @@ for(arxn in reactionInfo$rMech){
     shiny_flux_data[[arxn]]$plotChoices$Hill <- hillPlot(run_rxn)
     }
   
-  reaction_plots <- reactionProperties()
+  reaction_properties <- reactionProperties()
+  reaction_plots <- reaction_properties$plots
+  
   MLdata <- rbind(MLdata, reaction_plots$ML_summary)
+  ELdata[[arxn]] <- reaction_properties$EL_summary
+  
   shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reactionPropertiesPlots(reaction_plots))
   
   trans_res <- transcriptional_responsiveness()
@@ -696,7 +705,7 @@ save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, file = "shinyapp/shiny
 #### Save parameter estimates for further global analyses ####
 
 save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, TRdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
-
+save(ELdata, file = "flux_cache/elasticityData.Rdata")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
 ###################### * Summarize Reaction Behavior ##########################
@@ -1060,13 +1069,15 @@ ML_rxn_summary$genes <- ML_inducibility_summary$genes[chmatch(ML_rxn_summary$rea
 
 setkeyv(ML_rxn_summary, "rxn_metabolite")
 
-color_key <- color_simplex(100, 0)
+color_key <- color_simplex(200, 0, T, 6)
 
 color_index <- mapply(function(x,y){
   which.min(abs(color_key$Table$enzyme - x) + abs(color_key$Table$allostery - y))
 }, x = ML_rxn_summary$enzyme, y = ML_rxn_summary$regulator)
 
-ML_rxn_summary <- cbind(ML_rxn_summary, color_key$Table[color_index, c("color", "alpha"), with = F])
+ML_rxn_summary <- cbind(ML_rxn_summary, color_key$Table[color_index, "color", with = F])
+
+#color_key$Figure + geom_point(data = ML_rxn_summary, aes(x = enzyme, y = regulator), color = "yellow")
 
 #plot(1:45, 1:45, col = ML_rxn_summary$color, pch = 16, cex = 2)
 ggsave("Figures/MLcolorKey.pdf", color_key$Figure, height = 7, width = 7)
