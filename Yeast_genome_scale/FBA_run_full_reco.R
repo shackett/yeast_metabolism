@@ -181,14 +181,6 @@ reactionMatches$pathway = sapply(reactionMatches$KEGGrxnID, function(x){
 
 write.table(reactionMatches, "./flux_cache/reactionPathways.tsv", sep = "\t", col.names = T, row.names = F, quote = F)
 
-### Determine which pathways are associated with a protein ###
-# Is this still used ?
-#kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv") # > generated from keggIDparser.py KEGG IDs relative to yeast gene name (1gene -> 1 KEGG id, multiple  mapping between KEGG and genes)
-#if(is.null(kegg_enzyme_dict$PATHWAY)){
-#  gene_pathways(kegg_enzyme_dict); kegg_enzyme_dict <- read.delim("../KEGGrxns/yeastNameDict.tsv")
-#}#generate a per-gene pathway annotation if one is not already generated
-####
-
 
 
 # favor flux through chosen central carbon metabolism pathways by reducing the L1 penalization of |v|
@@ -1231,7 +1223,8 @@ scatter_theme <- barplot_theme <- theme(text = element_text(size = 20, face = "b
   panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90), axis.line = element_blank(), strip.background = element_rect(fill = "cornsilk"), strip.text = element_text(colour = "blue1")) 
 
 
-ggplot(rxnsMelt, aes(x = factor(Condition), y = Flux)) + geom_point(size = 3, col = "coral1") +  facet_wrap( ~ Rxn, ncol = 2, scale = "free_y") + scatter_theme + scale_x_discrete("Condition") + scale_y_continuous("Flux Carried") + ggtitle("Flux through random reactions")
+ggplot(rxnsMelt, aes(x = factor(Condition), y = Flux)) + geom_point(size = 3, col = "coral1") +  facet_wrap( ~ Rxn, ncol = 2, scale = "free_y") + scatter_theme + scale_x_discrete("Condition") + scale_y_continuous("Flux Carried") + ggtitle("Flux through random reactions") +
+  expand_limits(y = 0)
 
 
 

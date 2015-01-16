@@ -67,41 +67,6 @@ rxn_enzyme_measured <- read.delim("./flux_cache/prot_matches.tsv")
 ### When considering reactions which carry zero flux under a subset of conditions, analyze reactions both when v = 0, and by removing conditions where v = 0 ### 
 rmCondList <- data.frame() # reactions which will be duplicated with some conditions rmoved
 
-# Test for strong overflow metabolism (that is more sensitive to mis-estimation) such as auxotrophy-driven overflow 
-# The removal of these conditions will later be tested by also adding them to rmCond
-
-library(broom)
-
-stdFluxMat <- flux_summary$total_flux_cast[,,'standardQP'] %>% t() %>% scale() %>% t()
-stdFluxMat.melt <- melt(stdFluxMat)
-colnames(stdFluxMat.melt) <- c("reaction", "condition", "stdFlux")
-
-flux_slopes <- tbl_df(stdFluxMat.melt) %>% mutate(reaction = as.character(reaction), condition = as.character(condition)) %>%
-  group_by(condition) %>% mutate(limitation = substr(condition, 1, 1), DR = as.numeric(substr(condition, 2, nchar(condition)))) %>%
-  group_by(reaction, limitation) %>% do(tidy(lm(stdFlux ~ DR, data = .))) %>% filter(term == "DR") %>% select(reaction, limitation, slope = estimate) %>%
-  ungroup()
-
-flux_slopes$slopeRatio <- sapply(1:nrow(flux_slopes), function(i){
-  lim_flux <- flux_slopes %>% slice(i) %>% select(slope)
-  nonlim_flux <- flux_slopes %>% filter(reaction == as.character(flux_slopes[i,'reaction']), limitation != as.character(flux_slopes[i,'limitation'])) %>% summarize(average = mean(slope))
-  as.numeric(lim_flux / nonlim_flux)
-})
-
-flux_slopes %>% arrange(slopeRatio) %>% head(20)
-
-
-
-df.flux_slopes <- as.data.frame(flux_slopes)
-
-
-flux_slopes %>% rowwise() %>% mutate(slope_ratio = slope / mean(df.flux_slopes[df.flux_slopes$reaction == reaction & df.flux_slopes$limitation != limitation, 'slope']))
-
-
-
-stdFluxMat.svd <- svd(stdFluxMat, nu = 4, nv = 4)
-stdFluxMat.projected <- stdFluxMat - (stdFluxMat.svd$u %*% diag(stdFluxMat.svd$d[1:4]) %*% t(stdFluxMat.svd$v))
-
-svd(stdFluxMat)
 
 # valid reactions have well-constrained, non-zero fluxes and measured enzymes (a reaction possessing a minimal complement of metabolites is enforced in reactionStructures.R -> rxnf"
 valid_rxns <- grep('r_[0-9]{4}', rownames(flux_summary$total_flux_cast), value = T) # valid flux
@@ -128,10 +93,19 @@ for(rxN in 1:length(valid_rxns)){
   
   #Add the rxns with lacking fluxes to the rmCondList
   if (any(rxFlux$standardQP == 0)){
-    rmCondList <- rbind(rmCondList ,data.frame(rxn = valid_rxns[rxN],
-                       cond = paste(rownames(rxFlux)[rxFlux$standardQP == 0],collapse=';'),
-                       source = 'zeroFluxes', nZero = sum(rxFlux$standardQP == 0)))
+    rmCondList <- rbind(rmCondList,
+                        data.frame(rxn = valid_rxns[rxN],
+                                   cond = paste(rownames(rxFlux)[rxFlux$standardQP == 0],collapse=';'),
+                                   source = 'zeroFluxes', nZero = sum(rxFlux$standardQP == 0)))
   }
+  # manually flagged orotate overflow reactions and test removal
+  if (valid_rxns[rxN] %in% c("r_0214", "r_0250", "r_0349", "r_0453", "r_4043")){
+    rmCondList <- rbind(rmCondList,
+                        data.frame(rxn = valid_rxns[rxN],
+                                   cond = paste(grep('^U', rownames(rxFlux), value = T), collapse = ';'),
+                                   source = 'overflow', nZero = length(grep('^U', rownames(rxFlux)))))
+  }
+  
   
   for (entry in idx){
     rxnList[[entry]]$reaction = flux_summary$IDs$Name[flux_summary$IDs$reactionID == valid_rxns[rxN]]
@@ -145,7 +119,7 @@ for(rxN in 1:length(valid_rxns)){
 # Apply the changes of rmCondList
 # add a copied entry without the mentioned conditions for all rows in the rm
 
-rmCondList <- rmCondList[rmCondList$nZero < 10,]
+rmCondList <- rmCondList[rmCondList$nZero < 10 & rmCondList$nZero > 2,]
 
 for (i in 1:nrow(rmCondList)){
   rxn <- rmCondList$rxn[i]
