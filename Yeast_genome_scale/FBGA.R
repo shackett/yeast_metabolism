@@ -654,12 +654,12 @@ for(arxn in reactionInfo$rMech){
     shiny_flux_data[[arxn]]$plotChoices$Hill <- hillPlot(run_rxn)
     }
   
-  reaction_properties <- reactionProperties()
-  reaction_plots <- reaction_properties$plots
+  reaction_properties <- reactionProperties() # Evaluate elasticities for each markov sample.  Join metabolite variation with elasticites
   
-  MLdata <- rbind(MLdata, reaction_plots$ML_summary)
+  MLdata <- rbind(MLdata, reaction_properties$ML_summary)
   ELdata[[arxn]] <- reaction_properties$EL_summary
   
+  reaction_plots <- reaction_properties$plots
   shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reactionPropertiesPlots(reaction_plots))
   
   trans_res <- transcriptional_responsiveness()
@@ -681,7 +681,7 @@ for(arxn in reactionInfo$rMech){
   
   if(which(reactionInfo$rMech == arxn) %% 10 == 0){
     print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
-    }
+  }
   
 }
 

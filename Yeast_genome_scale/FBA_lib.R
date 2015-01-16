@@ -1013,7 +1013,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   met_abund <- run_rxn$metabolites
   v_metab <- colnames(met_abund)[colSums(met_abund == 0) != n_c] # coerce metabolite abundances to a matrix
-  met_abund <- as.matrix(met_abund[,colSums(met_abund == 0) != n_c]) 
+  met_abund <- as.matrix(met_abund[,colSums(met_abund == 0) != n_c, drop = F]) 
   colnames(met_abund) <- v_metab
   
   enzyme_abund <- run_rxn$enzymes
@@ -1775,6 +1775,7 @@ reactionProperties <-  function(){
   require(ggplot2)
   require(scales) # for converting fractions to percent
   require(reshape2)
+  require(dplyr)
   
   ### Define and align experimental data ###
   
@@ -1931,27 +1932,31 @@ reactionProperties <-  function(){
   #WICSS <- apply(condSD^2, 2, sum)
   #OCSS <- apply((all_exp_species - rep(1,nrow(all_exp_species)) %*% t(apply(all_exp_species, 2, mean)))^2, 2, sum)
   
-  # weighting by sd of log abundances is similar to weighting by IQR
-  SDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(mcmc_elasticity)) 
+  # weighting by sd of log abundances is similar to weighting by IQR (with better stability)
+  # Across all conditions
+  aSDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(mcmc_elasticity)) 
+  # Across natural conditions
+  nSDweightedElasticity <- abs(mcmc_elasticity[grep('^[PCN]', rownames(mcmc_elasticity)),,]) *
+    array(rep(1, length(grep('^[PCN]', rownames(mcmc_elasticity)))) %*% t(apply(all_exp_species[grep('^[PCN]', rownames(mcmc_elasticity)),], 2, sd)), dim = c(length(grep('^[PCN]', rownames(mcmc_elasticity))), dim(mcmc_elasticity)[2:3])) 
   
-  we_melt <- data.table(melt(SDweightedElasticity))
+  we_melt <- rbind(tbl_df(melt(aSDweightedElasticity)) %>% mutate(conditions = "ALL"),
+                   tbl_df(melt(nSDweightedElasticity)) %>% mutate(conditions = "NATURAL"))
   
-  we_melt[,total_we := sum(value), by = c("condition", "markovSample")]
-  we_melt <- we_melt[total_we != 0,]
-  we_melt[,physiological_leverage := value/total_we,]
+  we_melt <- we_melt %>% group_by(condition, markovSample, conditions) %>% mutate(total_we = sum(value)) %>% filter(total_we != 0) %>%
+    mutate(physiological_leverage = value/total_we)
   
-  we_summary <- we_melt[,list(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
-                              UH = boxplot.stats(physiological_leverage)$stats[4], UB = boxplot.stats(physiological_leverage)$stats[5]), by = c("specie", "condition")]
-  we_summary$Limitation = factor(substr(we_summary$condition, 1, 1), levels = c("P", "C", "N", "L", "U"))
-  we_summary$DR = factor(sub('[A-Z]', '', we_summary$condition))
-  we_summary$condition <- factor(we_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% we_summary$condition])
+  we_summary <- we_melt %>% group_by(specie, condition, conditions) %>% summarize(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
+                                                                                  UH = boxplot.stats(physiological_leverage)$stats[4], UB = boxplot.stats(physiological_leverage)$stats[5])
+  we_summary <- we_summary %>% ungroup() %>% mutate(Limitation = factor(substr(condition, 1, 1), levels = c("P", "C", "N", "L", "U")),
+                                                    DR = factor(sub('[A-Z]', '', condition)),
+                                                    condition = factor(condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% condition]))
   
   output_plots$we_summary <- we_summary
   
   ### Summarize physiological leverage to look for general trends over reactions ###
   
-  ML_summary <- we_melt[,list("0.025" = quantile(physiological_leverage, probs = 0.025), "0.5" = quantile(physiological_leverage, probs = 0.5), 
-                              "0.975" = quantile(physiological_leverage, probs = 0.975)), by = c("specie", "condition")]
+  ML_summary <- we_melt %>% group_by(specie, condition, conditions) %>% summarize("0.025" = quantile(physiological_leverage, probs = 0.025), "0.5" = quantile(physiological_leverage, probs = 0.5), 
+                              "0.975" = quantile(physiological_leverage, probs = 0.975)) %>% ungroup()
   
   ML_summary$Type <- NA
   ML_summary$Type[ML_summary$specie %in% colnames(enzyme_abund)] <- "enzyme"
@@ -1961,7 +1966,7 @@ reactionProperties <-  function(){
   
   ML_summary$condition <- factor(ML_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% ML_summary$condition])
   
-  output_plots$ML_summary = ML_summary
+  output$ML_summary = ML_summary
   
   output$plots <- output_plots
   return(output)
@@ -1989,10 +1994,16 @@ reactionPropertiesPlots <- function(reaction_plots){
     geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
     scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Elasticity: "~ frac(rho~"F", rho~S)~frac("[S]","F")))
   
-  output_plots$"Metabolic Leverage" <- ggplot(reaction_plots$we_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
+  output_plots$"Metabolic Leverage (all)" <- ggplot(reaction_plots$we_summary %>% filter(conditions == "ALL"), aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
     geom_boxplot(stat = "identity") + expand_limits(y=c(0,1)) + boxplot_theme +
     scale_y_continuous("Metabolic Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
     scale_fill_discrete() + facet_wrap(~ specie, ncol = 2)
+  
+  output_plots$"Metabolic Leverage (natural)" <- ggplot(reaction_plots$we_summary  %>% filter(conditions == "NATURAL"), aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
+    geom_boxplot(stat = "identity") + expand_limits(y=c(0,1)) + boxplot_theme +
+    scale_y_continuous("Metabolic Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
+    scale_fill_discrete() + facet_wrap(~ specie, ncol = 2)
+  
   
   return(output_plots)
   
@@ -2001,6 +2012,7 @@ reactionPropertiesPlots <- function(reaction_plots){
 
 transcriptional_responsiveness <- function(){
   
+
   ### Generate a plot which compare enzyme levels to transcript levels across these conditons ###
   ### Also, relate expected change in flux to transcriptional control ###
   ### TR = R2fm * R2pt * ML
@@ -2042,7 +2054,7 @@ transcriptional_responsiveness <- function(){
       positive_summary[,PTcorr := positive_enzymes[names(positive_enzymes) == enzyme], by = "enzyme"]
       positive_summary[,specie := paste(group, enzyme, sep = "_")]
       
-      MLdata_subset <- reaction_plots$ML_summary
+      MLdata_subset <- reaction_properties$ML_summary %>% filter(conditions == "ALL") %>% as.data.frame() %>% data.table()
       MLdata_subset$specie <- as.character(MLdata_subset$specie)
       
       TR <- MLdata_subset[,list(q0.025 = get("0.025")*positive_summary$PTcorr[positive_summary$specie == specie]^2 * R2fm,
@@ -2063,7 +2075,9 @@ transcriptional_responsiveness <- function(){
       TRcomp_label <- TRcompliment[condition == "N0.16", list(condition = "N0.16", source = "mechanistic uncertainty", y = fraction[source == "total controllable"]+0.04), by = "specie"]
       TRcomp_label <- rbind(TRcomp_label, TRcompliment[condition == "N0.16", list(condition = "N0.16", source = "transcriptional uncertainty", y = sum(fraction[source %in% c("mechanistic uncertainty", "total controllable")])+0.04), by = "specie"])
       
-      TRplots$Plots$"Transcriptional Responsiveness" <- ggplot(data = TR, aes(x = condition)) + geom_bar(data = TRcompliment, aes(y = fraction, fill = source, alpha = alpha), stat = "bin") + facet_wrap(~specie) +
+      TRcompliment <- TRcompliment %>% tbl_df() %>% arrange(source)
+      
+      TRplots$Plots$"Transcriptional Responsiveness" <- ggplot(data = TR, aes(x = condition)) + geom_bar(data = TRcompliment, aes(y = fraction, fill = source, alpha = alpha), stat = "identity") + facet_wrap(~specie) +
         scale_alpha_identity("") + geom_pointrange(data = TR, aes(ymin = q0.025, y = q0.5, ymax = q0.975, color = limitation), size = 1) +
         geom_text(data = TRcomp_label, aes(label = source, y = y), size = 8) + ci_theme + scale_color_brewer("", palette = "Set1") +
         scale_y_continuous("Predicted Transcriptional Responsiveness", expand = c(0,0), labels = percent_format()) + scale_fill_brewer("Source of Departure", palette = "Set2") +
@@ -2073,7 +2087,7 @@ transcriptional_responsiveness <- function(){
       
     }
   }
-  
+
   #### Generate Plots comparing proteins and transcripts ####
   
   scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
