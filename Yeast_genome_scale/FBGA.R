@@ -872,7 +872,23 @@ ggsave("Figures/MM_reg_spearmanCorr.pdf", height = 12, width = 13)
 
 #library(stringr)
 
-metabolic_leverage_summary_plots("L0.05")
+#ML_natural_vs_all <- MLdata %>% dplyr::select(reaction, specie:conditions, median = contains('0.5')) %>% ungroup() %>% filter(grepl('^[PCN]', condition)) %>%
+#  group_by(specie, reaction, condition) %>%
+#  summarize(ALL = median[conditions == "ALL"], NAT = median[conditions == "NATURAL"])
+
+#ML_natural_vs_all <- ML_natural_vs_all %>% mutate(Diff = abs(ALL - NAT)) %>% group_by(specie, reaction) %>% summarize(diffSum = sum(Diff)) %>%
+#  mutate(rxID = substr(reaction, 1, 6))
+
+#ML_natural_vs_all_rxSummary <- ML_natural_vs_all %>% group_by(rxID, specie) %>% summarize(avg_diffSum = mean(diffSum), nrxns = length(diffSum)) %>% ungroup() %>% arrange(-avg_diffSum) %>% 
+#  group_by(rxID) %>% filter(nrxns == max(nrxns))
+
+#ML_natural_vs_all %>% ungroup() %>% arrange(-diffSum)
+
+MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))
+metabolic_leverage_summary_plots("P0.05")
+
+##### Associating metabolic leverage with transcription factors, thermodynamics ... #####
+
 
 # Look at the ML of enzymes to identify cases where:
 # A) Potential inducibility is high verus low
@@ -1022,6 +1038,8 @@ for(i in 1:nrow(TF_ML_assoc)){
   }else{
     refVec <- TF_direct_byrxn[rownames(TF_direct_byrxn) == TF_ML_assoc$TF[i],]
   }
+  if(length(unique(refVec)) == 1){next}
+  
   TF_ML_assoc$p[i] <- wilcox.test(ML_inducibility_summary$ML_mean[refVec == 1], ML_inducibility_summary$ML_mean[refVec == 0], alternative = "two.sided")$p.value
 }
 

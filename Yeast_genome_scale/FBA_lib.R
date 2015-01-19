@@ -2208,7 +2208,7 @@ metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   
   if(nutrient_cond == "median"){
     MLdata_reduced <- MLdata[, list(q0.5 = median(get("0.5"))), by = c("specie", "Type", "reaction")]
-  }else if(nutrient_cond %in% chemostatInfo$ChemostatCond){
+  }else if(nutrient_cond %in% unique(MLdata$condition)){
     MLdata_reduced <- MLdata[condition == nutrient_cond, list(q0.5 = get("0.5")), by = c("specie", "Type", "reaction")]
   }else{
     stop("invalid nutrient condition")
