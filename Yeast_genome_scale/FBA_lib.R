@@ -2761,6 +2761,11 @@ nameReformat <- function(names, totalChar){
 
 ########## Functions used for summarizing behavior of sets of reactions ############
 
+#res = 200
+#control_co = 0
+#discretize = T
+#dbin = 6
+
 color_simplex <- function(res = 100, control_co = 0.1, discretize = FALSE, dbin = 8){
   
   # generate a color profile that can be used to express a consensus color based upon the relative
@@ -2790,11 +2795,11 @@ color_simplex <- function(res = 100, control_co = 0.1, discretize = FALSE, dbin 
   control_colors <- control_colors[enzyme + allostery <= 1,]
   control_colors[,residual := round(1-allostery-enzyme, 4)]
   
-  #control_colors[,angle := ifelse(enzyme + allostery != 0, 120*allostery/(allostery+enzyme), 360)]
-  #control_colors[,angle := ifelse(enzyme + allostery != 0, 360 - 120*allostery/(allostery+enzyme), 360)]
-  #control_colors[,angle := ifelse(enzyme + allostery != 0, 240 + 120*allostery/(allostery+enzyme), 360)]
+  control_colors[,angle := ifelse(enzyme + allostery != 0, 120*allostery/(allostery+enzyme), 360)]
   #control_colors[,angle := ifelse(enzyme + allostery != 0, 0 + 240*allostery/(allostery+enzyme), 360)]
-  control_colors[,angle := ifelse(enzyme + allostery != 0, 230 + 140*allostery/(allostery+enzyme), 360)]
+  #control_colors[,angle := ifelse(enzyme + allostery != 0, 230 + 140*allostery/(allostery+enzyme), 360)]
+  control_colors[,angle := ifelse(enzyme + allostery != 0, 0 + 240*allostery/(allostery+enzyme), 360)]
+  
   
   if(discretize == F){
     control_colors$residual[control_colors$residual < 0.2] <- 0.2
@@ -2832,6 +2837,7 @@ color_simplex <- function(res = 100, control_co = 0.1, discretize = FALSE, dbin 
     #control_colors[,color := hcl(h = consensus_angle, c = 100, l = 100*sqrt(consensus_residual)),]
     control_colors$consensus_residual[control_colors$consensus_residual < 0.2] <- 0.2
     control_colors[,color := hcl(h = consensus_angle, c = 100, l = 100*consensus_residual),]
+    
     control_colors$color[control_colors$mag_bin == 1] <- "#FFFFFF"
     
     color_summary$Figure <- ggplot(control_colors, aes(x = enzyme, y = allostery, fill = color)) + geom_tile() + scale_fill_identity() +
@@ -2840,6 +2846,8 @@ color_simplex <- function(res = 100, control_co = 0.1, discretize = FALSE, dbin 
       geom_hline(yintercept = 0, size = 3) + geom_vline(xintercept = 0, size = 3) +
       geom_abline(data = data.frame(int = seq(1:dbin)/dbin, slope = rep(-1, dbin)), aes(intercept = seq(1:dbin)/dbin, slope = rep(-1, dbin)), size = 2) 
     
+    color_summary$Figure
+    
    }
   
   
@@ -2847,5 +2855,197 @@ color_simplex <- function(res = 100, control_co = 0.1, discretize = FALSE, dbin 
   
   return(color_summary)
 }
+
+
+
+
+
+color_ternary <- function(res = 100){
+  
+  # generate a color profile that can be used to express a consensus color based upon the relative
+  # value of 3 measures summing to one.
+  # res - how many bins divide the space into
+  # contorl_co - values less than contorl co will display as white
+  
+  
+  require(reshape2)
+  require(dplyr)
+  require(scales)
+  require(ggtern)
+  
+  angle2rad <- function(angle){angle / 180 * pi}
+  rad2angle <- function(rad){rad/pi * 180}
+  
+  
+  color_summary <- list()
+  
+  control_lattice <- matrix(NA, ncol = res+1, nrow = res+1)
+  rownames(control_lattice) <- seq(0,1,by = 1/res) # parts enzyme - red
+  colnames(control_lattice) <- seq(0,1,by = 1/res) # parts allostery - blue
+  
+  control_colors <- melt(control_lattice)
+  colnames(control_colors) <- c("enzyme", "allostery", "substrates")
+  
+  control_colors <- control_colors %>% tbl_df() %>% filter(enzyme + allostery <= 1) %>% mutate(substrates = round(1 - (allostery + enzyme), 4))
+  
+  # pair every point with the one above and to the right of it - these will translate into triangles in the ternary plot
+  
+  x_levels <- sort(unique(control_colors$allostery))
+  y_levels <- sort(unique(control_colors$enzyme))
+  
+  find_trios <- lapply(1:nrow(control_colors), function(i){
+    
+    # to generate a filled triangle - tile the big triangle with little triangle to upper R /\ and a little triangle to lower L \/
+    
+    query <- control_colors %>% slice(i) %>% as.data.frame()
+    query[,'position'] = "L"
+    query[,'group'] = i
+    
+    # define the point to the right and left of the queried point - one or both may not exist
+    
+    if(query[,'allostery'] == last(x_levels)){right = NULL}else{
+      
+      right = data.frame(enzyme = query$enzyme, allostery = x_levels[which(query[,'allostery'] == x_levels) + 1])
+      right[,'substrates'] = 1 - sum(right)
+      right[,'position'] = "R"
+      right[,'group'] = i
+      if(right[,'substrates'] < 0){right = NULL}
+      
+    }
+    
+    if(query[,'allostery'] == first(x_levels)){left = NULL}else{
+      
+      left = data.frame(enzyme = query$enzyme, allostery = x_levels[which(query[,'allostery'] == x_levels) - 1])
+      left[,'substrates'] = 1 - sum(left)
+      left[,'position'] = "L"
+      left[,'group'] = i
+      if(left[,'substrates'] < 0){left = NULL}
+      
+    }
+    
+    # define the point above and below the queried - one or both may not exist
+    
+    if(query[,'enzyme'] == last(y_levels)){top = NULL}else{
+      
+      top <- data.frame(enzyme = y_levels[which(query[,'enzyme'] == y_levels) + 1], allostery = query$allostery)
+      top[,'substrates'] = 1 - sum(top)
+      top[,'position'] = "T"
+      top[,'group'] = i
+      if(top[,'substrates'] < 0){top = NULL}
+      
+    }
+    
+    if(query[,'enzyme'] == first(y_levels)){bottom = NULL}else{
+      
+      bottom <- data.frame(enzyme = y_levels[which(query[,'enzyme'] == y_levels) - 1], allostery = query$allostery)
+      bottom[,'substrates'] = 1 - sum(bottom)
+      bottom[,'position'] = "B"
+      bottom[,'group'] = i
+      if(bottom[,'substrates'] < 0){bottom = NULL}
+      
+    }
+    
+    # define top triangle
+    
+    if(!is.null(top) & !is.null(right)){
+      
+      center = data.frame(enzyme = mean(c(top[,'enzyme'], query[,'enzyme'])), 
+                          allostery = mean(c(right[,'allostery'], query[,'allostery'])))
+      center[,'substrates'] = 1 - sum(center)
+      center[,'position'] = "CT"
+      center[,'group'] = i
+      
+      top_triangle <- rbind(query, top, right, center)
+      top_triangle[,'group'] = paste0(top_triangle[,'group'], 'T')
+      
+    }else{
+      top_triangle <- NULL
+    }
+      
+    
+    # define bottom triangle
+    
+    if(!is.null(bottom) & !is.null(left)){
+      
+      center = data.frame(enzyme = mean(c(bottom[,'enzyme'], query[,'enzyme'])), 
+                          allostery = mean(c(left[,'allostery'], query[,'allostery'])))
+      center[,'substrates'] = 1 - sum(center)
+      center[,'position'] = "CB"
+      center[,'group'] = i
+      
+      bottom_triangle <- rbind(query, bottom, left, center)
+      bottom_triangle[,'group'] = paste0(bottom_triangle[,'group'], 'B')
+      
+    }else{
+      bottom_triangle <- NULL
+    }
+    
+    return(rbind(top_triangle, bottom_triangle))
+    
+  })
+
+  control_colors <- do.call("rbind", find_trios) %>% tbl_df()
+  
+  if(!all(round(control_colors$enzyme + control_colors$allostery + control_colors$substrates, 3) == 1)){stop("all entries don't sum to unity")}
+  
+  
+  # translate to ternary coordinate system - equilateral triangle
+  control_colors <- control_colors %>% mutate(x = (1/2)*(2*allostery + enzyme) / (allostery + enzyme + substrates),
+                                              y = sqrt(3)/2 * enzyme*(allostery + enzyme + substrates))
+  
+  # Use centers to define color-scheme
+  center_colors <- control_colors %>% group_by(group) %>% filter(position %in% c("CT", "CB"))
+  center_colors <- center_colors %>% rowwise() %>% mutate(color_purity = max(enzyme, allostery, substrates) - min(enzyme, allostery, substrates)) %>%
+    select(group, x, y, color_purity)
+  
+  # determine angle relative to center for hue
+  ternary_center <- c(x = 0.5, y = angle2rad(30) * 0.5)
+  
+  center_colors <- center_colors %>% mutate(x_centered = x - ternary_center['x'], y_centered = y - ternary_center['y'])
+  center_colors <- center_colors %>% mutate(angle = rad2angle(atan2(x = x_centered, y = y_centered )))
+  center_colors <- center_colors %>% mutate(angle = ifelse(angle < 0, angle + 360, angle))
+  
+  # establish color scheme
+  #center_colors <- center_colors %>% mutate(color = hcl(h = angle - 90, c = 0 + 200*color_purity, l = 40 + 40 * color_purity, fixup = T))
+  center_colors <- center_colors %>% mutate(color = hcl(h = angle - 90, c = 0 + 140*color_purity, l = 70 - 45 * color_purity, fixup = T))
+  
+  # add colors back to defining polygons
+  control_colors <- control_colors %>% filter(!(position %in% c("CT", "CB"))) %>% left_join((center_colors %>% select(group, color)))
+  
+  
+  color_ternary_theme <- theme(text = element_blank(), panel.background = element_rect(fill = "white"), 
+                               legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
+                               panel.grid.major = element_blank(), axis.line = element_blank(), axis.ticks = element_blank())
+  
+  vertex_label = data.frame(x = c(0.05, 0.6, 0.95), y = c(-0.125, sqrt(3)/2 + 0.05, -0.1), label = c('Substrates &\nProducts', 'Allostery', 'Enzymatic'), 
+                            color = c(control_colors$color[control_colors$substrates == 1], control_colors$color[control_colors$enzyme == 1], control_colors$color[control_colors$allostery == 1]))
+  
+  ternary_boundary <- data.frame(x = c(0, 0.5, 1), y = c(0, sqrt(3)/2, 0))
+  
+  ternary_text <- rbind(data.frame(x = c(0, 0.25, 0.5, 0.75, 1), y = rep(-0.035, 5), text = c("0%", "25%", "50%", "75%", "100%"), angle = 0),
+                        data.frame(x = seq(0,1, by = 0.25) * cos(angle2rad(60)) + cos(angle2rad(150))*0.035,
+                                   y = seq(0,1, by = 0.25) * sin(angle2rad(60)) + sin(angle2rad(150))*0.035, text = c("0%", "25%", "50%", "75%", "100%"), angle = 60))
+  
+  ternary_text <- rbind(ternary_text, 
+                        data.frame(x = c(0.5, 0.25 + cos(angle2rad(150))*0.1), y = c(-0.1, sin(angle2rad(60))*0.5 + sin(angle2rad(150))*0.1), 
+                                   text = c("Enzymatic Control", "Allosteric Control"), angle = c(0,60))
+  )
+  
+  ternary_ticks <- rbind(data.frame(x1 = seq(0,1,by=0.25), y1 = 0, x2 = seq(0,1,by=0.25), y2 = -0.0125),
+  data.frame(x1 = seq(0,1,by=0.25)*cos(angle2rad(60)), y1 = seq(0,1,by=0.25)*sin(angle2rad(60)), 
+             x2 = seq(0,1,by=0.25)*cos(angle2rad(60)) + cos(angle2rad(150))*0.0125, y2 = seq(0,1,by=0.25)*sin(angle2rad(60)) + sin(angle2rad(150))*0.0125))
+  
+  color_summary$Figure <- ggplot() + geom_polygon(data = control_colors, aes(x = x, y = y, group = group, fill = color, color = color)) +  color_ternary_theme +
+    geom_text(data = vertex_label, aes(x = x, y = y, label = label, color = color), size = 7) +
+    geom_polygon(data = ternary_boundary, aes(x = x, y = y), color = "BLACK", fill = NA, size = 1) +
+    geom_text(data = ternary_text, aes(x = x, y = y, label = text, angle = angle), color = "BLACK", size = 7) + 
+    geom_segment(data = ternary_ticks, aes(x = x1, y = y1, xend = x2, yend = y2), size = 1) +
+    scale_fill_identity() + scale_color_identity() + scale_size_identity()
+  
+  color_summary$Table <- control_colors %>% select(enzyme, allostery, substrates, color)
+  
+  return(color_summary)
+}
+
 
   
