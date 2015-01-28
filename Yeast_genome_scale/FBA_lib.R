@@ -1939,15 +1939,15 @@ reactionProperties <-  function(){
   nSDweightedElasticity <- abs(mcmc_elasticity[grep('^[PCN]', rownames(mcmc_elasticity)),,]) *
     array(rep(1, length(grep('^[PCN]', rownames(mcmc_elasticity)))) %*% t(apply(all_exp_species[grep('^[PCN]', rownames(mcmc_elasticity)),], 2, sd)), dim = c(length(grep('^[PCN]', rownames(mcmc_elasticity))), dim(mcmc_elasticity)[2:3])) 
   
-  we_melt <- rbind(tbl_df(melt(aSDweightedElasticity)) %>% mutate(conditions = "ALL"),
-                   tbl_df(melt(nSDweightedElasticity)) %>% mutate(conditions = "NATURAL"))
+  we_melt <- rbind(tbl_df(melt(aSDweightedElasticity)) %>% dplyr::mutate(conditions = "ALL"),
+                   tbl_df(melt(nSDweightedElasticity)) %>% dplyr::mutate(conditions = "NATURAL"))
   
-  we_melt <- we_melt %>% group_by(condition, markovSample, conditions) %>% mutate(total_we = sum(value)) %>% filter(total_we != 0) %>%
-    mutate(physiological_leverage = value/total_we)
+  we_melt <- we_melt %>% group_by(condition, markovSample, conditions) %>% dplyr::mutate(total_we = sum(value)) %>% filter(total_we != 0) %>%
+    dplyr::mutate(physiological_leverage = value/total_we)
   
-  we_summary <- we_melt %>% group_by(specie, condition, conditions) %>% summarize(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
+  we_summary <- we_melt %>% group_by(specie, condition, conditions) %>% dplyr::summarize(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
                                                                                   UH = boxplot.stats(physiological_leverage)$stats[4], UB = boxplot.stats(physiological_leverage)$stats[5])
-  we_summary <- we_summary %>% ungroup() %>% mutate(Limitation = factor(substr(condition, 1, 1), levels = c("P", "C", "N", "L", "U")),
+  we_summary <- we_summary %>% ungroup() %>% dplyr::mutate(Limitation = factor(substr(condition, 1, 1), levels = c("P", "C", "N", "L", "U")),
                                                     DR = factor(sub('[A-Z]', '', condition)),
                                                     condition = factor(condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% condition]))
   
@@ -1955,7 +1955,7 @@ reactionProperties <-  function(){
   
   ### Summarize physiological leverage to look for general trends over reactions ###
   
-  ML_summary <- we_melt %>% group_by(specie, condition, conditions) %>% summarize("0.025" = quantile(physiological_leverage, probs = 0.025), "0.5" = quantile(physiological_leverage, probs = 0.5), 
+  ML_summary <- we_melt %>% group_by(specie, condition, conditions) %>% dplyr::summarize("0.025" = quantile(physiological_leverage, probs = 0.025), "0.5" = quantile(physiological_leverage, probs = 0.5), 
                               "0.975" = quantile(physiological_leverage, probs = 0.975)) %>% ungroup()
   
   ML_summary$Type <- NA
@@ -2886,7 +2886,7 @@ color_ternary <- function(res = 100){
   control_colors <- melt(control_lattice)
   colnames(control_colors) <- c("enzyme", "allostery", "substrates")
   
-  control_colors <- control_colors %>% tbl_df() %>% filter(enzyme + allostery <= 1) %>% mutate(substrates = round(1 - (allostery + enzyme), 4))
+  control_colors <- control_colors %>% tbl_df() %>% filter(enzyme + allostery <= 1) %>% dplyr::mutate(substrates = round(1 - (allostery + enzyme), 4))
   
   # pair every point with the one above and to the right of it - these will translate into triangles in the ternary plot
   
@@ -2897,7 +2897,7 @@ color_ternary <- function(res = 100){
     
     # to generate a filled triangle - tile the big triangle with little triangle to upper R /\ and a little triangle to lower L \/
     
-    query <- control_colors %>% slice(i) %>% as.data.frame()
+    query <- control_colors %>% dplyr::slice(i) %>% as.data.frame()
     query[,'position'] = "L"
     query[,'group'] = i
     
@@ -2990,34 +2990,34 @@ color_ternary <- function(res = 100){
   
   
   # translate to ternary coordinate system - equilateral triangle
-  control_colors <- control_colors %>% mutate(x = (1/2)*(2*allostery + enzyme) / (allostery + enzyme + substrates),
+  control_colors <- control_colors %>% dplyr::mutate(x = (1/2)*(2*allostery + enzyme) / (allostery + enzyme + substrates),
                                               y = sqrt(3)/2 * enzyme*(allostery + enzyme + substrates))
   
   # Use centers to define color-scheme
   center_colors <- control_colors %>% group_by(group) %>% filter(position %in% c("CT", "CB"))
-  center_colors <- center_colors %>% rowwise() %>% mutate(color_purity = max(enzyme, allostery, substrates) - min(enzyme, allostery, substrates)) %>%
-    select(group, x, y, color_purity)
+  center_colors <- center_colors %>% rowwise() %>% dplyr::mutate(color_purity = max(enzyme, allostery, substrates) - min(enzyme, allostery, substrates)) %>%
+    dplyr::select(group, x, y, color_purity)
   
   # determine angle relative to center for hue
-  ternary_center <- c(x = 0.5, y = angle2rad(30) * 0.5)
+  ternary_center <- c(x = 0.5, y = sin(angle2rad(30)) * 0.5)
   
-  center_colors <- center_colors %>% mutate(x_centered = x - ternary_center['x'], y_centered = y - ternary_center['y'])
-  center_colors <- center_colors %>% mutate(angle = rad2angle(atan2(x = x_centered, y = y_centered )))
-  center_colors <- center_colors %>% mutate(angle = ifelse(angle < 0, angle + 360, angle))
+  center_colors <- center_colors %>% dplyr::mutate(x_centered = x - ternary_center['x'], y_centered = y - ternary_center['y'])
+  center_colors <- center_colors %>% dplyr::mutate(angle = rad2angle(atan2(x = x_centered, y = y_centered )))
+  center_colors <- center_colors %>% dplyr::mutate(angle = ifelse(angle < 0, angle + 360, angle))
   
   # establish color scheme
-  #center_colors <- center_colors %>% mutate(color = hcl(h = angle - 90, c = 0 + 200*color_purity, l = 40 + 40 * color_purity, fixup = T))
-  center_colors <- center_colors %>% mutate(color = hcl(h = angle - 90, c = 0 + 140*color_purity, l = 70 - 45 * color_purity, fixup = T))
+  #center_colors <- center_colors %>% dplyr::mutate(color = hcl(h = angle - 90, c = 0 + 200*color_purity, l = 40 + 40 * color_purity, fixup = T))
+  center_colors <- center_colors %>% dplyr::mutate(color = hcl(h = angle - 90, c = 0 + 140*color_purity, l = 70 - 45 * color_purity, fixup = T))
   
   # add colors back to defining polygons
-  control_colors <- control_colors %>% filter(!(position %in% c("CT", "CB"))) %>% left_join((center_colors %>% select(group, color)))
+  control_colors <- control_colors %>% filter(!(position %in% c("CT", "CB"))) %>% left_join((center_colors %>% dplyr::select(group, color)))
   
   
   color_ternary_theme <- theme(text = element_blank(), panel.background = element_rect(fill = "white"), 
                                legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
                                panel.grid.major = element_blank(), axis.line = element_blank(), axis.ticks = element_blank())
   
-  vertex_label = data.frame(x = c(0.05, 0.6, 0.95), y = c(-0.125, sqrt(3)/2 + 0.05, -0.1), label = c('Substrates &\nProducts', 'Allostery', 'Enzymatic'), 
+  vertex_label = data.frame(x = c(0.05, 0.6, 0.95), y = c(-0.125, sqrt(3)/2 + 0.05, -0.1), label = c('Substrates &\nProducts', 'Enzymes', 'Allostery'), 
                             color = c(control_colors$color[control_colors$substrates == 1], control_colors$color[control_colors$enzyme == 1], control_colors$color[control_colors$allostery == 1]))
   
   ternary_boundary <- data.frame(x = c(0, 0.5, 1), y = c(0, sqrt(3)/2, 0))
@@ -3028,7 +3028,7 @@ color_ternary <- function(res = 100){
   
   ternary_text <- rbind(ternary_text, 
                         data.frame(x = c(0.5, 0.25 + cos(angle2rad(150))*0.1), y = c(-0.1, sin(angle2rad(60))*0.5 + sin(angle2rad(150))*0.1), 
-                                   text = c("Enzymatic Control", "Allosteric Control"), angle = c(0,60))
+                                   text = c("Allosteric Control", "Enzymatic Control"), angle = c(0,60))
   )
   
   ternary_ticks <- rbind(data.frame(x1 = seq(0,1,by=0.25), y1 = 0, x2 = seq(0,1,by=0.25), y2 = -0.0125),
@@ -3042,7 +3042,7 @@ color_ternary <- function(res = 100){
     geom_segment(data = ternary_ticks, aes(x = x1, y = y1, xend = x2, yend = y2), size = 1) +
     scale_fill_identity() + scale_color_identity() + scale_size_identity()
   
-  color_summary$Table <- control_colors %>% select(enzyme, allostery, substrates, color)
+  color_summary$Table <- control_colors %>% dplyr::select(enzyme, allostery, substrates, color)
   
   return(color_summary)
 }

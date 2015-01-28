@@ -105,6 +105,13 @@ for(rxN in 1:length(valid_rxns)){
                                    cond = paste(grep('^U', rownames(rxFlux), value = T), collapse = ';'),
                                    source = 'overflow', nZero = length(grep('^U', rownames(rxFlux)))))
   }
+  # manually flagged leucine dysregulated
+  if (valid_rxns[rxN] %in% c("r_0096", "r_0097", "r_0352", "r_669", "r_0816")){
+    rmCondList <- rbind(rmCondList,
+                        data.frame(rxn = valid_rxns[rxN],
+                                   cond = paste(grep('^L', rownames(rxFlux), value = T), collapse = ';'),
+                                   source = 'dysregulation', nZero = length(grep('^L', rownames(rxFlux)))))
+  }
   
   
   for (entry in idx){
@@ -136,8 +143,6 @@ for (i in 1:nrow(rmCondList)){
     
     }
 }
-
-
 
 
 
@@ -733,14 +738,14 @@ reversibleRx <- read.table("companionFiles/reversibleRx.tsv", header = T)
 ## A) Contain all substrates
 ## B) RM is well-fit despite missing substrates
 
-RMMrxns <- reactionInfo$rMech[reactionInfo$modification == ""]
+RMMrxns <- reactionInfo$rMech[reactionInfo$modification %in% c("rmCond", "")]
 
 load("paramOptim.Rdata")
 measure_exception <- c("H+", "H2O")
 validRxnA <- sapply(rxnList_form[names(rxnList_form) %in% RMMrxns], function(x){
-  if(all(x$standardQP > 0)){
+  if(all(x$flux$standardQP >= 0)){
     substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi < 0], names(x$originMet))]
-  }else if(all(x$standardQP < 0)){
+  }else if(all(x$flux$standardQP <= 0)){
     substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi > 0], names(x$originMet))]
   }else{
     substrates <- x$originMet
@@ -752,7 +757,7 @@ validRxnA <- sapply(rxnList_form[names(rxnList_form) %in% RMMrxns], function(x){
 
 validRxnB <- rxn_fits$parSpearman[chmatch(RMMrxns, rxn_fits$rxn)] > 0.6
 
-valid_rxns <- substr(RMMrxns[validRxnA | validRxnB], 1, 6)
+valid_rxns <- substr(RMMrxns[validRxnA | validRxnB], 1, 6) %>% unique()
 rmCond_rxns <- unique(reactionInfo$reaction[grep('rmCond', reactionInfo$modification)]) # reactions which carry zero flux under some conditions - consider only non-zero reactions
 
 optimal_rxn_form <- sapply(valid_rxns, function(x){
@@ -858,7 +863,7 @@ spearman_MMandReg$row <- 1:nrow(spearman_MMandReg)
 spearman_MMandReg <- spearman_MMandReg[spearman_MMandReg[, row[which.max(spearman)], by = "reaction"]$V1,]
 spearman_MMandReg <- spearman_MMandReg[spearman > 0,]
 setkey(spearman_MMandReg, "spearman")
-spearman_MMandReg$Type <- ifelse(spearman_MMandReg$modification == "", "rMM", "regulator")
+spearman_MMandReg$Type <- ifelse(spearman_MMandReg$modification %in% c("", "rmCond"), "rMM", "regulator")
 
 spearman_MMandReg$reaction <- factor(spearman_MMandReg$reaction, levels = spearman_MMandReg$reaction)
 
@@ -867,6 +872,53 @@ ggplot() + geom_bar(data = spearman_MMandReg , aes(x = reaction, y = spearman, f
   scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_brewer("", palette = "Set1", label = c("Allosteric Regulator", "Reversible Michaelis-Menten")) +
   ggtitle('Correlation between measured and predicted flux') + expand_limits(y = c(0,1))
 ggsave("Figures/MM_reg_spearmanCorr.pdf", height = 12, width = 13)
+
+##
+
+spearman_MMandReg <- data.frame(reactionInfo[,c('reaction', 'modification', 'Qvalue')], spearman = rxn_fits[,'parSpearman']) %>% tbl_df()
+spearman_MMandReg <- spearman_MMandReg %>% filter(!grepl('t_metX', modification)) %>% filter(is.na(Qvalue) | Qvalue < 0.1)
+spearman_MMandReg <- spearman_MMandReg %>% filter(reaction %in% valid_rxns)
+spearman_MMandReg <- spearman_MMandReg %>% left_join(spearman_MMandReg %>% group_by(reaction) %>% dplyr::summarize(rmCond_reaction = ifelse(sum(modification == 'rmCond') , T, F)))
+
+rmCond_sets <- spearman_MMandReg %>% ungroup() %>% filter(grepl('rmCond', modification)) %>% dplyr::select(reaction, modification)
+# Take the rmCond reactions when they exist and the normal reactions otherwise
+
+spearman_MMandReg <- rbind(spearman_MMandReg %>% filter(rmCond_reaction == F),
+spearman_MMandReg %>% filter(rmCond_reaction == T) %>% inner_join(rmCond_sets))
+
+best_reg_form <- spearman_MMandReg %>% group_by(reaction) %>% dplyr::summarize(modification = modification[which.min(Qvalue)][1]) %>%
+  filter(!is.na(modification))
+
+select_spearman_MMandReg <- rbind(spearman_MMandReg %>% filter(modification %in% c("", "rmCond")),
+                                  spearman_MMandReg %>% inner_join(best_reg_form))
+
+select_spearman_MMandReg <- select_spearman_MMandReg %>% dplyr::mutate(regulator = ifelse(!(modification %in% c("", "rmCond")), T, F)) %>%
+  dplyr::select(reaction, spearman, regulator)
+
+select_spearman_MMandReg <- select_spearman_MMandReg %>% mutate(rxName = paste0(reaction, ifelse(regulator, "-reg", "-rm"))) %>%
+  group_by(reaction) %>% dplyr::mutate(maxSpear = max(spearman)) %>% ungroup() %>% dplyr::arrange(maxSpear) %>%
+  mutate(rxName = factor(rxName, levels = rxName))
+
+all_neg_reactions <- select_spearman_MMandReg %>% group_by(reaction) %>% dplyr::summarize(npos = length(spearman[spearman > 0])) %>% filter(npos == 0)
+
+select_spearman_MMandReg <- select_spearman_MMandReg %>% filter(!(reaction %in% all_neg_reactions$reaction))
+
+barplot_theme_nox <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+                       panel.background = element_rect(fill = "gray92"), legend.position = "top", 
+                       axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black"),
+                       axis.text = element_text(color = "black"), axis.text.x = element_blank(),
+                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
+                       )
+
+ggplot(select_spearman_MMandReg, aes(x = rxName, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "BLACK", width = 0.85) +
+  barplot_theme_nox + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
+  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("skyblue2", "orangered1"), breaks = c(T, F), label = c("Metabolite Regulator", "Reversible Michaelis-Menten")) +
+  ggtitle('Correlation between measured and predicted flux') + expand_limits(y = c(0,1))
+
+ggsave("Figures/MM_with_reg_spearman.pdf", height = 8, width = 12)
+
+  
 
 ##### Generate figure summarizing metabolic leverage for a condition #####
 
@@ -886,6 +938,25 @@ ggsave("Figures/MM_reg_spearmanCorr.pdf", height = 12, width = 13)
 
 MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))
 metabolic_leverage_summary_plots("P0.05")
+
+
+##### Replotting a few reactions for figures #####
+
+# TPI - michaelis-menten-kinetics
+
+
+
+
+# PyK - comparison of michaelis-menten kinetics with non-significant and significant regulation
+
+
+
+
+# ORTcase - comparsion of michaelis-menten kinetics and 
+
+
+
+
 
 ##### Associating metabolic leverage with transcription factors, thermodynamics ... #####
 
@@ -1096,18 +1167,26 @@ ML_rxn_summary$genes <- ML_inducibility_summary$genes[chmatch(ML_rxn_summary$rea
 
 setkeyv(ML_rxn_summary, "rxn_metabolite")
 
-color_key <- color_simplex(200, 0, T, 6)
+color_key <- color_ternary(100)
+#color_key <- color_simplex(200, 0, T, 6)
 
 color_index <- mapply(function(x,y){
   which.min(abs(color_key$Table$enzyme - x) + abs(color_key$Table$allostery - y))
 }, x = ML_rxn_summary$enzyme, y = ML_rxn_summary$regulator)
 
-ML_rxn_summary <- cbind(ML_rxn_summary, color_key$Table[color_index, "color", with = F])
+ML_rxn_summary <- ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(color_index) %>% dplyr::select(color))
+
+ML_rxn_ternaryPoints <- ML_rxn_summary %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
+                                              y = sqrt(3)/2 * enzyme*(regulator + enzyme + rxn_metabolite))
+
+color_key$Figure <- color_key$Figure + 
+  geom_point(data = ML_rxn_ternaryPoints, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE")
 
 #color_key$Figure + geom_point(data = ML_rxn_summary, aes(x = enzyme, y = regulator), color = "yellow")
 
 #plot(1:45, 1:45, col = ML_rxn_summary$color, pch = 16, cex = 2)
-ggsave("Figures/MLcolorKey.pdf", color_key$Figure, height = 7, width = 7)
+ggsave("Figures/MLcolorKey.pdf", color_key$Figure, height = 9.1, width = 9)
 
 ML_rxn_summary$reaction_info <- reactionInfo$FullName[chmatch(ML_rxn_summary$reaction, reactionInfo$rMech)]
 
