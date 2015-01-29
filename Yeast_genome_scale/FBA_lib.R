@@ -1003,11 +1003,10 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   output_plots <- list()
   
-  scatter_theme <- theme(text = element_text(size = 50, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+  scatter_theme <- theme(text = element_text(size = 50, face = "bold"), title = element_text(size = 40, face = "bold"), panel.background = element_rect(fill = "azure"), 
       panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
       legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"))
 
-  
   flux <- run_rxn$flux
   n_c <- nrow(flux)
   
@@ -1037,17 +1036,17 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   flux_plot_condLabel <- flux_plot_FBA[,list(x = DR[which.max(DR)], y = FLUX[which.max(DR)]), by = condition]
   
   output_plots$"FBA flux" <- ggplot() + geom_hline(y = 0, size = 2) + scatter_theme +
-    geom_path(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition), size = 2) +
+    geom_path(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition, group = condition), size = 2) +
     geom_linerange(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition, ymin = LB, ymax = UB), size = 2) + 
-    geom_point(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition), size = sqrt(flux_plot_FBA$DR)*16) +
+    geom_point(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition, size = sqrt(DR)*16)) +
     geom_text(data = flux_plot_condLabel, aes(x = x, y = y, label = condition, family = "mono", fontface = "bold"), color = "black") +
-    scale_size_identity() + scale_color_brewer("Limitation", palette = "Set1") + ggtitle("Flux determined using FBA") +
+    scale_size_identity() + scale_color_brewer(guide = "none", palette = "Set1") + ggtitle("Flux determined using FBA") +
     scale_y_continuous("Flux Carried", limits = flux_range)
   
   
   #### Comparision of parametric and FBA fit ####
   
-  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), 
                     panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
                     legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
   
@@ -1061,7 +1060,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   output_plots$"Flux comparison" <- ggplot() + geom_hline(y = 0, size = 2) + geom_pointrange(data = flux_plot_comp, aes(x = condName, y = FLUX, ymin = LB, ymax = UB, col = factor(METHOD)), size = 1.5, alpha = 0.8) +
     geom_text(data = flux_plot_header, aes(x = x, y = y, label = label, col = factor(METHOD)), size = 10, hjust = 0) +
-    ci_theme + scale_color_brewer("Method", palette = "Set1") +
+    ci_theme + scale_color_brewer("Method", guide = "none", palette = "Set1") +
     scale_y_continuous("Relative Flux", limits = flux_range) + scale_x_discrete("Conditions")
   
   
@@ -1249,7 +1248,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), 
                     panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
-                    legend.position = "none", axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90),
+                    axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90),
                     panel.margin = unit(1, "lines"))
   
   output_plots$"Flux and species" <- ggplot() + geom_path(data = all_changes, aes(x = condition, y = RA, col = variable, group = pathGroup), size = 2, alpha = 1) +
@@ -1259,7 +1258,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     geom_text(data = variable_labels, aes(x = x, y = y, col = variable, label = label), hjust = 0) +
     geom_vline(x = 0) + geom_hline(y = 0) +
     facet_grid(Pane ~ ., scale = "free_y") +
-    scale_color_manual(labels = variable_colors$variable, values = variable_colors$color) +
+    scale_color_manual(guide = "none", labels = variable_colors$variable, values = variable_colors$color) +
     ci_theme + scale_size_identity() +
     scale_y_continuous("Concentration and Flux", expand = c(0,0)) + scale_x_discrete("Conditions") + expand_limits(y = 0)
   
@@ -1295,7 +1294,7 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   require(reshape2)
   require(ggplot2)
   
-  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "none", 
+  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
                          panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
                          axis.text = element_text(color = "black"))
   
@@ -1335,7 +1334,7 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   mle_info <- data.frame(PCconds, value = c(mle_RA))
   
   hypoMetPlots$"Hypothetical Regulator Trend" <- ggplot() + geom_violin(data = PCreco_melt, aes(x = name, y = value, fill = factor(Limitation))) + scale_y_continuous(expression(log[2]~"Relative Concentration")) +
-    geom_point(data = mle_info, aes(x = name, y = value), size = 3, shape = 21, color = "BLACK", fill = "RED") + scale_fill_brewer(palette = "Pastel1") +
+    geom_point(data = mle_info, aes(x = name, y = value), size = 3, shape = 21, color = "BLACK", fill = "RED") + scale_fill_brewer(guide = "none", palette = "Pastel1") +
     ggtitle("Hypothetical Regulator Trend") + boxplot_theme + scale_x_discrete("Nutrient Condition")
   
   
@@ -1947,7 +1946,7 @@ reactionProperties <-  function(){
   
   we_summary <- we_melt %>% group_by(specie, condition, conditions) %>% dplyr::summarize(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
                                                                                   UH = boxplot.stats(physiological_leverage)$stats[4], UB = boxplot.stats(physiological_leverage)$stats[5])
-  we_summary <- we_summary %>% ungroup() %>% dplyr::mutate(Limitation = factor(substr(condition, 1, 1), levels = c("P", "C", "N", "L", "U")),
+  we_summary <- we_summary %>% ungroup() %>% mutate(Limitation = factor(substr(condition, 1, 1), levels = c("P", "C", "N", "L", "U")),
                                                     DR = factor(sub('[A-Z]', '', condition)),
                                                     condition = factor(condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% condition]))
   
@@ -1979,7 +1978,7 @@ reactionPropertiesPlots <- function(reaction_plots){
   
   # Plot output from reactionProperties.  This was split into two functions, because when trying to return plots from reactionProperties, MASSIVE pdfs were generated without a clear cause #
   
-  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), legend.position = "none", 
+  boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
                          panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
                          axis.text = element_text(color = "black"), strip.background = element_rect(fill = "cornsilk1"), strip.text = element_text(color = "darkblue"))
   
@@ -2023,7 +2022,7 @@ transcriptional_responsiveness <- function(){
   require(ggplot2)
   require(data.table)
   
-  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), 
                     panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
                     legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
   
@@ -2079,8 +2078,8 @@ transcriptional_responsiveness <- function(){
       
       TRplots$Plots$"Transcriptional Responsiveness" <- ggplot(data = TR, aes(x = condition)) + geom_bar(data = TRcompliment, aes(y = fraction, fill = source, alpha = alpha), stat = "identity") + facet_wrap(~specie) +
         scale_alpha_identity("") + geom_pointrange(data = TR, aes(ymin = q0.025, y = q0.5, ymax = q0.975, color = limitation), size = 1) +
-        geom_text(data = TRcomp_label, aes(label = source, y = y), size = 8) + ci_theme + scale_color_brewer("", palette = "Set1") +
-        scale_y_continuous("Predicted Transcriptional Responsiveness", expand = c(0,0), labels = percent_format()) + scale_fill_brewer("Source of Departure", palette = "Set2") +
+        geom_text(data = TRcomp_label, aes(label = source, y = y), size = 8) + ci_theme + scale_color_brewer("", guide = "none", palette = "Set1") +
+        scale_y_continuous("Predicted Transcriptional Responsiveness", expand = c(0,0), labels = percent_format()) + scale_fill_brewer("Source of Departure", guide = "none", palette = "Set2") +
         ggtitle("Flux responsiveness to transcriptional changes") + scale_x_discrete("Nutrient Condition")
       
       TRplots$TR <- TR
@@ -2090,7 +2089,7 @@ transcriptional_responsiveness <- function(){
 
   #### Generate Plots comparing proteins and transcripts ####
   
-  scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), legend.position = "none", 
+  scatter_theme <- theme(text = element_text(size = 23, face = "bold", color = "black"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), 
                          panel.grid.minor = element_blank(), panel.grid.major = element_blank(), axis.ticks = element_line(colour = "pink"), strip.background = element_rect(fill = "cyan"),
                          legend.text = element_text(size = 20, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
   
@@ -2109,7 +2108,7 @@ transcriptional_responsiveness <- function(){
     
     TRplots$Plots$"Enzyme and Transcript Levels" <- ggplot(PTdt, aes(x = Condition, y = get("Relative Abundance"), color = Limitation, group = Limitation)) + geom_path(size = 2) + geom_point(size = 5) +
       facet_grid(Specie ~ Gene) + scatter_theme +
-      scale_color_brewer("", palette = "Set1") + scale_y_continuous(expression(log[2]~" Relative Abundance")) +
+      scale_color_brewer("", guide = "none", palette = "Set1") + scale_y_continuous(expression(log[2]~" Relative Abundance")) +
       scale_x_discrete("Nutrient Condition") + ggtitle('Comparison of transcripts, \n enzymes and their ratio')
     
   }

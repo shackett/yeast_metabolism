@@ -536,7 +536,7 @@ for(rxN in grep('rm$', names(rxnList_form))){
   GENEannot <- rxnList_form[[rxN]]$geneInfo
   if(!(all(is.na(GENEannot)))){
     GENEannot$PATHWAY <- sub('[_]{0,2}Metabolic pathways', '', GENEannot$PATHWAY)
-    if(GENEannot$PATHWAY == ""){
+    if(all(GENEannot$PATHWAY == "")){
       GENEannot <- NA
       }
     }
@@ -547,16 +547,17 @@ for(rxN in grep('rm$', names(rxnList_form))){
       RELannot <- NA
     }else{
       RELannot <- GENEannot$PATHWAY
-      if(RELannot == "" |is.na(RELannot)){
-      print(rxN)  
+      if(all(RELannot == "") |all(is.na(RELannot))){
+      stop(paste("error with pathway assignment for reaction:", names(rxnList_form)[rxN]))  
       }
     }
   }else{
     RELannot <- RXannot
   }
   
-  if(!is.na(RELannot)){
+  if(all(!is.na(RELannot))){
     pathways <- strsplit(RELannot, split = '__')[[1]]
+    pathways <- pathways[pathways != ""]
   }
   
   rxToPW <- rbind(rxToPW, data.frame(rxN = rxN, rID = rxnList_form[[rxN]]$rxnID, reactionName = rxnList_form[[rxN]]$reaction, pathway = pathways))
@@ -595,6 +596,8 @@ TRdata <- NULL # Save summary transcriptional resposiveness
 
 t_start = proc.time()[3]
 
+#rxn_subset <- grep('1054|0962|0816', reactionInfo$rMech, value = T)
+#for(arxn in rxn_subset){
 for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
@@ -671,10 +674,12 @@ for(arxn in reactionInfo$rMech){
   if("Plots" %in% names(trans_res)){ shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, trans_res$Plots) }
   if("TR" %in% names(trans_res)){ TRdata <- rbind(TRdata, trans_res$TR) }
   
-  #param_dist <- param_compare()
-  #ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
-  #ggsave(shiny_flux_data[[arxn]]$plotChoices$Likelihood, file = paste0("tmp/", arxn, "_likViolin.pdf"), width = 16, height = 10)
-  
+  if(grepl('0816', arxn)){
+    # save parameter distributions for a subset of reactions
+    param_dist <- param_compare()
+    ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
+    #ggsave(shiny_flux_data[[arxn]]$plotChoices$Likelihood, file = paste0("tmp/", arxn, "_likViolin.pdf"), width = 16, height = 10)
+  }
   #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <-  param_compare() # these plots makes the resulting list huge, but they are awesome ...
   
   # when all of the reaction forms for a given reaction have been plotted, then export them as a group
@@ -688,7 +693,7 @@ for(arxn in reactionInfo$rMech){
     print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
   }
   
-}
+}; print("Done!")
 
 #for(a_name in names(shiny_flux_data)){
 #  a_rxn_file <- shiny_flux_data[[a_name]][[2]]
@@ -873,7 +878,7 @@ ggplot() + geom_bar(data = spearman_MMandReg , aes(x = reaction, y = spearman, f
   ggtitle('Correlation between measured and predicted flux') + expand_limits(y = c(0,1))
 ggsave("Figures/MM_reg_spearmanCorr.pdf", height = 12, width = 13)
 
-##
+##### Summary based on spearman correlation for MM and most significant regulator (if applicable) #####
 
 spearman_MMandReg <- data.frame(reactionInfo[,c('reaction', 'modification', 'Qvalue')], spearman = rxn_fits[,'parSpearman']) %>% tbl_df()
 spearman_MMandReg <- spearman_MMandReg %>% filter(!grepl('t_metX', modification)) %>% filter(is.na(Qvalue) | Qvalue < 0.1)
@@ -920,6 +925,80 @@ ggsave("Figures/MM_with_reg_spearman.pdf", height = 8, width = 12)
 
   
 
+##### Replotting a few reactions for figures #####
+
+# TPI - michaelis-menten-kinetics
+load("shinyapp/reaction_data/r_1054plots.Rdata")
+
+reactionInfo %>% filter(reaction == "r_1054")
+
+ggsave(plot = shiny_flux_data[["r_1054-rm"]][['plotChoices']][['Flux and species']], "Figures/TPIrmm.pdf", height = 14, width = 10)
+
+
+
+# PyK - comparison of michaelis-menten kinetics with non-significant and significant regulation
+load("shinyapp/reaction_data/r_0962plots.Rdata")
+
+ggsave(plot = shiny_flux_data[["r_0962-rm"]][['plotChoices']][['Flux and species']], "Figures/PYKrmm.pdf", height = 14, width = 10) # RMM
+ggsave(plot = shiny_flux_data[["r_0962-rm-t_0292-act-mm"]][['plotChoices']][['Flux and species']], "Figures/PYKf6p.pdf", height = 14, width = 10) # F6P
+ggsave(plot = shiny_flux_data[["r_0962-rm-t_0290-act-mm"]][['plotChoices']][['Flux and species']], "Figures/PYKfbp.pdf", height = 14, width = 10) # FBP
+
+reactionInfo[reactionInfo$rMech %in% c("r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm"),]
+
+rxn_fits[rxn_fits$rxn %in% c("r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm"),]
+
+
+# OTCase - comparsion of michaelis-menten kinetics and versus alanine
+load("shinyapp/reaction_data/r_0816plots.Rdata")
+
+ggsave(plot = shiny_flux_data[["r_0816-rm_rmCond"]][['plotChoices']][["Flux comparison"]], "Figures/OTCasermm.pdf", height = 6, width = 10) # RMM
+ggsave(plot = shiny_flux_data[["r_0816-rm-t_0461-inh-uncomp_rmCond"]][['plotChoices']][["Flux comparison"]], "Figures/OTCaseAla.pdf", height = 6, width = 10) # ALA
+shiny_flux_data[["r_0816-rm_rmCond"]][['plotChoices']][[2]]
+ala_rxns <- reactionInfo %>% filter(reaction == "r_0816") %>% filter(grepl('L-alanine', FullName))
+
+rxn_fits[rxn_fits$rxn %in% c("r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond"),]
+run_rxn[["r_0816-rm-t_0461-inh-uncomp_rmCond"]]
+
+
+par_likelihood <- NULL
+par_markov_chain <- NULL
+
+parSubset <- param_set_list[parSetInfo$rx == "r_0816-rm-t_0461-inh-uncomp_rmCond"]
+
+for(i in 1:length(parSubset)){
+  
+  par_likelihood <- rbind(par_likelihood, data.frame(sample = 1:param_run_info$n_samples[parSubset[[i]]$name$index], likelihood = parSubset[[i]]$lik, index = parSubset[[i]]$name$index))
+  par_markov_chain <- rbind(par_markov_chain, parSubset[[i]]$MC)
+}
+
+
+#load(paste(c("FBGA_files/paramSets/", param_run_info$file[param_run_info$index == par_likelihood$index[1]]), collapse = ""))
+#run_rxn <- run_summary[["r_0816-rm-t_0461-inh-uncomp_rmCond"]]
+
+otcase_alanine_ki <- data.frame(ki = 2^par_markov_chain[,'t_0461'])
+otcase_alanine_ki_mle <- otcase_alanine_ki[which.max(par_likelihood$likelihood),]
+otcase_alanine_ki_exp <- 14.8e-3
+
+barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 20, face = "bold"), 
+                       panel.background = element_rect(fill = "gray80"), legend.position = "right", 
+                       axis.ticks.x = element_line(color = "black", size = 1), axis.ticks.y = element_line(color = "black", size = 1),
+                       axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90, hjust = 0.5, vjust = 0.5),
+                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1)
+                       )
+
+ggplot(otcase_alanine_ki, aes(x = ki)) + geom_bar(binwidth = 0.05) + 
+  geom_vline(xintercept = otcase_alanine_ki_mle, color = "RED", size = 2) + geom_vline(xintercept = otcase_alanine_ki_exp, color = "BLUE", size = 2) +
+  scale_x_log10("Affinity", breaks = c(1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1), labels = c("100uM", "1mM", "10mM", "100mM", "1M", "10M"), expand = c(0,0)) + barplot_theme + 
+  scale_y_continuous("Counts", expand = c(0,0)) + geom_blank(aes(y=1.1*..count..), binwidth = 0.05, stat="bin") +
+  geom_text(data = data.frame(label = c("MLE", "Measured"), x = 8, y = c(87.5, 80), color = c("RED", "BLUE")), aes(x = x, y = y, label = label, color = color), size = 10) +
+  scale_color_identity()
+ggsave("Figures/OTCaseAla_dist.pdf", width = 7, height = 7)
+
+
+
+head(par_markov_chain)
+
 ##### Generate figure summarizing metabolic leverage for a condition #####
 
 #library(stringr)
@@ -938,23 +1017,6 @@ ggsave("Figures/MM_with_reg_spearman.pdf", height = 8, width = 12)
 
 MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))
 metabolic_leverage_summary_plots("P0.05")
-
-
-##### Replotting a few reactions for figures #####
-
-# TPI - michaelis-menten-kinetics
-
-
-
-
-# PyK - comparison of michaelis-menten kinetics with non-significant and significant regulation
-
-
-
-
-# ORTcase - comparsion of michaelis-menten kinetics and 
-
-
 
 
 
