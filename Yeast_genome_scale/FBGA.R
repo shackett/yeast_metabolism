@@ -923,7 +923,45 @@ ggplot(select_spearman_MMandReg, aes(x = rxName, y = spearman, fill = regulator)
 
 ggsave("Figures/MM_with_reg_spearman.pdf", height = 8, width = 12)
 
-  
+
+# two plots
+
+mm_spearman <- select_spearman_MMandReg %>% filter(!regulator)
+
+reg_spearman <- select_spearman_MMandReg %>% filter(regulator) %>% filter(spearman == maxSpear) %>% group_by(reaction) %>%
+  mutate(spearDiff = spearman - mm_spearman$spearman[mm_spearman$reaction == reaction])
+reg_spearman$spearDiff[reg_spearman$spearDiff > reg_spearman$spearman] <- reg_spearman$spearman[reg_spearman$spearDiff > reg_spearman$spearman]
+
+two_pane_spearman_summary <- rbind(
+mm_spearman %>% mutate(pane = "MM"),
+rbind(mm_spearman %>% filter(!(reaction %in% reg_spearman$reaction)), reg_spearman %>% select(-spearDiff)) %>%
+  mutate(pane = "REG")
+)
+
+mm_order <- mm_spearman %>% arrange(spearman) %>% select(reaction) %>% unlist() %>% unname()
+two_pane_spearman_summary <- two_pane_spearman_summary %>% mutate(reaction = factor(reaction, levels = mm_order))
+
+# increase facets spacing - color facets
+ggplot(two_pane_spearman_summary, aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
+  facet_grid(pane ~ .) + ggtitle('Correlation between measured and predicted flux') +
+  barplot_theme_nox + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
+  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("skyblue2", "orangered1"), breaks = c(T, F), label = c("Metabolite Regulator", "Reversible Michaelis-Menten"))
+
+ggsave("Figures/spearman_two_pane.pdf", height = 9, width = 12)
+
+# stack regulator
+
+stacked_spearman <- rbind(mm_spearman %>% select(reaction, spearman, regulator),
+                          reg_spearman %>% select(reaction, spearman = spearDiff, regulator))
+stacked_spearman <- stacked_spearman %>% mutate(reaction = factor(reaction, levels = mm_order))
+
+ggplot(stacked_spearman %>% filter(spearman >= 0), aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
+  ggtitle('Correlation between measured and predicted flux') +
+  barplot_theme_nox + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
+  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("skyblue2", "orangered1"), breaks = c(T, F), label = c("Metabolite Regulator", "Reversible Michaelis-Menten"))
+
+ggsave("Figures/spearman_stack.pdf", height = 7, width = 12)
+
 
 ##### Replotting a few reactions for figures #####
 
@@ -933,7 +971,6 @@ load("shinyapp/reaction_data/r_1054plots.Rdata")
 reactionInfo %>% filter(reaction == "r_1054")
 
 ggsave(plot = shiny_flux_data[["r_1054-rm"]][['plotChoices']][['Flux and species']], "Figures/TPIrmm.pdf", height = 14, width = 10)
-
 
 
 # PyK - comparison of michaelis-menten kinetics with non-significant and significant regulation
@@ -997,8 +1034,6 @@ ggsave("Figures/OTCaseAla_dist.pdf", width = 7, height = 7)
 
 
 
-head(par_markov_chain)
-
 ##### Generate figure summarizing metabolic leverage for a condition #####
 
 #library(stringr)
@@ -1015,6 +1050,7 @@ head(par_markov_chain)
 
 #ML_natural_vs_all %>% ungroup() %>% arrange(-diffSum)
 
+MLdata$Type[grepl("r_0302", MLdata$reaction) & MLdata$specie == "isocitrate"] <- "product" # aconitase is split into two reactions without a meaasured cis-aconitate so isocitrate acts like a product in the first rxn
 MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))
 metabolic_leverage_summary_plots("P0.05")
 
@@ -1241,14 +1277,24 @@ ML_rxn_summary <- ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(colo
 ML_rxn_ternaryPoints <- ML_rxn_summary %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
                                               y = sqrt(3)/2 * enzyme*(regulator + enzyme + rxn_metabolite))
 
+# Name point according to the metabolic layout
+
+rxn_names <- c('r_1838' = 'HCS', 'r_0988' = 'SDH', 'r_0915' = 'PPAT', 'r_0042' = 'DAHP synthase', 'r_0886' = 'PFK', 'r_0718' = 'ME',
+  'r_0468' = 'G5K', 'r_0962' = 'PyK', 'r_4040' = 'PPK', 'r_0225' = 'ATP-PRTase', 'r_0887' = 'S7P PFK', 'r_0888' = 'PGM',
+  'r_0195' = 'TPS', 'r_0214' = 'ATCase', 'r_0310' = 'CBL', 'r_0816' = 'OTCase', 'r_0450' = 'ALD', 'r_0215' = 'AspK',
+  'r_0491' = 'G3PDH', 'r_0250' = 'CPS')
+
+ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints %>% filter(regulator != 0) %>% mutate(label = rxn_names[names(rxn_names) == rID])
+
 color_key$Figure <- color_key$Figure + 
   geom_point(data = ML_rxn_ternaryPoints, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
-  geom_point(data = ML_rxn_ternaryPoints, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE")
+  geom_point(data = ML_rxn_ternaryPoints, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE") +
+  geom_text(data = ML_rxn_ternaryPoints_labels, aes(x = x + 0.05, y = y + 0.05, label = label), color = "WHITE")
 
 #color_key$Figure + geom_point(data = ML_rxn_summary, aes(x = enzyme, y = regulator), color = "yellow")
 
 #plot(1:45, 1:45, col = ML_rxn_summary$color, pch = 16, cex = 2)
-ggsave("Figures/MLcolorKey.pdf", color_key$Figure, height = 9.1, width = 9)
+ggsave("Figures/MLcolorKey.pdf", color_key$Figure, height = 9.1, width = 10.7)
 
 ML_rxn_summary$reaction_info <- reactionInfo$FullName[chmatch(ML_rxn_summary$reaction, reactionInfo$rMech)]
 

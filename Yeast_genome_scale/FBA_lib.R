@@ -2994,8 +2994,10 @@ color_ternary <- function(res = 100){
   
   # Use centers to define color-scheme
   center_colors <- control_colors %>% group_by(group) %>% filter(position %in% c("CT", "CB"))
-  center_colors <- center_colors %>% rowwise() %>% dplyr::mutate(color_purity = max(enzyme, allostery, substrates) - min(enzyme, allostery, substrates)) %>%
-    dplyr::select(group, x, y, color_purity)
+  #center_colors <- center_colors %>% rowwise() %>% dplyr::mutate(color_purity = max(enzyme, allostery, substrates) - min(enzyme, allostery, substrates)) %>%
+  #  dplyr::select(group, x, y, color_purity)
+  center_colors <- center_colors %>% rowwise() %>% dplyr::mutate(color_purity = max(enzyme, allostery, substrates) - min(enzyme, allostery, substrates))
+ 
   
   # determine angle relative to center for hue
   ternary_center <- c(x = 0.5, y = sin(angle2rad(30)) * 0.5)
@@ -3005,8 +3007,9 @@ color_ternary <- function(res = 100){
   center_colors <- center_colors %>% dplyr::mutate(angle = ifelse(angle < 0, angle + 360, angle))
   
   # establish color scheme
-  #center_colors <- center_colors %>% dplyr::mutate(color = hcl(h = angle - 90, c = 0 + 200*color_purity, l = 40 + 40 * color_purity, fixup = T))
-  center_colors <- center_colors %>% dplyr::mutate(color = hcl(h = angle - 90, c = 0 + 140*color_purity, l = 70 - 45 * color_purity, fixup = T))
+  #center_colors <- center_colors %>% dplyr::mutate(color = hcl(h = 240 - (angle - 90), c = 0 + 140*color_purity, l = 70 - 45 * color_purity, fixup = T))
+  center_colors <- center_colors %>% dplyr::mutate(color = hcl(h = 240 - (angle - 90), c = 0 + 180*color_purity, l = 90 - 55 * color_purity, fixup = T))
+  
   
   # add colors back to defining polygons
   control_colors <- control_colors %>% filter(!(position %in% c("CT", "CB"))) %>% left_join((center_colors %>% dplyr::select(group, color)))
@@ -3016,26 +3019,31 @@ color_ternary <- function(res = 100){
                                legend.position = "top", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
                                panel.grid.major = element_blank(), axis.line = element_blank(), axis.ticks = element_blank())
   
-  vertex_label = data.frame(x = c(0.05, 0.6, 0.95), y = c(-0.125, sqrt(3)/2 + 0.05, -0.1), label = c('Substrates &\nProducts', 'Enzymes', 'Allostery'), 
+  vertex_label = data.frame(x = c(-0.15, 0.5, 1.15), y = c(-0.125, sqrt(3)/2 + 0.1, -0.08), label = c('Substrates &\nProducts', 'Enzymes', 'Allostery'), 
                             color = c(control_colors$color[control_colors$substrates == 1], control_colors$color[control_colors$enzyme == 1], control_colors$color[control_colors$allostery == 1]))
   
   ternary_boundary <- data.frame(x = c(0, 0.5, 1), y = c(0, sqrt(3)/2, 0))
   
-  ternary_text <- rbind(data.frame(x = c(0, 0.25, 0.5, 0.75, 1), y = rep(-0.035, 5), text = c("0%", "25%", "50%", "75%", "100%"), angle = 0),
-                        data.frame(x = seq(0,1, by = 0.25) * cos(angle2rad(60)) + cos(angle2rad(150))*0.035,
-                                   y = seq(0,1, by = 0.25) * sin(angle2rad(60)) + sin(angle2rad(150))*0.035, text = c("0%", "25%", "50%", "75%", "100%"), angle = 60))
+  text_dist <- 0.08
+  tick_dist <- 0.03
   
-  ternary_text <- rbind(ternary_text, 
-                        data.frame(x = c(0.5, 0.25 + cos(angle2rad(150))*0.1), y = c(-0.1, sin(angle2rad(60))*0.5 + sin(angle2rad(150))*0.1), 
-                                   text = c("Allosteric Control", "Enzymatic Control"), angle = c(0,60))
-  )
+  ternary_text <- data.frame(x = c(0 - text_dist*cos(angle2rad(30)), 0.5, 1 + text_dist*cos(angle2rad(30)), 
+                             cos(angle2rad(60))*0.5 - text_dist*cos(angle2rad(30)), 0.5, 1 - ( cos(angle2rad(60))*0.5 - text_dist*cos(angle2rad(30)))),
+                             y = c(0 - text_dist*sin(angle2rad(30)), -text_dist, 0 - text_dist*sin(angle2rad(30)),
+                             sin(angle2rad(60))*0.5 + text_dist*sin(angle2rad(30)), sin(angle2rad(60)) + text_dist, sin(angle2rad(60))*0.5 + text_dist*sin(angle2rad(30))),
+                             angle = c(0, 0, 0, 60, 0, -60),
+                             text = c("100%", "50:50", "100%", "50:50", "100%", "50:50"))
+                             
   
-  ternary_ticks <- rbind(data.frame(x1 = seq(0,1,by=0.25), y1 = 0, x2 = seq(0,1,by=0.25), y2 = -0.0125),
-  data.frame(x1 = seq(0,1,by=0.25)*cos(angle2rad(60)), y1 = seq(0,1,by=0.25)*sin(angle2rad(60)), 
-             x2 = seq(0,1,by=0.25)*cos(angle2rad(60)) + cos(angle2rad(150))*0.0125, y2 = seq(0,1,by=0.25)*sin(angle2rad(60)) + sin(angle2rad(150))*0.0125))
-  
+  ternary_ticks <- data.frame(x1 = c(0, 0.5, 1, cos(angle2rad(60))/2, 0.5, 1 - cos(angle2rad(60))/2),
+                              y1 = c(0, 0, 0, sin(angle2rad(60))/2, sin(angle2rad(60)), sin(angle2rad(60))/2),
+                              x2 = c(0 - tick_dist*cos(angle2rad(30)), 0.5, 1 + tick_dist*cos(angle2rad(30)), cos(angle2rad(60))/2 - tick_dist*cos(angle2rad(30)),
+                                     0.5, 1 - (cos(angle2rad(60))/2 - tick_dist*sin(angle2rad(60)))),
+                              y2 = c(-tick_dist*sin(angle2rad(30)), -tick_dist, -tick_dist*sin(angle2rad(30)), sin(angle2rad(60))/2 + tick_dist*sin(angle2rad(30)),
+                                     sin(angle2rad(60)) + tick_dist, sin(angle2rad(60))/2 + tick_dist*sin(angle2rad(30))))
+    
   color_summary$Figure <- ggplot() + geom_polygon(data = control_colors, aes(x = x, y = y, group = group, fill = color, color = color)) +  color_ternary_theme +
-    geom_text(data = vertex_label, aes(x = x, y = y, label = label, color = color), size = 7) +
+    geom_text(data = vertex_label, aes(x = x, y = y, label = label, color = color), size = 9) +
     geom_polygon(data = ternary_boundary, aes(x = x, y = y), color = "BLACK", fill = NA, size = 1) +
     geom_text(data = ternary_text, aes(x = x, y = y, label = text, angle = angle), color = "BLACK", size = 7) + 
     geom_segment(data = ternary_ticks, aes(x = x1, y = y1, xend = x2, yend = y2), size = 1) +
