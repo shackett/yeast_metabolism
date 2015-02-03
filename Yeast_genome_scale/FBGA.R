@@ -64,7 +64,7 @@ rxn_enzyme_measured <- read.delim("./flux_cache/prot_matches.tsv")
 
 
 ####### Narrow reactions txwo those that are well-constrained & non-zero in a majority of conditions #####
-### When considering reactions which carry zero flux under a subset of conditions, analyze reactions both when v = 0, and by removing conditions where v = 0 ### 
+### When considering reactions which carry zero flux under a subset of conditions, analyze reactions both when v = 0, and by removing conditions where v = 0 ###
 rmCondList <- data.frame() # reactions which will be duplicated with some conditions rmoved
 
 
@@ -144,8 +144,20 @@ for (i in 1:nrow(rmCondList)){
     }
 }
 
+# remove irreversible reaction forms that are polarized in the wrong direction
 
+irreversible_rxns <- data.frame(rxForm = names(rxnList)[grep('-im-', names(rxnList))])
+irreversible_rxns$rxn <- substr(irreversible_rxns$rxForm, 1, 6)
+irreversible_rxns$dir <- ifelse(grepl('-forward', irreversible_rxns$rxForm), "F", "R")
 
+reaction_direction <- data.frame(npos = apply(flux_summary$total_flux_cast[,,'standardQP'], 1, function(x){sum(x > 0)}),
+                                 nneg = apply(flux_summary$total_flux_cast[,,'standardQP'], 1, function(x){sum(x < 0)}))
+
+irreversible_rxns$invalid <- (irreversible_rxns$rxn %in% rownames(reaction_direction)[reaction_direction$npos == 0] & irreversible_rxns$dir == "F")|
+  (irreversible_rxns$rxn %in% rownames(reaction_direction)[reaction_direction$nneg == 0] & irreversible_rxns$dir == "R")
+
+rxnList <- rxnList[!(names(rxnList) %in% irreversible_rxns$rxForm[irreversible_rxns$invalid])]
+                       
 ### ensure that the ordering of conditions is the same ###
 
 cond_mapping <- data.frame(standard = chemostatInfo$ChemostatCond, e = colnames(rxnList[[1]]$enzymeComplexes), m = rownames(rxnList[[1]]$rxnMet), f = rownames(rxnList[[1]]$flux))
@@ -171,155 +183,10 @@ print(paste("The number of parameter chunks is", ceiling(length(rxnList_form)/ch
 save(rxnList_form, cond_mapping, chunk_assignment, file = "paramOptim.Rdata")
 
 
+# How well can flux be explained through regression of metabolites and enzyme on flux
+flux_mass_action_regression()
 
 
-##### predict flux using linear regression using either metabolites and enzymes or their log - partition variance explained into that explained by metabolite and by enzymes ####
-
-reaction_pred_log <- data.frame(nmetab = rep(NA, length(grep('rm$', names(rxnList)))), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, varExplainedJointly = NA, TSS = NA)
-reaction_pred_linear <- data.frame(nmetab = rep(NA, length(grep('rm$', names(rxnList)))), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, varExplainedJointly = NA, TSS = NA)
-
-for(rxN in grep('rm$', names(rxnList))){
-  reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeComplexes[,1])
-  reaction_pred_linear$nmetab[rxN] <- reaction_pred_log$nmetab[rxN] <- sum(!is.na(rxnList[[rxN]]$rxnMet))/25
-  
-  if(all(rxnList[[rxN]]$flux$standardQP >= 0)){
-    rxFlux <- log2(rxnList[[rxN]]$flux$standardQP)
-  } else if(all(rxnList[[rxN]]$flux$standardQP <= 0)){
-    rxFlux <- log2(-1*rxnList[[rxN]]$flux$standardQP)
-  } else{
-    next
-  } #if only forward flux consider its log, if only backwards flux consider the log of -1*flux, if the directionality changes then skip this rxn.
-  rxFlux[!is.finite(rxFlux)] <- NA
-  
-  reaction_pred_log$nCond[rxN] <- reaction_pred_linear$nCond[rxN] <- sum(!is.na(rxFlux))
-  
-  if(reaction_pred_linear$nenz[rxN] != 0){
-    enzyme_df = rxnList[[rxN]]$enzymeComplexes
-    
-    lenzymes <- as.matrix(data.frame(t(enzyme_df)))
-    enzymes <- 2^lenzymes
-  }else{lenzymes <- enzymes <- NULL}
-  if(reaction_pred_linear$nmetab[rxN] != 0){
-    metab_df = rxnList[[rxN]]$rxnMet
-    
-    lmetabs <- as.matrix(data.frame(metab_df[,colSums(!is.na(metab_df) != 0) != 0])); colnames(lmetabs) <- colnames(rxnList[[rxN]]$rxnMet)[colSums(!is.na(rxnList[[rxN]]$rxnMet) != 0) != 0]
-    metabs <- 2^lmetabs
-  }else{lmetabs <- metabs <- NULL}
-  
-  if(reaction_pred_linear$nenz[rxN] == 0 & reaction_pred_linear$nmetab[rxN] == 0){
-    next
-  }
-  
-  if(reaction_pred_linear$nenz[rxN] != 0){
-    ### only enzymes ###
-    ### prediction using log measures ###
-    reaction_pred_log$Fenz[rxN] <- anova(lm(rxFlux ~ lenzymes))$F[1]
-    reaction_pred_log$varExplainedEnzy[rxN] <- anova(lm(rxFlux ~ lenzymes))$Sum[1]
-    reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lenzymes))$Sum)
-    
-    ### prediction using linear measures ###
-    reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$F[1]
-    reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$Sum[1]
-    reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$Sum)  
-  }  
-  
-  if(reaction_pred_linear$nmetab[rxN] != 0){
-    ### only metabolites ###
-    ### prediction using log measures ###
-    reaction_pred_log$Fmetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$F[1]
-    reaction_pred_log$varExplainedMetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$Sum[1]
-    reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lmetabs))$Sum)
-    
-    ### prediction using linear measures ###
-    reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$F[1]
-    reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$Sum[1]
-    reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$Sum)
-  }  
-  
-  if(reaction_pred_linear$nmetab[rxN] != 0 & reaction_pred_linear$nenz[rxN] != 0){
-    ### both metabolites and enzymes ###
-    reaction_pred_linear$varExplainedTotal[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes + metabs))$Sum[1:2])
-    if(reaction_pred_linear$varExplainedTotal[rxN] < max(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN])){
-      reaction_pred_linear$varExplainedTotal[rxN] <- max(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN])  
-    }
-    
-    ### Variance explained in a full model versus reduced ones
-    
-    if(reaction_pred_linear$varExplainedTotal[rxN] > sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN])){
-      ### add variance explained in complete model to new class - jointly described
-      reaction_pred_linear$varExplainedJointly[rxN] <- reaction_pred_linear$varExplainedTotal[rxN] - sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN])
-    }else{
-      ### some variance is equally accounted for by metabolites or enzymes and should be pulled out and removed from both enzymes and mets
-      reaction_pred_linear$varExplainedEither[rxN] <- sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN]) - reaction_pred_linear$varExplainedTotal[rxN]
-      reaction_pred_linear$varExplainedMetab[rxN] <- reaction_pred_linear$varExplainedMetab[rxN] - reaction_pred_linear$varExplainedEither[rxN]
-      reaction_pred_linear$varExplainedEnzy[rxN] <- reaction_pred_linear$varExplainedEnzy[rxN] - reaction_pred_linear$varExplainedEither[rxN]
-    }
-    
-    reaction_pred_log$varExplainedTotal[rxN] <- sum(anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum[1:2])
-    if(is.na(reaction_pred_log$varExplainedTotal[rxN])){next}
-    
-    if(reaction_pred_log$varExplainedTotal[rxN] < max(reaction_pred_log$varExplainedMetab[rxN], reaction_pred_log$varExplainedEnzy[rxN])){
-      reaction_pred_log$varExplainedTotal[rxN] <- max(reaction_pred_log$varExplainedMetab[rxN], reaction_pred_log$varExplainedEnzy[rxN])  
-    }
-    
-    if(reaction_pred_log$varExplainedTotal[rxN] > sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN])){
-      ### add variance explained in complete model to new class - jointly described
-      reaction_pred_log$varExplainedJointly[rxN] <- reaction_pred_log$varExplainedTotal[rxN] - sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN])
-    }else{
-      ### some variance is equally accounted for by metabolites or enzymes and should be pulled out and removed from both enzymes and mets
-      reaction_pred_log$varExplainedEither[rxN] <- sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN]) - reaction_pred_log$varExplainedTotal[rxN]
-      reaction_pred_log$varExplainedMetab[rxN] <- reaction_pred_log$varExplainedMetab[rxN] - reaction_pred_log$varExplainedEither[rxN]
-      reaction_pred_log$varExplainedEnzy[rxN] <- reaction_pred_log$varExplainedEnzy[rxN] - reaction_pred_log$varExplainedEither[rxN]
-    }
-    
-  }
-}
-
-
-#hist(reaction_pred_linear$Fmetab)
-#hist(reaction_pred_linear$Fenz)
-
-reaction_pred_summary_log <- data.frame(N = reaction_pred_log$nCond, metaboliteVarianceExplained = reaction_pred_log$varExplainedMetab/reaction_pred_log$TSS, enzymeVarianceExplained = reaction_pred_log$varExplainedEnzy/reaction_pred_log$TSS, 
-                                        varianceAmbiguouslyExplained = reaction_pred_log$varExplainedEither/reaction_pred_log$TSS, varianceJointlyExplained = reaction_pred_log$varExplainedJointly/reaction_pred_log$TSS)
-
-reaction_pred_summary_linear <- data.frame(N = reaction_pred_linear$nCond, metaboliteVarianceExplained = reaction_pred_linear$varExplainedMetab/reaction_pred_linear$TSS, enzymeVarianceExplained = reaction_pred_linear$varExplainedEnzy/reaction_pred_linear$TSS,
-                                           varianceAmbiguouslyExplained = reaction_pred_linear$varExplainedEither/reaction_pred_linear$TSS, varianceJointlyExplained = reaction_pred_linear$varExplainedJointly/reaction_pred_linear$TSS)
-
-rownames(reaction_pred_summary_log) <- rownames(reaction_pred_summary_linear) <- names(rxnList)[grep('rm$', names(rxnList))]
-
-
-residualDF <- reaction_pred_log$nCond - reaction_pred_log$nmetab - reaction_pred_log$nenz
-residualDF <- residualDF[reaction_pred_summary_log$N >= 15]
-
-reaction_pred_summary_log <- reaction_pred_summary_log[reaction_pred_summary_log$N >= 15,-1]
-reaction_pred_summary_linear <- reaction_pred_summary_linear[reaction_pred_summary_linear$N >= 15,-1]
-
-reaction_pred_summary_log <- reaction_pred_summary_log[order(apply(reaction_pred_summary_log, 1, sum, na.rm = TRUE)),]
-reaction_pred_summary_linear <- reaction_pred_summary_linear[order(apply(reaction_pred_summary_linear, 1, sum, na.rm = TRUE)),]
-
-
-
-
-reaction_pred_summary_plotter <- rbind(data.frame(modelType = "logFlux ~ logMetab + logEnzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_log[,1])), reaction_pred_summary_log), id.vars = "index")),
-                                       data.frame(modelType = "Flux ~ Metab + Enzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_linear[,1])), reaction_pred_summary_linear), id.vars = "index")))
-
-reaction_pred_summary_plotter <- reaction_pred_summary_plotter[!is.na(reaction_pred_summary_plotter$value),]
-
-barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-                       panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank(), panel.margin = unit(1.5, "lines"), axis.text = element_text(color = "BLACK"),
-                       strip.background = element_rect(fill = "chocolate1"), strip.text = element_text(vjust = 0.6)) 
-
-# For 75 reactions, linear regression was used to determine the fraction of variation in flux that could be explained by linear combinations of metabolite and enzyme concentrations.
-# This comparison was also made to relate the log of flux carried to the log abundances of enzymes and metabolites
-
-rxnPredictionPlot <- ggplot(reaction_pred_summary_plotter, aes(x = factor(index), y = value, fill = as.factor(variable), color = "black")) + facet_grid(modelType ~ .)
-rxnPredictionPlot + geom_bar(stat ="identity", width=0.75) + barplot_theme + geom_vline(aes(xintercept = 0), size = 0.5) + geom_hline(aes(yintercept = 0), size = 0.5) + 
-  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "% Variance Explained", expand = c(0,0), limits = c(0,1), label = percent_format()) +
-  scale_fill_brewer("Prediction Method", palette = "Set2") + scale_color_identity()
-
-#scale_fill_manual(values = c("enzymeVarianceExplained" = "sienna1", "metaboliteVarianceExplained" = "steelblue1", varianceAmbiguouslyExplained = "olivedrab3", varianceJointlyExplained = "red")) 
-
-ggsave("varianceExplained.pdf", width = 20, height = 12)
 
 
 
@@ -396,6 +263,7 @@ reactionInfo$changeP <- NA
 reactionInfo$changeAIC <- NA
 
 for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$modification %in% c("", "rmCond"))]){ 
+  # Both regulation and irreversible michaelis-menten kinetics are compared to reversible michaelis-menten kinetics
   rxn_eval <- reactionInfo[rx,]
   if(length(grep('rmCond', rxn_eval$modification)) == 0){
     rxn_ref <- reactionInfo[reactionInfo$reaction == rxn_eval$reaction & reactionInfo$form == "rm" & reactionInfo$modification == "",]
@@ -419,9 +287,15 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
       }
   
   if(rxn_eval$npar == rxn_ref$npar){
+    # Alternative parameterization with same degrees of freedom
     reactionInfo$changeP[rx] <- 1/(exp(likDiff) + 1)
-  }else{
+  }else if(rxn_eval$npar > rxn_ref$npar){
+    # Alternative model is more complex
     reactionInfo$changeP[rx] <- 1 - pchisq(2*likDiff, rxn_eval$npar - rxn_ref$npar)
+  }else{
+    # Alternative model is less complex
+    reactionInfo$changeP[rx] <- 1 - pchisq(-2*likDiff, rxn_ref$npar - rxn_eval$npar)
+    # cat(paste0("\nrx ", rx, ": ",-2*likDiff))
   }
 }
 
@@ -450,9 +324,17 @@ qStore <- list()
 
 reactionInfo$Qvalue <- NA
 
-qStore[["CC_RM"]] <- qvalue(reactionInfo$changeP[reactionInfo$form == "cc"], pi0.method = "bootstrap")
 # comparisons between CC and RM are pathological because they are so similar, resulting in high p-values - remove from consideration
+qStore[["CC_RM"]] <- qvalue(reactionInfo$changeP[reactionInfo$form == "cc"], pi0.method = "bootstrap")
 reactionInfo <- reactionInfo[!(reactionInfo$form == "cc"),]
+
+# Comparison between forms of interest
+
+# comparison between irreversible MM-kinetics and reversible MM-kinetics
+# The p-value of an irreversible reaction reflect how much worse it fits relative to reversible MM-kinetics (i.e. a p-value of 1 if rMM = iMM)
+test_subset <- grepl('^(forward|reverse)', reactionInfo$modification)
+qStore[["MM_reversibility"]] <- qvalue(reactionInfo$changeP[test_subset])
+reactionInfo$Qvalue[test_subset] <- qStore[["MM_reversibility"]]$q
 
 ### hypothetical metabolites with constrained hill coefficient vs. reversible-MM (AIC)
 test_subset <- !is.na(reactionInfo$changeP) & c(1:nrow(reactionInfo)) %in% intersect(grep('metX', reactionInfo$modification), grep('ultra', reactionInfo$modification, invert = T))
@@ -505,6 +387,7 @@ reactionInfo$signifCode <- sapply(reactionInfo$Qvalue, function(x){
 reactionInfo$Name = NA
 reactionInfo$Name[reactionInfo$modification %in% c('', 'rmCond') & reactionInfo$form == "rm"] <- "Reversible michaelis-menten (default)"
 reactionInfo$Name[reactionInfo$modification %in% c('', 'rmCond') & reactionInfo$form == "cc"] <- "Convenience kinetics"
+reactionInfo$Name[grepl('^(forward|reverse)', reactionInfo$modification)] <- "Irreversible michaelis-menten"
 
 for(rxN in grep('act|inh', reactionInfo$modification)){
   
@@ -596,9 +479,13 @@ TRdata <- NULL # Save summary transcriptional resposiveness
 
 t_start = proc.time()[3]
 
+# flag a few reactions where additional plots are created
+custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond")
+
 #rxn_subset <- grep('1054|0962|0816', reactionInfo$rMech, value = T)
 #for(arxn in rxn_subset){
-for(arxn in reactionInfo$rMech){
+for(arxn in custom_plotted_rxns){
+#for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -674,12 +561,17 @@ for(arxn in reactionInfo$rMech){
   if("Plots" %in% names(trans_res)){ shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, trans_res$Plots) }
   if("TR" %in% names(trans_res)){ TRdata <- rbind(TRdata, trans_res$TR) }
   
-  if(grepl('0816', arxn)){
+  if(arxn %in% custom_plotted_rxns){
+    # Generate custom plots for a subset of reactions
+    customPlots(run_rxn, flux_fit, chemostatInfo)
+    }
+  
+  #if(grepl('0816', arxn)){
     # save parameter distributions for a subset of reactions
-    param_dist <- param_compare()
-    ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
+    #param_dist <- param_compare()
+    #ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
     #ggsave(shiny_flux_data[[arxn]]$plotChoices$Likelihood, file = paste0("tmp/", arxn, "_likViolin.pdf"), width = 16, height = 10)
-  }
+  #}
   #shiny_flux_data[[arxn]]$plotChoices$"Parameter Comparison" <-  param_compare() # these plots makes the resulting list huge, but they are awesome ...
   
   # when all of the reaction forms for a given reaction have been plotted, then export them as a group
@@ -690,10 +582,10 @@ for(arxn in reactionInfo$rMech){
   }
   
   if(which(reactionInfo$rMech == arxn) %% 10 == 0){
-    print(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
+    cat(paste(round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
   }
   
-}; print("Done!")
+}; cat("\nDone!")
 
 #for(a_name in names(shiny_flux_data)){
 #  a_rxn_file <- shiny_flux_data[[a_name]][[2]]
@@ -926,20 +818,20 @@ ggsave("Figures/MM_with_reg_spearman.pdf", height = 8, width = 12)
 
 # two plots
 
-mm_spearman <- select_spearman_MMandReg %>% filter(!regulator)
+mm_spearman <- select_spearman_MMandReg %>% dplyr::filter(!regulator)
 
-reg_spearman <- select_spearman_MMandReg %>% filter(regulator) %>% filter(spearman == maxSpear) %>% group_by(reaction) %>%
-  mutate(spearDiff = spearman - mm_spearman$spearman[mm_spearman$reaction == reaction])
+reg_spearman <- select_spearman_MMandReg %>% dplyr::filter(regulator) %>% dplyr::filter(spearman == maxSpear) %>% group_by(reaction) %>%
+  dplyr::mutate(spearDiff = spearman - mm_spearman$spearman[mm_spearman$reaction == reaction])
 reg_spearman$spearDiff[reg_spearman$spearDiff > reg_spearman$spearman] <- reg_spearman$spearman[reg_spearman$spearDiff > reg_spearman$spearman]
 
 two_pane_spearman_summary <- rbind(
-mm_spearman %>% mutate(pane = "MM"),
-rbind(mm_spearman %>% filter(!(reaction %in% reg_spearman$reaction)), reg_spearman %>% select(-spearDiff)) %>%
-  mutate(pane = "REG")
+mm_spearman %>% dplyr::mutate(pane = "MM"),
+rbind(mm_spearman %>% dplyr::filter(!(reaction %in% reg_spearman$reaction)), reg_spearman %>% dplyr::select(-spearDiff)) %>%
+  dplyr::mutate(pane = "REG")
 )
 
-mm_order <- mm_spearman %>% arrange(spearman) %>% select(reaction) %>% unlist() %>% unname()
-two_pane_spearman_summary <- two_pane_spearman_summary %>% mutate(reaction = factor(reaction, levels = mm_order))
+mm_order <- mm_spearman %>% dplyr::arrange(spearman) %>% dplyr::select(reaction) %>% unlist() %>% unname()
+two_pane_spearman_summary <- two_pane_spearman_summary %>% dplyr::mutate(reaction = factor(reaction, levels = mm_order))
 
 # increase facets spacing - color facets
 ggplot(two_pane_spearman_summary, aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
@@ -951,9 +843,9 @@ ggsave("Figures/spearman_two_pane.pdf", height = 9, width = 12)
 
 # stack regulator
 
-stacked_spearman <- rbind(mm_spearman %>% select(reaction, spearman, regulator),
-                          reg_spearman %>% select(reaction, spearman = spearDiff, regulator))
-stacked_spearman <- stacked_spearman %>% mutate(reaction = factor(reaction, levels = mm_order))
+stacked_spearman <- rbind(mm_spearman %>% dplyr::select(reaction, spearman, regulator),
+                          reg_spearman %>% dplyr::select(reaction, spearman = spearDiff, regulator))
+stacked_spearman <- stacked_spearman %>% dplyr::mutate(reaction = factor(reaction, levels = mm_order))
 
 ggplot(stacked_spearman %>% filter(spearman >= 0), aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
   ggtitle('Correlation between measured and predicted flux') +
@@ -969,6 +861,12 @@ ggsave("Figures/spearman_stack.pdf", height = 7, width = 12)
 load("shinyapp/reaction_data/r_1054plots.Rdata")
 
 reactionInfo %>% filter(reaction == "r_1054")
+
+saved_plot <- ggplotGrob(shiny_flux_data[["r_1054-rm"]][['plotChoices']][['Flux and species']])
+panes <- which(saved_plot[["layout"]][,"name"] == "panel")
+grid.draw(saved_plot)
+
+
 
 ggsave(plot = shiny_flux_data[["r_1054-rm"]][['plotChoices']][['Flux and species']], "Figures/TPIrmm.pdf", height = 14, width = 10)
 
@@ -1054,216 +952,235 @@ MLdata$Type[grepl("r_0302", MLdata$reaction) & MLdata$specie == "isocitrate"] <-
 MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))
 metabolic_leverage_summary_plots("P0.05")
 
-
-
-##### Associating metabolic leverage with transcription factors, thermodynamics ... #####
-
-
-# Look at the ML of enzymes to identify cases where:
-# A) Potential inducibility is high verus low
-# B) Potential inducibility varies based upon nutrient condition
-
+# Only looking at reactions that are well-fit
 # Look at the best significant reaction form for reaction where CI overlap with flux carried is substantial (>50%)
 
 adequate_fit_optimal_rxn_form <- union(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
 
-ML_inducibility <- MLdata[reaction %in% adequate_fit_optimal_rxn_form,,]
-ML_inducibility <- ML_inducibility[Type == "enzyme",,]
-ML_inducibility <- ML_inducibility[,list(ML = sum(get("0.5")), nenzyme = length(get("0.5"))), by = c("reaction", "condition")]
-
-# collapse across conditions to mean(ML) and SD(ML)
-
-ML_inducibility_summary <- ML_inducibility[,list(ML_mean = mean(ML), ML_sd = sd(ML), ML_min = min(ML), ML_max = max(ML), ML_range = max(ML)-min(ML), nenzyme = nenzyme[1]), by = "reaction"]
-ML_inducibility_summary[,CV := ML_sd/ML_mean] 
-ML_inducibility_summary$rxn <- substr(ML_inducibility_summary$reaction, 1, 6)
-ML_inducibility_summary[,ML_logit := log(ML_mean/(1-ML_mean))]
-
-rxn_meta_info <- read.delim("flux_cache/rxnParYeast.tsv")
-aligned_ML_meta <- rxn_meta_info[chmatch(ML_inducibility_summary$rxn, rxn_meta_info$ReactionID),]
-
-# Determine pathway E.C. numbers
-# If multiple E.C. identifiers exist, take the first one (this will be the identifier associated with the kegg R ID if there is one)
-aligned_ML_meta$EC <- sapply(aligned_ML_meta$EC, function(x){
+enzyme_control_source <- function(){
+  
+  ##### Associating enzyme metabolic leverage with transcription factors, thermodynamics ... #####
+  # Look at the ML of enzymes to identify cases where:
+  # A) Potential inducibility is high verus low
+  # B) Potential inducibility varies based upon nutrient condition
+  
+  ML_inducibility <- MLdata[reaction %in% adequate_fit_optimal_rxn_form,,]
+  ML_inducibility <- ML_inducibility[Type == "enzyme",,]
+  ML_inducibility <- ML_inducibility[,list(ML = sum(get("0.5")), nenzyme = length(get("0.5"))), by = c("reaction", "condition")]
+  
+  # collapse across conditions to mean(ML) and SD(ML)
+  ML_inducibility_summary <- ML_inducibility[,list(ML_mean = mean(ML), ML_sd = sd(ML), ML_min = min(ML), ML_max = max(ML), ML_range = max(ML)-min(ML), nenzyme = nenzyme[1]), by = "reaction"]
+  ML_inducibility_summary[,CV := ML_sd/ML_mean] 
+  ML_inducibility_summary$rxn <- substr(ML_inducibility_summary$reaction, 1, 6)
+  ML_inducibility_summary[,ML_logit := log(ML_mean/(1-ML_mean))]
+  
+  rxn_meta_info <- read.delim("flux_cache/rxnParYeast.tsv")
+  aligned_ML_meta <- rxn_meta_info[chmatch(ML_inducibility_summary$rxn, rxn_meta_info$ReactionID),]
+  
+  # Determine pathway E.C. numbers
+  # If multiple E.C. identifiers exist, take the first one (this will be the identifier associated with the kegg R ID if there is one)
+  aligned_ML_meta$EC <- sapply(aligned_ML_meta$EC, function(x){
     strsplit(x, split = ",")[[1]][1]
   })
-
-aligned_ML_meta$EC1 <- sapply(aligned_ML_meta$EC, function(x){strsplit(x, split = "\\.")[[1]][1]})
-aligned_ML_meta$EC2 <- sapply(aligned_ML_meta$EC, function(x){paste(strsplit(x, split = "\\.")[[1]][1:2], collapse = ".")})
-
-# Determine pathway-by-reaction
-
-aligned_ML_meta$pathname <- sapply(aligned_ML_meta$pathname, function(x){strsplit(x, split = "__")[[1]][1]})
-
-rxn_meta_path_prune <- melt(lapply(aligned_ML_meta$pathname, function(x){
-  strsplit(x, split = "__")
-  }))
-
-rxn_meta_path_pruned <- rxn_meta_path_prune[rxn_meta_path_prune$value %in% names(table(rxn_meta_path_prune$value))[table(rxn_meta_path_prune$value) >= 5 & table(rxn_meta_path_prune$value) <= 20],]
-rxn_meta_path_pruned$rxn <- aligned_ML_meta$ReactionID[rxn_meta_path_pruned$L1]
-rxn_meta_path_pruned <- rbind(rxn_meta_path_pruned, data.frame(value = "Misc", L2 = 1, L1 = NA, rxn = aligned_ML_meta$ReactionID[!(aligned_ML_meta$ReactionID %in% rxn_meta_path_pruned$rxn)]))
-rxn_pathways_cast <- acast(rxn_meta_path_pruned, formula = rxn ~ value, value.var = "L2", fill = 0)
-
-# Determine reaction reversibility
-aligned_ML_meta$reversibility <- ifelse(reversibleRx$modelBound[chmatch(aligned_ML_meta$ReactionID, reversibleRx$rx)] == "greaterEqual", "F", "T")
-
-# Regression of EC and pathway on metabolic leverage
-
-anova(lm(ML_inducibility_summary$ML_logit ~ aligned_ML_meta$EC1)) # associate with E.C. number
-anova(lm(ML_inducibility_summary$ML_logit ~ rxn_pathways_cast)) # assocaite with pathway
-anova(lm(ML_inducibility_summary$ML_logit ~ aligned_ML_meta$reversibility)) # associate with reversibility
-
-regulatory_contingency <- table(regulated = c(1:nrow(ML_inducibility_summary)) %in% grep('act|inh', ML_inducibility_summary$reaction), reversible = aligned_ML_meta$reversibility)
-chisq.test(regulatory_contingency, simulate.p.value = T)
-regulatory_contingency[2,2]/sum(regulatory_contingency[,2])
-regulatory_contingency[2,1]/sum(regulatory_contingency[,1])
-
-ML_inducibility_summary$reversibility <- aligned_ML_meta$reversibility
-setkey(ML_inducibility_summary, 'ML_mean')
-ML_inducibility_summary$rxn <- factor(ML_inducibility_summary$rxn, levels = ML_inducibility_summary$rxn)
-
-# convert reaction enzymes to common names
-rxn_enzyme_groups <- read.delim("./flux_cache/rxn_enzyme_groups.tsv")
-library("org.Sc.sgd.db")
-c2o <- toTable(org.Sc.sgdCOMMON2ORF)
-
-# convert from systematic names to common names and then generate a compact summary of genes with consecutive numbers
-ML_reaction_enzymes <- sapply(ML_inducibility_summary$rxn, function(x){
-  commonSubset <- sort(c2o$gene_name[chmatch(unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction == x]), c2o$systematic_name)])
-  commonSubsetDF <- data.frame(a = regmatches(commonSubset, regexpr('^[A-Z]{3}', commonSubset)), n = regmatches(commonSubset, regexpr('[0-9]+', commonSubset)))
   
-  gene_name_compact = NULL
-  for(an_a in unique(commonSubsetDF$a)){
-    if(length(commonSubsetDF$n[commonSubsetDF$a == an_a]) == 1){
-      gene_name_compact <- c(gene_name_compact, paste(an_a, commonSubsetDF$n[commonSubsetDF$a == an_a], sep = ""))
-    }else{
-      q_seq <- as.numeric(commonSubsetDF$n[commonSubsetDF$a == an_a])
-      q_group <- rep(1:length(q_seq))
-      for(q_el in 1:(length(q_seq)-1)){
-        if(q_seq[q_el] + 1 == q_seq[q_el + 1]){
-          q_group[q_el + 1] <- q_group[q_el]
-        }
-      }
-      group_track <- NULL
-      for(a_group in unique(q_group)){
-        if(length(q_seq[q_group == a_group]) == 1){
-         group_track <- c(group_track, q_seq[q_group == a_group])
-        }else{
-          group_track <- c(group_track, paste(q_seq[q_group == a_group][1], q_seq[q_group == a_group][length(q_seq[q_group == a_group])], sep = "-"))
+  aligned_ML_meta$EC1 <- sapply(aligned_ML_meta$EC, function(x){strsplit(x, split = "\\.")[[1]][1]})
+  aligned_ML_meta$EC2 <- sapply(aligned_ML_meta$EC, function(x){paste(strsplit(x, split = "\\.")[[1]][1:2], collapse = ".")})
+  
+  # Determine pathway-by-reaction
+  
+  aligned_ML_meta$pathname <- sapply(aligned_ML_meta$pathname, function(x){strsplit(x, split = "__")[[1]][1]})
+  
+  rxn_meta_path_prune <- melt(lapply(aligned_ML_meta$pathname, function(x){
+    strsplit(x, split = "__")
+  }))
+  
+  rxn_meta_path_pruned <- rxn_meta_path_prune[rxn_meta_path_prune$value %in% names(table(rxn_meta_path_prune$value))[table(rxn_meta_path_prune$value) >= 4 & table(rxn_meta_path_prune$value) <= 20],]
+  rxn_meta_path_pruned$rxn <- aligned_ML_meta$ReactionID[rxn_meta_path_pruned$L1]
+  rxn_meta_path_pruned <- rbind(rxn_meta_path_pruned, data.frame(value = "Misc", L2 = 1, L1 = NA, rxn = aligned_ML_meta$ReactionID[!(aligned_ML_meta$ReactionID %in% rxn_meta_path_pruned$rxn)]))
+  rxn_pathways_cast <- acast(rxn_meta_path_pruned, formula = rxn ~ value, value.var = "L2", fill = 0)
+  
+  # Determine reaction reversibility
+  aligned_ML_meta$reversibility <- ifelse(reversibleRx$modelBound[chmatch(aligned_ML_meta$ReactionID, reversibleRx$rx)] == "greaterEqual", "F", "T")
+  
+  # Regression of EC and pathway on metabolic leverage
+  cat("\nEnzyme control vs. EC\n")
+  print(anova(lm(ML_inducibility_summary$ML_logit ~ aligned_ML_meta$EC1))) # associate with E.C. number
+  cat("\nEnzyme control vs. pathway\n")
+  print(anova(lm(ML_inducibility_summary$ML_logit ~ rxn_pathways_cast))) # assocaite with pathway
+  cat("\nEnzyme control vs. rxn reversibility\n")
+  print(anova(lm(ML_inducibility_summary$ML_logit ~ aligned_ML_meta$reversibility))) # associate with reversibility
+  
+  regulatory_contingency <- table(regulated = c(1:nrow(ML_inducibility_summary)) %in% grep('act|inh', ML_inducibility_summary$reaction), reversible = aligned_ML_meta$reversibility)
+  cat("\nRegulatory reaction vs. rxn reversibility\n")
+  print(chisq.test(regulatory_contingency, simulate.p.value = T))
+  #regulatory_contingency[2,2]/sum(regulatory_contingency[,2])
+  #regulatory_contingency[2,1]/sum(regulatory_contingency[,1])
+  
+  ML_inducibility_summary$reversibility <- aligned_ML_meta$reversibility
+  setkey(ML_inducibility_summary, 'ML_mean')
+  ML_inducibility_summary$rxn <- factor(ML_inducibility_summary$rxn, levels = ML_inducibility_summary$rxn)
+  
+  # Association with trancription factor targets
+  
+  # convert reaction enzymes to common names
+  rxn_enzyme_groups <- read.delim("./flux_cache/rxn_enzyme_groups.tsv")
+  library("org.Sc.sgd.db")
+  c2o <- toTable(org.Sc.sgdCOMMON2ORF)
+  
+  # convert from systematic names to common names and then generate a compact summary of genes with consecutive numbers
+  ML_reaction_enzymes <- sapply(ML_inducibility_summary$rxn, function(x){
+    commonSubset <- sort(c2o$gene_name[chmatch(unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction == x]), c2o$systematic_name)])
+    commonSubsetDF <- data.frame(a = regmatches(commonSubset, regexpr('^[A-Z]{3}', commonSubset)), n = regmatches(commonSubset, regexpr('[0-9]+', commonSubset)))
+    
+    gene_name_compact = NULL
+    for(an_a in unique(commonSubsetDF$a)){
+      if(length(commonSubsetDF$n[commonSubsetDF$a == an_a]) == 1){
+        gene_name_compact <- c(gene_name_compact, paste(an_a, commonSubsetDF$n[commonSubsetDF$a == an_a], sep = ""))
+      }else{
+        q_seq <- as.numeric(commonSubsetDF$n[commonSubsetDF$a == an_a])
+        q_group <- rep(1:length(q_seq))
+        for(q_el in 1:(length(q_seq)-1)){
+          if(q_seq[q_el] + 1 == q_seq[q_el + 1]){
+            q_group[q_el + 1] <- q_group[q_el]
           }
         }
-      gene_name_compact <- c(gene_name_compact, paste(an_a, paste(group_track, collapse = ", ") , sep = ""))
+        group_track <- NULL
+        for(a_group in unique(q_group)){
+          if(length(q_seq[q_group == a_group]) == 1){
+            group_track <- c(group_track, q_seq[q_group == a_group])
+          }else{
+            group_track <- c(group_track, paste(q_seq[q_group == a_group][1], q_seq[q_group == a_group][length(q_seq[q_group == a_group])], sep = "-"))
+          }
+        }
+        gene_name_compact <- c(gene_name_compact, paste(an_a, paste(group_track, collapse = ", ") , sep = ""))
+      }
     }
-  }
-  return(c(expanded = paste(commonSubset, collapse = ", "), collapsed = paste(gene_name_compact, collapse = ", ")))
-})
-ML_reaction_enzymes <- as.data.frame(t(ML_reaction_enzymes))
-
-ML_inducibility_summary$genes <- ML_reaction_enzymes$collapsed
-
-# Determine transcription factors regulating reaction subset
-
-ML_gene_summaries <- data.frame(systematic = unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]),
-                                common = c2o$gene_name[chmatch(unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]), c2o$systematic_name)])
-
-# Import matrix relating transcription factors to their targets (http://www.yeastract.com/generateregulationmatrix.php)
-# Interaction based on "DNA binding and expression evidence", all genes considered #
-# expression or affinity : 10% non-zero
-# affinity : 2% non-zero
-TF_indirect <- as.matrix(read.delim("./companionFiles/yeast_TF_regulation.csv", sep = ";", row.names = 1)) # direct and indirect
-TF_indirect <- TF_indirect[,colnames(TF_indirect) %in% ML_gene_summaries$common]
-
-TF_direct <- as.matrix(read.delim("./companionFiles/Yeast_TF_affinity.csv", sep = ";", row.names = 1)) # direct targets
-TF_direct <- TF_direct[,colnames(TF_direct) %in% ML_gene_summaries$common]
-
-if(all(colnames(TF_indirect) == colnames(TF_direct))){
+    return(c(expanded = paste(commonSubset, collapse = ", "), collapsed = paste(gene_name_compact, collapse = ", ")))
+  })
+  ML_reaction_enzymes <- as.data.frame(t(ML_reaction_enzymes))
   
-  rxn2gene <- matrix(0, nrow = nrow(ML_inducibility_summary), ncol = ncol(TF_direct))
-  rownames(rxn2gene) <- ML_inducibility_summary$rxn; colnames(rxn2gene) <- colnames(TF_direct)
-  for(i in 1:nrow(ML_reaction_enzymes)){
-    rxn2gene[i,colnames(rxn2gene) %in% strsplit(ML_reaction_enzymes$expanded[i], split = ", ")[[1]]] <- 1
-  }  
+  ML_inducibility_summary$genes <- ML_reaction_enzymes$collapsed
   
-}else{
-  stop("TF_direct and TF_indirect gene complements differ -> rxn2gene transformation needs to be modified")
-}
-
-# convert matrix from TF ~ Gene to TF ~ Rxn
-
-TF_indirect_byrxn <- TF_indirect %*% t(rxn2gene); TF_indirect_byrxn[TF_indirect_byrxn != 0] <- 1
-TF_direct_byrxn <- TF_direct %*% t(rxn2gene); TF_direct_byrxn[TF_direct_byrxn != 0] <- 1
-
-# Reduce the number of transcription factors to those with a role in steady-state metabolism #
-# from FIRE, generate a subset of TFs shaping transcription across these conditions (based upon Brauer data)
-FIRE_TFs <- c("Msn2p", "Msn4p", "Gcn4p", "Bas1p", "Cbf1p", "Mbp1p", "Swi4p")
-
-TF_indirect_byrxn <- TF_indirect_byrxn[rownames(TF_indirect_byrxn) %in% FIRE_TFs,]
-TF_direct_byrxn <- TF_direct_byrxn[rownames(TF_direct_byrxn) %in% FIRE_TFs,]
-
-TF_ML_assoc <- data.frame(TF = c(rownames(TF_indirect_byrxn), rownames(TF_direct_byrxn)), Effect = c(rep("indirect", times = nrow(TF_indirect_byrxn)),rep("direct", times = nrow(TF_direct_byrxn))) , p = NA)
-
-for(i in 1:nrow(TF_ML_assoc)){
-  if(TF_ML_assoc$Effect[i] == "indirect"){
-    refVec <- TF_indirect_byrxn[rownames(TF_indirect_byrxn) == TF_ML_assoc$TF[i],]
+  # Determine transcription factors regulating reaction subset
+  
+  ML_gene_summaries <- data.frame(systematic = unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]),
+                                  common = c2o$gene_name[chmatch(unique(rxn_enzyme_groups$enzyme[rxn_enzyme_groups$reaction %in% ML_inducibility_summary$rxn]), c2o$systematic_name)])
+  
+  # Import matrix relating transcription factors to their targets (http://www.yeastract.com/generateregulationmatrix.php)
+  # Interaction based on "DNA binding and expression evidence", all genes considered #
+  # expression or affinity : 10% non-zero
+  # affinity : 2% non-zero
+  
+  # connect every gene involved in a reaction with whether it is a TF target
+  TF_indirect <- as.matrix(read.delim("./companionFiles/yeast_TF_regulation.csv", sep = ";", row.names = 1)) # direct and indirect
+  TF_indirect <- TF_indirect[,colnames(TF_indirect) %in% ML_gene_summaries$common]
+  
+  TF_direct <- as.matrix(read.delim("./companionFiles/Yeast_TF_affinity.csv", sep = ";", row.names = 1)) # direct targets
+  TF_direct <- TF_direct[,colnames(TF_direct) %in% ML_gene_summaries$common]
+  
+  if(all(colnames(TF_indirect) == colnames(TF_direct))){
+    
+    rxn2gene <- matrix(0, nrow = nrow(ML_inducibility_summary), ncol = ncol(TF_direct))
+    rownames(rxn2gene) <- ML_inducibility_summary$rxn; colnames(rxn2gene) <- colnames(TF_direct)
+    for(i in 1:nrow(ML_reaction_enzymes)){
+      rxn2gene[i,colnames(rxn2gene) %in% strsplit(ML_reaction_enzymes$expanded[i], split = ", ")[[1]]] <- 1
+    }  
+    
   }else{
-    refVec <- TF_direct_byrxn[rownames(TF_direct_byrxn) == TF_ML_assoc$TF[i],]
+    stop("TF_direct and TF_indirect gene complements differ -> rxn2gene transformation needs to be modified")
   }
-  if(length(unique(refVec)) == 1){next}
   
-  TF_ML_assoc$p[i] <- wilcox.test(ML_inducibility_summary$ML_mean[refVec == 1], ML_inducibility_summary$ML_mean[refVec == 0], alternative = "two.sided")$p.value
+  # convert matrix from TF ~ Gene to TF ~ Rxn
+  
+  TF_indirect_byrxn <- TF_indirect %*% t(rxn2gene); TF_indirect_byrxn[TF_indirect_byrxn != 0] <- 1
+  TF_direct_byrxn <- TF_direct %*% t(rxn2gene); TF_direct_byrxn[TF_direct_byrxn != 0] <- 1
+  
+  # Reduce the number of transcription factors to those with a role in steady-state metabolism #
+  # from FIRE, generate a subset of TFs shaping transcription across these conditions (based upon Brauer data)
+  FIRE_TFs <- c("Msn2p", "Msn4p", "Gcn4p", "Bas1p", "Cbf1p", "Mbp1p", "Swi4p")
+  
+  TF_indirect_byrxn <- TF_indirect_byrxn[rownames(TF_indirect_byrxn) %in% FIRE_TFs,]
+  TF_direct_byrxn <- TF_direct_byrxn[rownames(TF_direct_byrxn) %in% FIRE_TFs,]
+  
+  TF_ML_assoc <- data.frame(TF = c(rownames(TF_indirect_byrxn), rownames(TF_direct_byrxn)), Effect = c(rep("indirect", times = nrow(TF_indirect_byrxn)),rep("direct", times = nrow(TF_direct_byrxn))) , p = NA)
+  
+  for(i in 1:nrow(TF_ML_assoc)){
+    if(TF_ML_assoc$Effect[i] == "indirect"){
+      refVec <- TF_indirect_byrxn[rownames(TF_indirect_byrxn) == TF_ML_assoc$TF[i],]
+    }else{
+      refVec <- TF_direct_byrxn[rownames(TF_direct_byrxn) == TF_ML_assoc$TF[i],]
+    }
+    if(length(unique(refVec)) == 1){next}
+    
+    TF_ML_assoc$p[i] <- wilcox.test(ML_inducibility_summary$ML_mean[refVec == 1], ML_inducibility_summary$ML_mean[refVec == 0], alternative = "two.sided")$p.value
+  }
+  
+  library(qvalue)
+  
+  TF_ML_assoc$q <- qvalue(TF_ML_assoc$p)$q
+  TF_ML_assoc <- TF_ML_assoc[TF_ML_assoc$q < 0.1,] # look at TFs with an FDR of less than 0.1
+  TF_ML_assoc$label <- paste(sub('p$', '', TF_ML_assoc$TF), TF_ML_assoc$Effect, sep = "-")
+  
+  TFsigSubset <- rbind(TF_indirect_byrxn[chmatch(TF_ML_assoc$TF[TF_ML_assoc$Effect == "indirect"], rownames(TF_indirect_byrxn)),],
+                       TF_direct_byrxn[chmatch(TF_ML_assoc$TF[TF_ML_assoc$Effect == "direct"], rownames(TF_direct_byrxn)),])
+  rownames(TFsigSubset) <- TF_ML_assoc$label
+  
+  TF_effect_melt <- data.table(melt(TFsigSubset))
+  setnames(TF_effect_melt, colnames(TF_effect_melt), c("TF", "rxn", "target"))
+  TF_effect_melt$rxn <- factor(TF_effect_melt$rxn, levels = levels(TF_effect_melt$rxn))
+  TF_effect_melt$TF <- factor(TF_effect_melt$TF, levels = rev(sort(unique(as.character(TF_effect_melt$TF)))))
+  TF_effect_melt$ypos <- max(ML_inducibility_summary$ML_max) + as.numeric(TF_effect_melt$TF)/25
+  TF_effect_melt$fillCol <- ifelse(TF_effect_melt$target == 1, "chocolate1", "aliceblue")  
+  
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+                         panel.background = element_rect(fill = "gray90"), legend.position = "top", 
+                         axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black"),
+                         axis.text = element_text(color = "black"), axis.text.x = element_text(size = 18, angle = 75, hjust = 1, vjust = 1),
+                         panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                         axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
+  )
+  
+  write.table(ML_inducibility_summary, file = "flux_cache/ML_inducibility_summary.tsv", quote = F, row.names = F, col.names = T, sep = "\t")
+  
+  ggplot() + geom_pointrange(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max), size = 2, color = "blue3") +
+    scale_x_discrete("Reactions", breaks = ML_inducibility_summary$rxn, labels = ML_inducibility_summary$genes) + scale_y_continuous("Enyzme Metabolic Leverage", breaks = seq(0,0.8, by = 0.2), expand = c(0,0)) +
+    geom_raster(data = TF_effect_melt, aes(x = rxn, y = ypos, fill = fillCol)) + 
+    geom_text(data = TF_effect_melt[TF_effect_melt$rxn == ML_inducibility_summary$rxn[1],], aes(x = rxn, y = ypos, label = TF), hjust = 0, size = 7) +
+    barplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y = 0)
+  
+  ggsave("Figures/MLstrength.pdf", height = 10, width = 14)
+  
+  return(ML_inducibility_summary)
+  
 }
 
-library(qvalue)
 
-TF_ML_assoc$q <- qvalue(TF_ML_assoc$p)$q
-TF_ML_assoc <- TF_ML_assoc[TF_ML_assoc$q < 0.1,] # look at TFs with an FDR of less than 0.1
-TF_ML_assoc$label <- paste(sub('p$', '', TF_ML_assoc$TF), TF_ML_assoc$Effect, sep = "-")
-
-TFsigSubset <- rbind(TF_indirect_byrxn[chmatch(TF_ML_assoc$TF[TF_ML_assoc$Effect == "indirect"], rownames(TF_indirect_byrxn)),],
-TF_direct_byrxn[chmatch(TF_ML_assoc$TF[TF_ML_assoc$Effect == "direct"], rownames(TF_direct_byrxn)),])
-rownames(TFsigSubset) <- TF_ML_assoc$label
-
-TF_effect_melt <- data.table(melt(TFsigSubset))
-setnames(TF_effect_melt, colnames(TF_effect_melt), c("TF", "rxn", "target"))
-TF_effect_melt$rxn <- factor(TF_effect_melt$rxn, levels = levels(TF_effect_melt$rxn))
-TF_effect_melt$TF <- factor(TF_effect_melt$TF, levels = rev(sort(unique(as.character(TF_effect_melt$TF)))))
-TF_effect_melt$ypos <- max(ML_inducibility_summary$ML_max) + as.numeric(TF_effect_melt$TF)/25
-TF_effect_melt$fillCol <- ifelse(TF_effect_melt$target == 1, "chocolate1", "aliceblue")  
+ML_inducibility_summary <- enzyme_control_source()
 
 
-barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
-                       panel.background = element_rect(fill = "gray90"), legend.position = "top", 
-                       axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black"),
-                       axis.text = element_text(color = "black"), axis.text.x = element_text(size = 18, angle = 75, hjust = 1, vjust = 1),
-                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
-                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
-                       )
 
-write.table(ML_inducibility_summary, file = "flux_cache/ML_inducibility_summary.tsv", quote = F, row.names = F, col.names = T, sep = "\t")
 
-ggplot() + geom_pointrange(data = ML_inducibility_summary, aes(x = rxn, y = ML_mean, ymin = ML_min, ymax = ML_max), size = 2, color = "blue3") +
-  scale_x_discrete("Reactions", breaks = ML_inducibility_summary$rxn, labels = ML_inducibility_summary$genes) + scale_y_continuous("Enyzme Metabolic Leverage", breaks = seq(0,0.8, by = 0.2), expand = c(0,0)) +
-  geom_raster(data = TF_effect_melt, aes(x = rxn, y = ypos, fill = fillCol)) + 
-  geom_text(data = TF_effect_melt[TF_effect_melt$rxn == ML_inducibility_summary$rxn[1],], aes(x = rxn, y = ypos, label = TF), hjust = 0, size = 7) +
-  barplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y = 0)
-  
-ggsave("Figures/MLstrength.pdf", height = 10, width = 14)
+
+
+
+
+
 
 ######## Split ML of well-fit reactions into enzyme and allosteric control ###########
 
-ML_rxn_summary <- MLdata[reaction %in% adequate_fit_optimal_rxn_form,,]
-ML_rxn_summary$Type[ML_rxn_summary$Type %in% c("substrate", "product")] <- "rxn_metabolite"
-ML_rxn_summary$Type[!(ML_rxn_summary$Type %in% c("rxn_metabolite", "enzyme"))] <- "regulator"
+ML_rxn_summary <- tbl_df(MLdata) %>% dplyr::filter(reaction %in% adequate_fit_optimal_rxn_form) %>% 
+  dplyr::mutate(Type = ifelse(Type %in% c("substrate", "product"), "rxn_metabolite", Type)) %>%
+  dplyr::mutate(Type = ifelse(!(Type %in% c("rxn_metabolite", "enzyme")), "regulator", Type)) %>%
+  dplyr::select(reaction, specie, Type, condition, ML = get("0.5")) %>% group_by(reaction, Type, condition) %>%
+  dplyr::summarize(ML = sum(ML)) %>% group_by(reaction, Type) %>% dplyr::summarize(ML = median(ML)) %>%
+  group_by(reaction) %>% dplyr::mutate(ML = ML / sum(ML))
 
-ML_rxn_summary <- ML_rxn_summary[,list(ML = sum(get("0.5"))), by = c("reaction", "Type", "condition")]
-ML_rxn_summary <- ML_rxn_summary[,list(ML = median(ML)), by = c("reaction", "Type")]
+ML_rxn_summary <- tbl_df(dcast(ML_rxn_summary, reaction ~ Type, value.var = "ML", fill = 0)) # each rxn with assocaited enzyme, regulator and metabolic control fraction
 
-ML_rxn_summary[,MLrenorm := ML/sum(ML), by = "reaction"]
+ML_rxn_summary <- ML_rxn_summary %>% dplyr::mutate(rID = substr(reaction, 1,6)) %>% left_join(ML_inducibility_summary %>% dplyr::select(reaction, genes, reversibility)) %>%
+  left_join(reversibleRx %>% dplyr::select(rID = rx, CCdG, CCdGsd)) %>% arrange(rxn_metabolite)
 
-ML_rxn_summary <- data.table(dcast(ML_rxn_summary, reaction ~ Type, value.var = "MLrenorm", fill = 0)) # each rxn with assocaited enzyme, regulator and metabolic control fraction
-ML_rxn_summary[,rID := substr(reaction, 1, 6),]
-ML_rxn_summary$genes <- ML_inducibility_summary$genes[chmatch(ML_rxn_summary$reaction, ML_inducibility_summary$reaction)]
-
-setkeyv(ML_rxn_summary, "rxn_metabolite")
 
 color_key <- color_ternary(100)
 #color_key <- color_simplex(200, 0, T, 6)
@@ -1276,6 +1193,17 @@ ML_rxn_summary <- ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(colo
 
 ML_rxn_ternaryPoints <- ML_rxn_summary %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
                                               y = sqrt(3)/2 * enzyme*(regulator + enzyme + rxn_metabolite))
+
+test <- ML_rxn_ternaryPoints %>% dplyr::filter(reversibility == "T")
+
+summary(lm(ML_rxn_summary, formula = rxn_metabolite ~ reversibility))
+
+
+color_key$Figure + 
+  geom_point(data = test, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
+  geom_point(data = test, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE")
+
+
 
 # Name point according to the metabolic layout
 
