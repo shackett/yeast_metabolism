@@ -480,7 +480,7 @@ TRdata <- NULL # Save summary transcriptional resposiveness
 t_start = proc.time()[3]
 
 # flag a few reactions where additional plots are created
-custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond")
+custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm", "r_0816-rm", "r_0816-rm-t_0461-inh-uncomp", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond")
 
 #rxn_subset <- grep('1054|0962|0816', reactionInfo$rMech, value = T)
 #for(arxn in rxn_subset){
@@ -857,96 +857,9 @@ ggsave("Figures/spearman_stack.pdf", height = 7, width = 12)
 
 ##### Replotting a few reactions for figures #####
 
-# TPI - michaelis-menten-kinetics
-load("shinyapp/reaction_data/r_1054plots.Rdata")
-
-reactionInfo %>% filter(reaction == "r_1054")
-
-saved_plot <- ggplotGrob(shiny_flux_data[["r_1054-rm"]][['plotChoices']][['Flux and species']])
-panes <- which(saved_plot[["layout"]][,"name"] == "panel")
-grid.draw(saved_plot)
-
-
-
-ggsave(plot = shiny_flux_data[["r_1054-rm"]][['plotChoices']][['Flux and species']], "Figures/TPIrmm.pdf", height = 14, width = 10)
-
-
-# PyK - comparison of michaelis-menten kinetics with non-significant and significant regulation
-load("shinyapp/reaction_data/r_0962plots.Rdata")
-
-ggsave(plot = shiny_flux_data[["r_0962-rm"]][['plotChoices']][['Flux and species']], "Figures/PYKrmm.pdf", height = 14, width = 10) # RMM
-ggsave(plot = shiny_flux_data[["r_0962-rm-t_0292-act-mm"]][['plotChoices']][['Flux and species']], "Figures/PYKf6p.pdf", height = 14, width = 10) # F6P
-ggsave(plot = shiny_flux_data[["r_0962-rm-t_0290-act-mm"]][['plotChoices']][['Flux and species']], "Figures/PYKfbp.pdf", height = 14, width = 10) # FBP
-
-reactionInfo[reactionInfo$rMech %in% c("r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm"),]
-
-rxn_fits[rxn_fits$rxn %in% c("r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm"),]
-
-
-# OTCase - comparsion of michaelis-menten kinetics and versus alanine
-load("shinyapp/reaction_data/r_0816plots.Rdata")
-
-ggsave(plot = shiny_flux_data[["r_0816-rm_rmCond"]][['plotChoices']][["Flux comparison"]], "Figures/OTCasermm.pdf", height = 6, width = 10) # RMM
-ggsave(plot = shiny_flux_data[["r_0816-rm-t_0461-inh-uncomp_rmCond"]][['plotChoices']][["Flux comparison"]], "Figures/OTCaseAla.pdf", height = 6, width = 10) # ALA
-shiny_flux_data[["r_0816-rm_rmCond"]][['plotChoices']][[2]]
-ala_rxns <- reactionInfo %>% filter(reaction == "r_0816") %>% filter(grepl('L-alanine', FullName))
-
-rxn_fits[rxn_fits$rxn %in% c("r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond"),]
-run_rxn[["r_0816-rm-t_0461-inh-uncomp_rmCond"]]
-
-
-par_likelihood <- NULL
-par_markov_chain <- NULL
-
-parSubset <- param_set_list[parSetInfo$rx == "r_0816-rm-t_0461-inh-uncomp_rmCond"]
-
-for(i in 1:length(parSubset)){
-  
-  par_likelihood <- rbind(par_likelihood, data.frame(sample = 1:param_run_info$n_samples[parSubset[[i]]$name$index], likelihood = parSubset[[i]]$lik, index = parSubset[[i]]$name$index))
-  par_markov_chain <- rbind(par_markov_chain, parSubset[[i]]$MC)
-}
-
-
-#load(paste(c("FBGA_files/paramSets/", param_run_info$file[param_run_info$index == par_likelihood$index[1]]), collapse = ""))
-#run_rxn <- run_summary[["r_0816-rm-t_0461-inh-uncomp_rmCond"]]
-
-otcase_alanine_ki <- data.frame(ki = 2^par_markov_chain[,'t_0461'])
-otcase_alanine_ki_mle <- otcase_alanine_ki[which.max(par_likelihood$likelihood),]
-otcase_alanine_ki_exp <- 14.8e-3
-
-barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 20, face = "bold"), 
-                       panel.background = element_rect(fill = "gray80"), legend.position = "right", 
-                       axis.ticks.x = element_line(color = "black", size = 1), axis.ticks.y = element_line(color = "black", size = 1),
-                       axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90, hjust = 0.5, vjust = 0.5),
-                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
-                       axis.line = element_line(color = "black", size = 1)
-                       )
-
-ggplot(otcase_alanine_ki, aes(x = ki)) + geom_bar(binwidth = 0.05) + 
-  geom_vline(xintercept = otcase_alanine_ki_mle, color = "RED", size = 2) + geom_vline(xintercept = otcase_alanine_ki_exp, color = "BLUE", size = 2) +
-  scale_x_log10("Affinity", breaks = c(1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1), labels = c("100uM", "1mM", "10mM", "100mM", "1M", "10M"), expand = c(0,0)) + barplot_theme + 
-  scale_y_continuous("Counts", expand = c(0,0)) + geom_blank(aes(y=1.1*..count..), binwidth = 0.05, stat="bin") +
-  geom_text(data = data.frame(label = c("MLE", "Measured"), x = 8, y = c(87.5, 80), color = c("RED", "BLUE")), aes(x = x, y = y, label = label, color = color), size = 10) +
-  scale_color_identity()
-ggsave("Figures/OTCaseAla_dist.pdf", width = 7, height = 7)
-
-
+allostery_affinity()
 
 ##### Generate figure summarizing metabolic leverage for a condition #####
-
-#library(stringr)
-
-#ML_natural_vs_all <- MLdata %>% dplyr::select(reaction, specie:conditions, median = contains('0.5')) %>% ungroup() %>% filter(grepl('^[PCN]', condition)) %>%
-#  group_by(specie, reaction, condition) %>%
-#  summarize(ALL = median[conditions == "ALL"], NAT = median[conditions == "NATURAL"])
-
-#ML_natural_vs_all <- ML_natural_vs_all %>% mutate(Diff = abs(ALL - NAT)) %>% group_by(specie, reaction) %>% summarize(diffSum = sum(Diff)) %>%
-#  mutate(rxID = substr(reaction, 1, 6))
-
-#ML_natural_vs_all_rxSummary <- ML_natural_vs_all %>% group_by(rxID, specie) %>% summarize(avg_diffSum = mean(diffSum), nrxns = length(diffSum)) %>% ungroup() %>% arrange(-avg_diffSum) %>% 
-#  group_by(rxID) %>% filter(nrxns == max(nrxns))
-
-#ML_natural_vs_all %>% ungroup() %>% arrange(-diffSum)
 
 MLdata$Type[grepl("r_0302", MLdata$reaction) & MLdata$specie == "isocitrate"] <- "product" # aconitase is split into two reactions without a meaasured cis-aconitate so isocitrate acts like a product in the first rxn
 MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))

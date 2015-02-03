@@ -884,18 +884,28 @@ reaction_info_FBGA <- function(rxnName){
   if(rxnDir == 1){rxnDir <- " -> "}
   if(rxnDir == 0){rxnDir <- " <=> "}
   if(rxnDir == -1){rxnDir <- " <- "}
-    
-  substrate_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi < 0])), function(x){
-    tmp <- (rxnStoi[rxnStoi < 0] * -1)[x]
-    if(tmp == 1){tmp <- ''}
-    paste(tmp, speciesNames[rxnStoi < 0][x])
-  }), collapse = ' + ')
-    
-  product_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi > 0])), function(x){
-    tmp <- (rxnStoi[rxnStoi > 0])[x]
-    if(tmp == 1){tmp <- ''}
-    paste(tmp, speciesNames[rxnStoi > 0][x])
-  }), collapse = ' + ')
+  
+  if(length(rxnStoi[rxnStoi < 0]) == 0){
+    substrate_prep = ""
+    rxnDir <- " <- "
+  }else{
+    substrate_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi < 0])), function(x){
+      tmp <- (rxnStoi[rxnStoi < 0] * -1)[x]
+      if(tmp == 1){tmp <- ''}
+      paste(tmp, speciesNames[rxnStoi < 0][x])
+    }), collapse = ' + ')
+  }  
+  
+  if(length(rxnStoi[rxnStoi > 0]) == 0){
+    product_prep = ""
+    rxnDir <- " -> "
+  }else{
+    product_prep <- paste(sapply(c(1:length(rxnStoi[rxnStoi > 0])), function(x){
+      tmp <- (rxnStoi[rxnStoi > 0])[x]
+      if(tmp == 1){tmp <- ''}
+      paste(tmp, speciesNames[rxnStoi > 0][x])
+    }), collapse = ' + ')
+  }
   
   if(length(strsplit(paste(substrate_prep, rxnDir, product_prep), "")[[1]]) > 60){
     
@@ -1010,10 +1020,8 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   flux <- run_rxn$flux
   n_c <- nrow(flux)
   
-  met_abund <- run_rxn$metabolites
-  v_metab <- colnames(met_abund)[colSums(met_abund == 0) != n_c] # coerce metabolite abundances to a matrix
-  met_abund <- as.matrix(met_abund[,colSums(met_abund == 0) != n_c, drop = F]) 
-  colnames(met_abund) <- v_metab
+  met_abund <- run_rxn$rxnSummary$rxnMet
+  met_abund <- met_abund[,colSums(is.na(met_abund)) == 0, drop = F]
   
   enzyme_abund <- run_rxn$enzymes
   
@@ -1761,6 +1769,251 @@ pathwayPlots <- function(pathway){
 
 
 
+customPlots <- function(run_rxn, flux_fit, chemostatInfo){
+  
+  require(data.table)
+  require(ggplot2)
+  require(RColorBrewer)
+  require(reshape2)
+  require(grid)
+  
+  ### Generate plots that are relevent for a subset of reaction: ###
+  #1: Flux predicted from FBA and parametric form by condition
+  #2: Substrates, products, enzymes and regulators each get their own pane and are visualized together
+  
+  output_plots <- list()
+  
+  flux <- run_rxn$flux
+  n_c <- nrow(flux)
+  
+  met_abund <- run_rxn$rxnSummary$rxnMet
+  met_abund <- met_abund[,colSums(is.na(met_abund)) == 0, drop = F]
+  
+  enzyme_abund <- run_rxn$enzymes
+  
+  Chemoconds <- data.frame(name = factor(rownames(enzyme_abund), levels = rownames(enzyme_abund)),
+                           Limitation = factor(substr(rownames(enzyme_abund),1,1), levels = unique(substr(rownames(enzyme_abund),1,1))),
+                           DR = gsub('^[A-Z]', '', rownames(enzyme_abund)))
+  Chemoconds$actualDR <- chemostatInfo$actualDR[chmatch(as.character(Chemoconds$name), chemostatInfo$ChemostatCond)]
+    
+  
+  DRordering <- data.frame(DRs = as.character(c("0.05", "0.11", "0.16", "0.22", "0.30")), order = 1:5)
+  Chemoconds$DRorder <- DRordering$order[chmatch(as.character(Chemoconds$DR), DRordering$DRs)]
+  
+  #### Comparision of parametric and FBA fit ####
+  
+  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), 
+                    panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
+                    legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90))
+  
+  flux_plot_FBA <- data.frame(METHOD = "FBA", FLUX = (flux$FVAmin + flux$FVAmax)/2, LB = flux$FVAmin, UB = flux$FVAmax, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$DR)
+  flux_plot_PAR <- data.frame(METHOD = "PAR", FLUX = flux_fit$fitted_flux$fitted, LB = flux_fit$fitted_flux$fitted - 2*flux_fit$fitted_flux$SD, UB = flux_fit$fitted_flux$fitted + 2*flux_fit$fitted_flux$SD, condName = Chemoconds$name, condition = Chemoconds$Limitation, DR = Chemoconds$DR)
+  flux_plot_comp <- rbind(flux_plot_FBA, flux_plot_PAR)
+  
+  flux_range <- range(c(0, flux_plot_comp$FLUX))
+  
+  flux_plot_header <- data.frame(label = c("FBA-determined flux at optimum", "Parametric fit (95% CI)"), METHOD = c("FBA", "PAR"), x = 1, y = max(flux_range) - diff(flux_range)/15 * c(0,1))
+  
+  flux_plot_data <- list(flux_plot_comp = flux_plot_comp, flux_plot_header = flux_plot_header, flux_range = flux_range)
+  
+  #### Combining flux carried and species into a single faceted plot ####
+
+  all_species <- data.frame(met_abund, enzyme_abund)
+  all_species_SD <- run_rxn$specSD
+  colnames(all_species) <- colnames(all_species_SD) <- run_rxn$all_species$commonName[chmatch(colnames(all_species), run_rxn$all_species$rel_spec)]
+  
+  species_df <- melt(cbind(all_species, data.frame(condition = Chemoconds$Limitation, DR = Chemoconds$actualDR, FLB = flux$FVAmin, FUB = flux$FVAmax)), id.vars = c("condition", "DR", "FLB", "FUB"), value.name = "RA")
+  species_df$SD <- melt(all_species_SD, value.name = "SD", measure.vars = colnames(all_species_SD))$SD
+  species_df$LB <- species_df$RA - 2*species_df$SD
+  species_df$UB <- species_df$RA + 2*species_df$SD
+  
+  
+  species_df <- melt(cbind(all_species, condition = Chemoconds$name), id.vars = c("condition"), value.name = "RA")
+  species_df$SD <- melt(all_species_SD, value.name = "SD", measure.vars = colnames(all_species_SD))$SD
+  species_df <- data.table(species_df)
+  species_df$metOrigin <- sapply(species_df$variable, function(x){
+    if(x %in% unname(run_rxn$rxnSummary$metNames)){
+      run_rxn$rxnSummary$originMet[chmatch(names(run_rxn$rxnSummary$metNames)[run_rxn$rxnSummary$metNames == x], names(run_rxn$rxnSummary$originMet))]
+    }else{
+     "rel" 
+    }
+  })
+  species_df[,LB :=  2^(RA - 2*SD),]
+  species_df[,UB :=  2^(RA + 2*SD),]
+  species_df[,RA :=  2^RA,]
+  
+  # first scale absolute units by powers of 10 such that mean is between 1&10
+  species_df[,units := as.character(if(all(metOrigin == "rel")){NA}else{
+    meanPower <- format(mean(abs(RA)), scientific = T)
+    regmatches(meanPower, regexpr('[-0-9]+$', meanPower))}),by = "variable"]
+  species_df$RA[!is.na(species_df$units)] <- species_df$RA[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
+  species_df$UB[!is.na(species_df$units)] <- species_df$UB[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
+  species_df$LB[!is.na(species_df$units)] <- species_df$LB[!is.na(species_df$units)]/(10^as.numeric(species_df$units[!is.na(species_df$units)]))
+  
+  # Assign species to substrates, products, regulators, enzymes
+  species_df$Pane <- NA
+  species_df$Pane[species_df$variable %in% run_rxn$kineticPars$commonName[chmatch(run_rxn$rxnSummary$rxnFormData$SubstrateID[run_rxn$rxnSummary$rxnFormData$Subtype == "substrate"], run_rxn$kineticPars$modelName)]] <- "Substrate"
+  species_df$Pane[species_df$variable %in% run_rxn$kineticPars$commonName[chmatch(run_rxn$rxnSummary$rxnFormData$SubstrateID[run_rxn$rxnSummary$rxnFormData$Subtype == "product"], run_rxn$kineticPars$modelName)]] <- "Product"
+  species_df$Pane[species_df$variable %in% run_rxn$kineticPars$commonName[chmatch(run_rxn$rxnSummary$rxnFormData$SubstrateID[!(run_rxn$rxnSummary$rxnFormData$Subtype %in% c("substrate", "product"))], run_rxn$kineticPars$modelName)]] <- "Regulator"
+  species_df$Pane[species_df$variable %in% colnames(enzyme_abund)] <- "Enzyme"
+  species_df <- data.table(species_df)
+  
+  # scale relative units by arbitrary multiplier to align them as closely as possible to absolute data
+  for(a_Pane in unique(species_df$Pane)){
+    species_subset <- species_df[Pane == a_Pane,,]
+    if(any(species_subset$metOrigin == "abs")){
+      abs_mean <- mean(species_subset$RA[species_subset$metOrigin == "abs"])
+      for(relSpecies in unique(species_subset$variable[species_subset$metOrigin == "rel"])){
+        species_df$UB[species_df$variable == relSpecies] <- species_df$UB[species_df$variable == relSpecies] * abs_mean/mean(species_df$RA[species_df$variable == relSpecies])
+        species_df$LB[species_df$variable == relSpecies] <- species_df$LB[species_df$variable == relSpecies] * abs_mean/mean(species_df$RA[species_df$variable == relSpecies])
+        species_df$RA[species_df$variable == relSpecies] <- species_df$RA[species_df$variable == relSpecies] * abs_mean/mean(species_df$RA[species_df$variable == relSpecies])
+      }
+    }else{
+      rel_mean <- mean(species_subset$RA)
+      for(relSpecies in unique(species_subset$variable)){
+        species_df$UB[species_df$variable == relSpecies] <- species_df$UB[species_df$variable == relSpecies] * rel_mean/mean(species_df$RA[species_df$variable == relSpecies])
+        species_df$LB[species_df$variable == relSpecies] <- species_df$LB[species_df$variable == relSpecies] * rel_mean/mean(species_df$RA[species_df$variable == relSpecies])
+        species_df$RA[species_df$variable == relSpecies] <- species_df$RA[species_df$variable == relSpecies] * rel_mean/mean(species_df$RA[species_df$variable == relSpecies])
+      }
+    }
+  }
+  
+  # truncate upper bounds at max(RA) * 1.2
+  species_df$Truncated <- F
+  for(a_Pane in unique(species_df$Pane)){
+    species_subset <- species_df[Pane == a_Pane,,]
+    maxRA <- max(species_subset$RA)
+    if(any(species_subset$UB > maxRA*1.3)){
+      species_df$Truncated[species_df$UB > maxRA*1.3 & species_df$Pane == a_Pane] <- T
+      species_df$UB[species_df$UB > maxRA*1.3 & species_df$Pane == a_Pane] <-  maxRA*1.3
+      }
+    }
+  
+  flux_plot <- data.table(melt(flux_plot_comp, id.vars = c("condName", "FLUX", "LB", "UB"), measure.vars = "METHOD"))
+  flux_plot <- flux_plot[,-which(colnames(flux_plot) == "variable"), with = F]
+  flux_plot$variable <- as.character("Flux")
+  flux_plot$Truncated <- F
+  setnames(flux_plot, old = c("condName", "FLUX", "value", "variable"), new = c("condition", "RA", "variable", "Pane"))
+  
+  all_changes <- rbind(species_df[,chmatch(colnames(flux_plot), colnames(species_df)), with = F], flux_plot)
+  all_changes$Pane <- factor(all_changes$Pane, levels = c("Substrate", "Product", "Enzyme", "Regulator", "Flux"))
+  
+  all_changes$condition <- factor(all_changes$condition, levels = rownames(met_abund))
+  all_changes$Limitation <- factor(substr(all_changes$condition, 1, 1))
+  all_changes$pathGroup <- factor(paste(all_changes$Limitation, all_changes$variable, sep = "_"))
+  
+  # Define species color
+  
+  variable_colors <- data.frame(unique(as.data.frame(all_changes)[,c("variable", "Pane")]), color = NA)
+  
+  if(sum(variable_colors$Pane %in% c("Substrate", "Product")) > 8){
+    variable_colors$color[variable_colors$Pane %in% c("Substrate", "Product")] <- c(brewer.pal(8, "Dark2"), brewer.pal(8, "Pastel2")[c(1:(sum(variable_colors$Pane %in% c("Substrate", "Product")) - 8))])
+  }else{
+    variable_colors$color[variable_colors$Pane %in% c("Substrate", "Product")] <- brewer.pal(8, "Dark2")[1:sum(variable_colors$Pane %in% c("Substrate", "Product"))]
+    }
+  variable_colors$color[variable_colors$Pane == "Flux"] <- brewer.pal(8, "Set1")[1:2]
+  variable_colors$color[variable_colors$Pane == "Regulator"] <- rev(brewer.pal(9, "Reds"))[c(3,5,7,4,6)][1:sum(variable_colors$Pane == "Regulator")]
+  variable_colors$color[variable_colors$Pane == "Enzyme"] <- rev(brewer.pal(9, "YlGnBu"))[c(1,3,5,7,2,4,6,8,9)][1:sum(variable_colors$Pane == "Enzyme")]
+  
+  variable_colors <- variable_colors[chmatch(levels(all_changes$variable), as.character(variable_colors$variable)),]
+  
+  # Define species labels
+  
+  variable_labels <- data.frame(unique(as.data.frame(all_changes)[,c("variable", "Pane")]), units = NA, label = NA)
+  variable_labels$units <- species_df$units[chmatch(as.character(variable_labels$variable), as.character(species_df$variable))]
+  
+  
+  if(!all(is.na(variable_labels$units))){
+    abs_units <- data.frame(units = as.numeric(variable_labels$units[!is.na(variable_labels$units)]), referenceSymbol = NA, referencePower = NA, scaled =  NA)
+    
+    abs_units[abs_units$units >= 0, 2] <- "M"; abs_units[abs_units$units >= 0, 3] <- 0
+    abs_units[data.table::between(abs_units$units, -3, -1, incbounds = T), 2] <- "mM"; abs_units[data.table::between(abs_units$units, -3, -1, incbounds = T), 3] <- -3
+    abs_units[data.table::between(abs_units$units, -6, -4, incbounds = T), 2] <- "uM"; abs_units[data.table::between(abs_units$units, -6, -4, incbounds = T), 3] <- -6
+    abs_units[abs_units$units < -7, 2] <- "nM"; abs_units[abs_units$units < -7, 3] <- -9
+    
+    abs_units$scaled <- 10^(abs_units$units - as.numeric(abs_units$referencePower))
+    abs_units$scaled[abs_units$scaled == 1] <- ""
+    
+    variable_labels$units[!is.na(variable_labels$units)] <- paste0(abs_units$scaled, abs_units$referenceSymbol)
+    }
+  variable_labels$units[is.na(variable_labels$units)] <- "a.u."
+  
+  variable_labels$label <- paste0(variable_labels$variable, ' (', variable_labels$units, ')')
+  variable_labels$label[variable_labels$variable == "FBA"] <- "Observed flux"
+  variable_labels$label[variable_labels$variable == "PAR"] <- "Michaelis-Menten flux (95% CI)"
+  tmp <- variable_labels$y[variable_labels$variable == "FBA"]
+  variable_labels$y[variable_labels$variable == "FBA"] <- variable_labels$y[variable_labels$variable == "PAR"]
+  variable_labels$y[variable_labels$variable == "PAR"] <- tmp
+  
+  variable_labels$x = "P0.05"
+  variable_labels$y = NA
+  
+  for(a_Pane in unique(variable_labels$Pane)){
+    PaneMaxVal <- max(all_changes$UB[all_changes$Pane == a_Pane])
+    variable_labels$y[variable_labels$Pane == a_Pane] <- PaneMaxVal - c(1:sum(variable_labels$Pane == a_Pane))*PaneMaxVal*0.12
+    }
+  
+  multiple_species_plot_data <- list(all_changes = all_changes, variable_labels = variable_labels)
+  
+  # Flux Summary
+  
+  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), 
+                    panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
+                    legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black", size = 30), axis.text.x = element_blank(),
+                    axis.ticks.y = element_line(size = 3, color = "black"), axis.ticks.x = element_blank(), axis.ticks.length = unit(0.6, "lines"))
+  
+  ggplot() + geom_hline(y = 0, size = 3) + geom_vline(x = 0, size = 3) +
+    geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
+    geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +
+    ci_theme + scale_color_manual("Method", guide = "none", values= c("FBA" = "firebrick1", "PAR" = "darkblue")) +
+    scale_y_continuous("Relative Flux", limits = c(flux_range[1],flux_range[2]*1.05), expand = c(0,0)) + scale_x_discrete("Conditions") +
+    scale_size_identity()
+  
+  ggsave(paste0("Figures/rxnPlots/", arxn, "-flux", ".pdf"), height = 6, width = 10)
+  
+  corr_label <- data.frame(x = "U0.11", y = flux_range[which.max(abs(flux_range))]*0.95, label = paste("r^2", "~'=", round(flux_fit$fit_summary$parPearson^2, 2), "'"))
+  
+  ggplot() + geom_hline(y = 0, size = 3) + geom_vline(x = 0, size = 3) +
+    geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
+    geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +
+    geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
+    geom_text(data = corr_label, aes(x = x, y = y, label = label), size = 8, parse = T) +
+    geom_pointrange(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, ymin = LB, ymax = UB, col = factor(METHOD)), size = 2.6, alpha = 1, width = 10) +
+    ci_theme + scale_color_manual("Method", guide = "none", values= c("FBA" = "firebrick1", "PAR" = "darkblue")) +
+    scale_y_continuous("Relative Flux", limits = c(flux_range[1],flux_range[2]*1.05), expand = c(0,0)) + scale_x_discrete("Conditions") +
+    scale_size_identity()
+  
+  ggsave(paste0("Figures/rxnPlots/", arxn, "-fluxMatch", ".pdf"), height = 6, width = 10)
+
+  # Species Summary
+  
+  ci_theme <- theme(text = element_text(size = 30, face = "bold"), title = element_text(size = 30, face = "bold"), panel.background = element_rect(fill = "azure"), 
+                    panel.grid.minor = element_blank(), panel.grid.major = element_blank(), strip.background = element_rect(fill = "cyan"),
+                    legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black", size = 30), axis.text.x = element_blank(),
+                    axis.ticks.y = element_line(size = 3, color = "black"), axis.ticks.x = element_blank(), axis.ticks.length = unit(0.6, "lines"),
+                     panel.margin = unit(1, "lines"))
+  
+  
+  multiple_species_plot_data$all_changes <- multiple_species_plot_data$all_changes %>% filter(Pane != "Flux")
+  multiple_species_plot_data$variable_labels <- multiple_species_plot_data$variable_labels %>% filter(Pane != "Flux")
+  
+  
+  ggplot() + geom_path(data = multiple_species_plot_data$all_changes, aes(x = condition, y = RA, col = variable, group = pathGroup), size = 4, alpha = 1) +
+    geom_point(data = multiple_species_plot_data$all_changes, aes(x = condition, y = RA, col = factor(variable)), size = 10) +
+    geom_text(data = multiple_species_plot_data$variable_labels, aes(x = x, y = y, col = variable, label = label), hjust = 0) +
+    geom_blank(data = multiple_species_plot_data$all_changes, aes(y = RA*1.05)) + 
+    geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3) +
+    facet_grid(Pane ~ ., scale = "free_y") +
+    scale_color_manual(guide = "none", labels = variable_colors$variable, values = variable_colors$color) +
+    ci_theme + scale_size_identity() +
+    scale_y_continuous("Concentration and Flux", expand = c(0,0)) + scale_x_discrete("Conditions") + expand_limits(y = 0)
+ 
+  ggsave(paste0("Figures/rxnPlots/", arxn, "-metabolites", ".pdf"), height = 2 + 3*length(unique(multiple_species_plot_data$all_changes$Pane)), width = 10)
+  
+}
+
+
+
 
 
 reactionProperties <-  function(){
@@ -1781,7 +2034,8 @@ reactionProperties <-  function(){
   n_c <- nrow(run_rxn$metabolites)
   
   flux <- run_rxn$flux
-  met_abund <- run_rxn$metabolites
+  met_abund <- run_rxn$rxnSummary$rxnMet
+  met_abund[is.na(met_abund)] <- 0
   enzyme_abund <- run_rxn$enzymes
   
   mle_pars <- par_markov_chain[which.max(par_likelihood$likelihood),]
@@ -1944,8 +2198,8 @@ reactionProperties <-  function(){
   we_melt <- we_melt %>% group_by(condition, markovSample, conditions) %>% dplyr::mutate(total_we = sum(value)) %>% filter(total_we != 0) %>%
     dplyr::mutate(physiological_leverage = value/total_we)
   
-  we_summary <- we_melt %>% group_by(specie, condition, conditions) %>% dplyr::summarize(LB = boxplot.stats(physiological_leverage)$stats[1], LH = boxplot.stats(physiological_leverage)$stats[2], median = boxplot.stats(physiological_leverage)$stats[3],
-                                                                                  UH = boxplot.stats(physiological_leverage)$stats[4], UB = boxplot.stats(physiological_leverage)$stats[5])
+  we_summary <- we_melt %>% group_by(specie, condition, conditions) %>% dplyr::summarize(LB = boxplot.stats(physiological_leverage)[['stats']][1], LH = boxplot.stats(physiological_leverage)[['stats']][2], median = boxplot.stats(physiological_leverage)[['stats']][3],
+                                                                                  UH = boxplot.stats(physiological_leverage)[['stats']][4], UB = boxplot.stats(physiological_leverage)[['stats']][5])
   we_summary <- we_summary %>% ungroup() %>% mutate(Limitation = factor(substr(condition, 1, 1), levels = c("P", "C", "N", "L", "U")),
                                                     DR = factor(sub('[A-Z]', '', condition)),
                                                     condition = factor(condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% condition]))
@@ -2759,6 +3013,200 @@ nameReformat <- function(names, totalChar){
 }
 
 ########## Functions used for summarizing behavior of sets of reactions ############
+
+
+allostery_affinity <- function(){
+  
+  
+  par_likelihood <- NULL
+  par_markov_chain <- NULL
+  
+  parSubset <- param_set_list[parSetInfo$rx == "r_0816-rm-t_0461-inh-uncomp_rmCond"]
+  
+  for(i in 1:length(parSubset)){
+    
+    par_likelihood <- rbind(par_likelihood, data.frame(sample = 1:param_run_info$n_samples[parSubset[[i]]$name$index], likelihood = parSubset[[i]]$lik, index = parSubset[[i]]$name$index))
+    par_markov_chain <- rbind(par_markov_chain, parSubset[[i]]$MC)
+  }
+  
+  
+  #load(paste(c("FBGA_files/paramSets/", param_run_info$file[param_run_info$index == par_likelihood$index[1]]), collapse = ""))
+  #run_rxn <- run_summary[["r_0816-rm-t_0461-inh-uncomp_rmCond"]]
+  
+  otcase_alanine_ki <- data.frame(ki = 2^par_markov_chain[,'t_0461'])
+  otcase_alanine_ki_mle <- otcase_alanine_ki[which.max(par_likelihood$likelihood),]
+  otcase_alanine_ki_exp <- 14.8e-3
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 20, face = "bold"), 
+                         panel.background = element_rect(fill = "gray80"), legend.position = "right", 
+                         axis.ticks.x = element_line(color = "black", size = 1), axis.ticks.y = element_line(color = "black", size = 1),
+                         axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90, hjust = 0.5, vjust = 0.5),
+                         panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                         axis.line = element_line(color = "black", size = 1)
+  )
+  
+  ggplot(otcase_alanine_ki, aes(x = ki)) + geom_bar(binwidth = 0.05) + 
+    geom_vline(xintercept = otcase_alanine_ki_mle, color = "RED", size = 2) + geom_vline(xintercept = otcase_alanine_ki_exp, color = "BLUE", size = 2) +
+    scale_x_log10("Affinity", breaks = c(1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1), labels = c("100uM", "1mM", "10mM", "100mM", "1M", "10M"), expand = c(0,0)) + barplot_theme + 
+    scale_y_continuous("Counts", expand = c(0,0)) + geom_blank(aes(y=1.1*..count..), binwidth = 0.05, stat="bin") +
+    geom_text(data = data.frame(label = c("MLE", "Measured"), x = 8, y = c(87.5, 80), color = c("RED", "BLUE")), aes(x = x, y = y, label = label, color = color), size = 10) +
+    scale_color_identity()
+  ggsave("Figures/OTCaseAla_dist.pdf", width = 7, height = 7)
+  
+}
+
+
+flux_mass_action_regression <- function(){
+  
+  ##### predict flux using linear regression using either metabolites and enzymes or their log - partition variance explained into that explained by metabolite and by enzymes ####
+  
+  reaction_pred_log <- data.frame(nmetab = rep(NA, length(grep('rm$', names(rxnList)))), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, varExplainedJointly = NA, TSS = NA)
+  reaction_pred_linear <- data.frame(nmetab = rep(NA, length(grep('rm$', names(rxnList)))), nenz = NA, nCond = NA, Fmetab = NA, Fenz = NA, varExplainedTotal = NA, varExplainedMetab = NA, varExplainedEnzy = NA, varExplainedEither = NA, varExplainedJointly = NA, TSS = NA)
+  
+  for(rxN in grep('rm$', names(rxnList))){
+    reaction_pred_linear$nenz[rxN] <- reaction_pred_log$nenz[rxN] <- length(rxnList[[rxN]]$enzymeComplexes[,1])
+    reaction_pred_linear$nmetab[rxN] <- reaction_pred_log$nmetab[rxN] <- sum(!is.na(rxnList[[rxN]]$rxnMet))/25
+    
+    if(all(rxnList[[rxN]]$flux$standardQP >= 0)){
+      rxFlux <- log2(rxnList[[rxN]]$flux$standardQP)
+    } else if(all(rxnList[[rxN]]$flux$standardQP <= 0)){
+      rxFlux <- log2(-1*rxnList[[rxN]]$flux$standardQP)
+    } else{
+      next
+    } #if only forward flux consider its log, if only backwards flux consider the log of -1*flux, if the directionality changes then skip this rxn.
+    rxFlux[!is.finite(rxFlux)] <- NA
+    
+    reaction_pred_log$nCond[rxN] <- reaction_pred_linear$nCond[rxN] <- sum(!is.na(rxFlux))
+    
+    if(reaction_pred_linear$nenz[rxN] != 0){
+      enzyme_df = rxnList[[rxN]]$enzymeComplexes
+      
+      lenzymes <- as.matrix(data.frame(t(enzyme_df)))
+      enzymes <- 2^lenzymes
+    }else{lenzymes <- enzymes <- NULL}
+    if(reaction_pred_linear$nmetab[rxN] != 0){
+      metab_df = rxnList[[rxN]]$rxnMet
+      
+      lmetabs <- as.matrix(data.frame(metab_df[,colSums(!is.na(metab_df) != 0) != 0])); colnames(lmetabs) <- colnames(rxnList[[rxN]]$rxnMet)[colSums(!is.na(rxnList[[rxN]]$rxnMet) != 0) != 0]
+      metabs <- 2^lmetabs
+    }else{lmetabs <- metabs <- NULL}
+    
+    if(reaction_pred_linear$nenz[rxN] == 0 & reaction_pred_linear$nmetab[rxN] == 0){
+      next
+    }
+    
+    if(reaction_pred_linear$nenz[rxN] != 0){
+      ### only enzymes ###
+      ### prediction using log measures ###
+      reaction_pred_log$Fenz[rxN] <- anova(lm(rxFlux ~ lenzymes))$F[1]
+      reaction_pred_log$varExplainedEnzy[rxN] <- anova(lm(rxFlux ~ lenzymes))$Sum[1]
+      reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lenzymes))$Sum)
+      
+      ### prediction using linear measures ###
+      reaction_pred_linear$Fenz[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$F[1]
+      reaction_pred_linear$varExplainedEnzy[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$Sum[1]
+      reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes))$Sum)  
+    }  
+    
+    if(reaction_pred_linear$nmetab[rxN] != 0){
+      ### only metabolites ###
+      ### prediction using log measures ###
+      reaction_pred_log$Fmetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$F[1]
+      reaction_pred_log$varExplainedMetab[rxN] <- anova(lm(rxFlux ~ lmetabs))$Sum[1]
+      reaction_pred_log$TSS[rxN] <- sum(anova(lm(rxFlux ~ lmetabs))$Sum)
+      
+      ### prediction using linear measures ###
+      reaction_pred_linear$Fmetab[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$F[1]
+      reaction_pred_linear$varExplainedMetab[rxN] <- anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$Sum[1]
+      reaction_pred_linear$TSS[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ metabs))$Sum)
+    }  
+    
+    if(reaction_pred_linear$nmetab[rxN] != 0 & reaction_pred_linear$nenz[rxN] != 0){
+      ### both metabolites and enzymes ###
+      reaction_pred_linear$varExplainedTotal[rxN] <- sum(anova(lm(rxnList[[rxN]]$flux$standardQP ~ enzymes + metabs))$Sum[1:2])
+      if(reaction_pred_linear$varExplainedTotal[rxN] < max(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN])){
+        reaction_pred_linear$varExplainedTotal[rxN] <- max(reaction_pred_linear$varExplainedMetab[rxN], reaction_pred_linear$varExplainedEnzy[rxN])  
+      }
+      
+      ### Variance explained in a full model versus reduced ones
+      
+      if(reaction_pred_linear$varExplainedTotal[rxN] > sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN])){
+        ### add variance explained in complete model to new class - jointly described
+        reaction_pred_linear$varExplainedJointly[rxN] <- reaction_pred_linear$varExplainedTotal[rxN] - sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN])
+      }else{
+        ### some variance is equally accounted for by metabolites or enzymes and should be pulled out and removed from both enzymes and mets
+        reaction_pred_linear$varExplainedEither[rxN] <- sum(reaction_pred_linear$varExplainedMetab[rxN] + reaction_pred_linear$varExplainedEnzy[rxN]) - reaction_pred_linear$varExplainedTotal[rxN]
+        reaction_pred_linear$varExplainedMetab[rxN] <- reaction_pred_linear$varExplainedMetab[rxN] - reaction_pred_linear$varExplainedEither[rxN]
+        reaction_pred_linear$varExplainedEnzy[rxN] <- reaction_pred_linear$varExplainedEnzy[rxN] - reaction_pred_linear$varExplainedEither[rxN]
+      }
+      
+      reaction_pred_log$varExplainedTotal[rxN] <- sum(anova(lm(rxFlux ~ lenzymes + lmetabs))$Sum[1:2])
+      if(is.na(reaction_pred_log$varExplainedTotal[rxN])){next}
+      
+      if(reaction_pred_log$varExplainedTotal[rxN] < max(reaction_pred_log$varExplainedMetab[rxN], reaction_pred_log$varExplainedEnzy[rxN])){
+        reaction_pred_log$varExplainedTotal[rxN] <- max(reaction_pred_log$varExplainedMetab[rxN], reaction_pred_log$varExplainedEnzy[rxN])  
+      }
+      
+      if(reaction_pred_log$varExplainedTotal[rxN] > sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN])){
+        ### add variance explained in complete model to new class - jointly described
+        reaction_pred_log$varExplainedJointly[rxN] <- reaction_pred_log$varExplainedTotal[rxN] - sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN])
+      }else{
+        ### some variance is equally accounted for by metabolites or enzymes and should be pulled out and removed from both enzymes and mets
+        reaction_pred_log$varExplainedEither[rxN] <- sum(reaction_pred_log$varExplainedMetab[rxN] + reaction_pred_log$varExplainedEnzy[rxN]) - reaction_pred_log$varExplainedTotal[rxN]
+        reaction_pred_log$varExplainedMetab[rxN] <- reaction_pred_log$varExplainedMetab[rxN] - reaction_pred_log$varExplainedEither[rxN]
+        reaction_pred_log$varExplainedEnzy[rxN] <- reaction_pred_log$varExplainedEnzy[rxN] - reaction_pred_log$varExplainedEither[rxN]
+      }
+      
+    }
+  }
+  
+  
+  #hist(reaction_pred_linear$Fmetab)
+  #hist(reaction_pred_linear$Fenz)
+  
+  reaction_pred_summary_log <- data.frame(N = reaction_pred_log$nCond, metaboliteVarianceExplained = reaction_pred_log$varExplainedMetab/reaction_pred_log$TSS, enzymeVarianceExplained = reaction_pred_log$varExplainedEnzy/reaction_pred_log$TSS, 
+                                          varianceAmbiguouslyExplained = reaction_pred_log$varExplainedEither/reaction_pred_log$TSS, varianceJointlyExplained = reaction_pred_log$varExplainedJointly/reaction_pred_log$TSS)
+  
+  reaction_pred_summary_linear <- data.frame(N = reaction_pred_linear$nCond, metaboliteVarianceExplained = reaction_pred_linear$varExplainedMetab/reaction_pred_linear$TSS, enzymeVarianceExplained = reaction_pred_linear$varExplainedEnzy/reaction_pred_linear$TSS,
+                                             varianceAmbiguouslyExplained = reaction_pred_linear$varExplainedEither/reaction_pred_linear$TSS, varianceJointlyExplained = reaction_pred_linear$varExplainedJointly/reaction_pred_linear$TSS)
+  
+  rownames(reaction_pred_summary_log) <- rownames(reaction_pred_summary_linear) <- names(rxnList)[grep('rm$', names(rxnList))]
+  
+  
+  residualDF <- reaction_pred_log$nCond - reaction_pred_log$nmetab - reaction_pred_log$nenz
+  residualDF <- residualDF[reaction_pred_summary_log$N >= 15]
+  
+  reaction_pred_summary_log <- reaction_pred_summary_log[reaction_pred_summary_log$N >= 15,-1]
+  reaction_pred_summary_linear <- reaction_pred_summary_linear[reaction_pred_summary_linear$N >= 15,-1]
+  
+  reaction_pred_summary_log <- reaction_pred_summary_log[order(apply(reaction_pred_summary_log, 1, sum, na.rm = TRUE)),]
+  reaction_pred_summary_linear <- reaction_pred_summary_linear[order(apply(reaction_pred_summary_linear, 1, sum, na.rm = TRUE)),]
+  
+  
+  
+  
+  reaction_pred_summary_plotter <- rbind(data.frame(modelType = "logFlux ~ logMetab + logEnzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_log[,1])), reaction_pred_summary_log), id.vars = "index")),
+                                         data.frame(modelType = "Flux ~ Metab + Enzyme", melt(data.frame(index = c(1:length(reaction_pred_summary_linear[,1])), reaction_pred_summary_linear), id.vars = "index")))
+  
+  reaction_pred_summary_plotter <- reaction_pred_summary_plotter[!is.na(reaction_pred_summary_plotter$value),]
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), axis.line = element_blank(), panel.margin = unit(1.5, "lines"), axis.text = element_text(color = "BLACK"),
+                         strip.background = element_rect(fill = "chocolate1"), strip.text = element_text(vjust = 0.6)) 
+  
+  # For 75 reactions, linear regression was used to determine the fraction of variation in flux that could be explained by linear combinations of metabolite and enzyme concentrations.
+  # This comparison was also made to relate the log of flux carried to the log abundances of enzymes and metabolites
+  
+  rxnPredictionPlot <- ggplot(reaction_pred_summary_plotter, aes(x = factor(index), y = value, fill = as.factor(variable), color = "black")) + facet_grid(modelType ~ .)
+  rxnPredictionPlot + geom_bar(stat ="identity", width=0.75) + barplot_theme + geom_vline(aes(xintercept = 0), size = 0.5) + geom_hline(aes(yintercept = 0), size = 0.5) + 
+    scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "% Variance Explained", expand = c(0,0), limits = c(0,1), label = percent_format()) +
+    scale_fill_brewer("Prediction Method", palette = "Set2") + scale_color_identity()
+  
+  #scale_fill_manual(values = c("enzymeVarianceExplained" = "sienna1", "metaboliteVarianceExplained" = "steelblue1", varianceAmbiguouslyExplained = "olivedrab3", varianceJointlyExplained = "red")) 
+  
+  ggsave("varianceExplained.pdf", width = 20, height = 12)
+  
+}
 
 #res = 200
 #control_co = 0
