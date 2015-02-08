@@ -295,7 +295,7 @@ for(rx in c(1:nrow(reactionInfo))[reactionInfo$form != "rm" | !(reactionInfo$mod
   }else{
     # Alternative model is less complex
     reactionInfo$changeP[rx] <- 1 - pchisq(-2*likDiff, rxn_ref$npar - rxn_eval$npar)
-    # cat(paste0("\nrx ", rx, ": ",-2*likDiff))
+     cat(paste0("\nrx ", rx, ": ",-2*likDiff))
   }
 }
 
@@ -482,7 +482,7 @@ t_start = proc.time()[3]
 # flag a few reactions where additional plots are created
 custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm", "r_0816-rm", "r_0816-rm-t_0461-inh-uncomp", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond")
 
-#rxn_subset <- grep('1054|0962|0816', reactionInfo$rMech, value = T)
+#arxn <- c("r_0214-rm")
 #for(arxn in rxn_subset){
 #for(arxn in custom_plotted_rxns){
 for(arxn in reactionInfo$rMech){
@@ -568,7 +568,7 @@ for(arxn in reactionInfo$rMech){
   
   #if(grepl('0816', arxn)){
     # save parameter distributions for a subset of reactions
-    #param_dist <- param_compare()
+    param_dist <- param_compare()
     #ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
     #ggsave(shiny_flux_data[[arxn]]$plotChoices$Likelihood, file = paste0("tmp/", arxn, "_likViolin.pdf"), width = 16, height = 10)
   #}
@@ -756,29 +756,7 @@ ggplot() + geom_bar(data = spearman_MM_df, aes(x = x, y = spearman_MM), stat = "
  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_y_continuous(name = "Spearman correlation: prediction ~ FBA", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1)) + scale_fill_identity() + expand_limits(y = c(0,1))
 ggsave("Figures/MMspearmanCorr.pdf", height = 12, width = 13)
 
-##### Summary based on spearman correlation for MM or significant regulator #####
-
-spearman_MMandReg <- data.table(data.frame(reactionInfo[,c('reaction', 'modification', 'Qvalue')], spearman = rxn_fits[,'parSpearman'])) # all reactions
-spearman_MMandReg <- spearman_MMandReg[grep('t_metX', spearman_MMandReg$modification, invert = T),] # filter hypothetical regulators
-spearman_MMandReg <- spearman_MMandReg %>% dplyr::filter(!(grepl('^(forward|reverse)', modification))) # filter irreversible MM-kinetics
-
-spearman_MMandReg <- spearman_MMandReg[spearman_MMandReg$Qvalue < 0.1 | is.na(spearman_MMandReg$Qvalue),] # filter for MM or regulation with Qvalue < 0.1
-spearman_MMandReg$row <- 1:nrow(spearman_MMandReg)
-
-spearman_MMandReg <- spearman_MMandReg[spearman_MMandReg[, row[which.max(spearman)], by = "reaction"]$V1,]
-spearman_MMandReg <- spearman_MMandReg[spearman > 0,]
-setkey(spearman_MMandReg, "spearman")
-spearman_MMandReg$Type <- ifelse(spearman_MMandReg$modification %in% c("", "rmCond"), "rMM", "regulator")
-
-spearman_MMandReg$reaction <- factor(spearman_MMandReg$reaction, levels = spearman_MMandReg$reaction)
-
-ggplot() + geom_bar(data = spearman_MMandReg , aes(x = reaction, y = spearman, fill = Type), stat = "identity", position = "dodge", width = 0.85) + barplot_theme +
-  scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1)) +
-  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_brewer("", palette = "Set1", label = c("Allosteric Regulator", "Reversible Michaelis-Menten")) +
-  ggtitle('Correlation between measured and predicted flux') + expand_limits(y = c(0,1))
-ggsave("Figures/MM_reg_spearmanCorr.pdf", height = 12, width = 13)
-
-##### Summary based on spearman correlation for MM and most significant regulator (if applicable) #####
+#### Summary based on spearman correlation for MM and most significant regulator (if applicable) #####
 
 spearman_MMandReg <- data.frame(reactionInfo[,c('reaction', 'modification', 'Qvalue')], spearman = rxn_fits[,'parSpearman']) %>% tbl_df()  # all reactions
 spearman_MMandReg <- spearman_MMandReg %>% filter(!grepl('t_metX', modification)) %>% filter(is.na(Qvalue) | Qvalue < 0.1) # filter hypothetical regulators and take MM or Qvalue < 0.1
@@ -786,8 +764,7 @@ spearman_MMandReg <- spearman_MMandReg %>% dplyr::filter(!(grepl('^(forward|reve
 spearman_MMandReg <- spearman_MMandReg %>% filter(reaction %in% valid_rxns)
 spearman_MMandReg <- spearman_MMandReg %>% left_join(spearman_MMandReg %>% group_by(reaction) %>% dplyr::summarize(rmCond_reaction = ifelse(sum(modification == 'rmCond') , T, F)))
 
-rmCond_sets <- spearman_MMandReg %>% ungroup() %>% filter(grepl('rmCond', modification)) %>% dplyr::select(reaction, modification)
-# Take the rmCond reactions when they exist and the normal reactions otherwise
+rmCond_sets <- spearman_MMandReg %>% ungroup() %>% filter(grepl('rmCond', modification)) %>% dplyr::select(reaction, modification) # Take the rmCond reactions when they exist and the normal reactions otherwise
 
 spearman_MMandReg <- rbind(spearman_MMandReg %>% filter(rmCond_reaction == F),
 spearman_MMandReg %>% filter(rmCond_reaction == T) %>% inner_join(rmCond_sets))
@@ -862,6 +839,56 @@ ggplot(stacked_spearman %>% filter(spearman >= 0), aes(x = reaction, y = spearma
   scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("skyblue2", "orangered1"), breaks = c(T, F), label = c("Metabolite Regulator", "Reversible Michaelis-Menten"))
 
 ggsave("Figures/spearman_stack.pdf", height = 7, width = 12)
+
+#### Comparison of reversible michaelis-menten and irreversible kinetics #####
+
+
+spearman_reversibility <- data.frame(reactionInfo[,c('reaction', 'modification', 'Qvalue')], spearman = rxn_fits[,'parSpearman']) %>% tbl_df()  # all reactions
+spearman_reversibility <- spearman_reversibility %>% dplyr::filter(is.na(Qvalue) | grepl('^(forward|reverse)', modification)) %>%
+  dplyr::filter(reaction %in% valid_rxns)
+spearman_reversibility <- spearman_reversibility %>% left_join(spearman_reversibility %>% group_by(reaction) %>% dplyr::summarize(rmCond_reaction = ifelse(sum(modification == 'rmCond') , T, F)))
+
+rmCond_sets <- spearman_reversibility %>% ungroup() %>% filter(grepl('rmCond', modification)) %>% dplyr::select(reaction, modification) # Take the rmCond reactions when they exist and the normal reactions otherwise
+
+spearman_reversibility <- rbind(spearman_reversibility %>% filter(rmCond_reaction == F),
+spearman_reversibility %>% dplyr::filter(rmCond_reaction == T) %>% inner_join(rmCond_sets))
+
+# spearman_reversibility %>% dplyr::filter(Qvalue < 0.1)
+
+mm_form_counts <- spearman_reversibility %>% group_by(reaction) %>% summarize(count = n()) %>% dplyr::select(count) %>% unlist() %>% unname()
+if(any(mm_form_counts > 2)){
+ stop("choose either the forward or reverse irreversible rxn") 
+}
+
+spearman_reversibility <- spearman_reversibility %>% dplyr::mutate(Type = ifelse(grepl('^(forward|reverse)', modification), "Irreversible", "Reversible")) %>%
+  group_by(reaction) %>% dplyr::mutate(maxSpear = max(spearman)) %>% ungroup() %>% dplyr::arrange(maxSpear) %>% mutate(reaction = factor(reaction, levels = unique(reaction))) %>%
+  dplyr::filter(maxSpear >= 0)
+
+
+ggplot(spearman_reversibility, aes(x = reaction, y = spearman, fill = Type)) + geom_bar(position = "dodge", stat = "identity")
+
+ggplot(spearman_reversibility, aes(x = reaction, y = spearman, fill = Type)) + geom_bar(position = "dodge", stat = "identity") + facet_grid(Type ~ .)
+
+# 
+
+spearman_reversibility <- spearman_reversibility %>% group_by(reaction) %>% dplyr::mutate(revMax = if("Irreversible" %in% Type){
+ if(spearman[Type == "Reversible"] >= spearman[Type == "Irreversible"]){T}else{F}
+}else{T})
+spearman_reversibility <- spearman_reversibility %>% filter(!(Type == "Irreversible" & revMax == F))
+
+  %>% filter(Type == "Irreversible") %>% dplyr::mutate(spearDiff = maxSpear - max(c(0, spearman)))
+
+# stack reversible michaelis-menten on irreversible consistency
+
+stacked_spearman <- rbind(mm_spearman %>% dplyr::select(reaction, spearman, regulator),
+                          reg_spearman %>% dplyr::select(reaction, spearman = spearDiff, regulator))
+stacked_spearman <- stacked_spearman %>% dplyr::mutate(reaction = factor(reaction, levels = mm_order))
+
+ggplot(stacked_spearman %>% filter(spearman >= 0), aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
+  ggtitle('Correlation between measured and predicted flux') +
+  barplot_theme_nox + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
+  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("skyblue2", "orangered1"), breaks = c(T, F), label = c("Metabolite Regulator", "Reversible Michaelis-Menten"))
+
 
 
 ##### Replotting a few reactions for figures #####

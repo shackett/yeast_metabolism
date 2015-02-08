@@ -33,9 +33,9 @@ if(run_location == "local"){
   print(paste("CHUNK NUMBER: ", chunkNum, ", RUN NUMBER: ", runNum, sep = ""))
   
   markov_pars <- list()
-  markov_pars$sample_freq <- 150 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
+  markov_pars$sample_freq <- 300 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
   markov_pars$n_samples <- 200 #how many total markov samples are desired
-  markov_pars$burn_in <- 3000 #how many initial samples should be skipped
+  markov_pars$burn_in <- 8000 #how many initial samples should be skipped
   
 }else{
   stop("provide a valid value to run_location") 
@@ -478,15 +478,14 @@ for(rxN in 1:length(rxnList_form)){
   
   # Specify prior for michaelis constants
   kineticParPrior$distribution[kineticPars$SpeciesType %in% c("Metabolite", "keq")] <- "unif"
-  kineticParPrior$par_1[kineticParPrior$distribution == "unif"] <- -10; kineticParPrior$par_2[kineticParPrior$distribution == "unif"] <- 10 # default value to 2^-10:2^10
+  kineticParPrior$par_1[kineticParPrior$distribution == "unif"] <- -15; kineticParPrior$par_2[kineticParPrior$distribution == "unif"] <- 15 # default value to 2^-15:2^15
   
   for(exp_param in kineticPars$formulaName[!is.na(kineticPars$measured) & kineticPars$measured == TRUE]){
-    kineticParPrior[kineticPars$formulaName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(met_abund[,colnames(met_abund) == kineticPars$modelName[kineticPars$formulaName == exp_param & !is.na(kineticPars$formulaName)]]) + c(-10,10)
+    kineticParPrior[kineticPars$formulaName == exp_param & !is.na(kineticPars$modelName), c(2:3)] <- median(met_abund[,colnames(met_abund) == kineticPars$modelName[kineticPars$formulaName == exp_param & !is.na(kineticPars$formulaName)]]) + c(-15,15)
   }#priors for measured metabolites (either in absolute or relative space) are drawn about the median
   
   # Prior for keq is centered around sum log(sub) - sum log(prod) - this deals with some species being in absolute space and others being absolute measurements
-  kineticParPrior[kineticPars$SpeciesType == "keq", c(2:3)] <- median(rowSums(met_abund * c(rep(1,n_c)) %*% t(rxnSummary$rxnStoi[shmatch(colnames(met_abund), names(rxnSummary$rxnStoi))]))) + c(-10,10)
-  
+  kineticParPrior[kineticPars$SpeciesType == "keq", c(2:3)] <- median(rowSums(met_abund * c(rep(1,n_c)) %*% t(rxnSummary$rxnStoi[shmatch(colnames(met_abund), names(rxnSummary$rxnStoi))]))) + c(-20,20)
   
   # Specify prior for hill constants
   kineticParPrior$distribution[kineticPars$SpeciesType == "hillCoefficient"] <- "SpSl"
