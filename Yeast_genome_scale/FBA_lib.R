@@ -1973,6 +1973,9 @@ customPlots <- function(run_rxn, flux_fit, chemostatInfo){
   
   corr_label <- data.frame(x = "U0.11", y = flux_range[which.max(abs(flux_range))]*0.95, label = paste("r^2", "~'=", round(flux_fit$fit_summary$parPearson^2, 2), "'"))
   
+  flux_plot_data$flux_plot_comp$UB[flux_plot_data$flux_plot_comp$UB >= flux_range[2]*1.05] <- flux_range[2]*1.05
+  flux_plot_data$flux_plot_comp$LB[flux_plot_data$flux_plot_comp$LB <= flux_range[1]] <- flux_range[1]
+  
   ggplot() + geom_hline(y = 0, size = 3) + geom_vline(x = 0, size = 3) +
     geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
     geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +

@@ -480,12 +480,16 @@ TRdata <- NULL # Save summary transcriptional resposiveness
 t_start = proc.time()[3]
 
 # flag a few reactions where additional plots are created
-custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm", "r_0816-rm", "r_0816-rm-t_0461-inh-uncomp", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond")
+custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm", "r_0816-rm", "r_0816-rm-t_0461-inh-uncomp", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond",
+                         "r_0514-im-forward", "r_0514-rm", "r_0916-im-forward", "r_0916-rm", "r_0208-im-forward", "r_0208-rm")
+custom_plotted_rxns <- c("r_0816-rm", "r_0816-rm-t_0461-inh-uncomp", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond")
 
+if(!(all(custom_plotted_rxns %in% reactionInfo$rMech))){stop("Some reaction mechanisms that you want to plot were not located")}
+                                                        
 #arxn <- c("r_0214-rm")
 #for(arxn in rxn_subset){
-#for(arxn in custom_plotted_rxns){
-for(arxn in reactionInfo$rMech){
+for(arxn in custom_plotted_rxns){
+#for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -568,7 +572,7 @@ for(arxn in reactionInfo$rMech){
   
   #if(grepl('0816', arxn)){
     # save parameter distributions for a subset of reactions
-    param_dist <- param_compare()
+    #param_dist <- param_compare()
     #ggsave(param_dist, file = paste0("tmp/", arxn, "_paramHist.pdf"), width = 20, height = 20)
     #ggsave(shiny_flux_data[[arxn]]$plotChoices$Likelihood, file = paste0("tmp/", arxn, "_likViolin.pdf"), width = 16, height = 10)
   #}
@@ -861,35 +865,38 @@ if(any(mm_form_counts > 2)){
 }
 
 spearman_reversibility <- spearman_reversibility %>% dplyr::mutate(Type = ifelse(grepl('^(forward|reverse)', modification), "Irreversible", "Reversible")) %>%
-  group_by(reaction) %>% dplyr::mutate(maxSpear = max(spearman)) %>% ungroup() %>% dplyr::arrange(maxSpear) %>% mutate(reaction = factor(reaction, levels = unique(reaction))) %>%
+  group_by(reaction) %>% dplyr::mutate(maxSpear = max(spearman)) %>% ungroup() %>% dplyr::arrange(maxSpear) %>% dplyr::mutate(reaction = factor(reaction, levels = unique(reaction))) %>%
   dplyr::filter(maxSpear >= 0)
-
-
-ggplot(spearman_reversibility, aes(x = reaction, y = spearman, fill = Type)) + geom_bar(position = "dodge", stat = "identity")
-
-ggplot(spearman_reversibility, aes(x = reaction, y = spearman, fill = Type)) + geom_bar(position = "dodge", stat = "identity") + facet_grid(Type ~ .)
-
-# 
 
 spearman_reversibility <- spearman_reversibility %>% group_by(reaction) %>% dplyr::mutate(revMax = if("Irreversible" %in% Type){
  if(spearman[Type == "Reversible"] >= spearman[Type == "Irreversible"]){T}else{F}
 }else{T})
-spearman_reversibility <- spearman_reversibility %>% filter(!(Type == "Irreversible" & revMax == F))
+spearman_reversibility <- spearman_reversibility %>% dplyr::filter(!(Type == "Irreversible" & revMax == F))
 
-  %>% filter(Type == "Irreversible") %>% dplyr::mutate(spearDiff = maxSpear - max(c(0, spearman)))
+# Determine improvement due to reversibility
+rev_improvement <- spearman_reversibility %>% dplyr::filter(Type == "Irreversible") %>% rowwise() %>% dplyr::mutate(spearDiff = maxSpear - max(c(0, spearman))) %>% 
+  dplyr::filter(spearDiff != 0) %>% dplyr::select(reaction, Type, spearman, spearDiff)
+rev_fits <- spearman_reversibility %>% dplyr::filter(Type == "Reversible") %>% dplyr::select(reaction, Type, spearman)
 
-# stack reversible michaelis-menten on irreversible consistency
+stacked_spearman_rev <- rbind(
+  rev_improvement %>% dplyr::select(-spearDiff), # lower correlation due to irreversibility
+  rev_fits %>% dplyr::filter(reaction %in% rev_improvement$reaction) %>% dplyr::mutate(spearman = rev_improvement$spearDiff[rev_improvement$reaction == reaction]), # improved correlation due to reversibility
+  rev_fits %>% dplyr::filter(!(reaction %in% rev_improvement$reaction)) %>% dplyr::mutate(Type = "Irreversible") # rev == irrev
+)
 
-stacked_spearman <- rbind(mm_spearman %>% dplyr::select(reaction, spearman, regulator),
-                          reg_spearman %>% dplyr::select(reaction, spearman = spearDiff, regulator))
-stacked_spearman <- stacked_spearman %>% dplyr::mutate(reaction = factor(reaction, levels = mm_order))
+stacked_spearman_rev <- stacked_spearman_rev %>% dplyr::filter(spearman >= 0)%>% dplyr::group_by(reaction) %>% dplyr::mutate(maxSpear = sum(spearman)) %>% 
+  ungroup() %>% dplyr::arrange(maxSpear) %>%
+  mutate(reaction = as.character(reaction)) %>% mutate(reaction = factor(reaction, levels = unique(reaction)))
+stacked_spearman_rev$reaction = factor(stacked_spearman_rev$reaction, levels = unique(stacked_spearman_rev$reaction))
 
-ggplot(stacked_spearman %>% filter(spearman >= 0), aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
+ggplot(spearman_reversibility, aes(x = reaction, y = spearman)) + facet_grid(Type ~ .) + geom_bar(stat = "identity")
+
+ggplot(stacked_spearman_rev, aes(x = reaction, y = spearman, fill = Type)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
   ggtitle('Correlation between measured and predicted flux') +
   barplot_theme_nox + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
-  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("skyblue2", "orangered1"), breaks = c(T, F), label = c("Metabolite Regulator", "Reversible Michaelis-Menten"))
+  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("Reversible" = "skyblue2", "Irreversible" = "moccasin"), label = c("Irreversible Michaelis-Menten", "+ Reversibility"))
 
-
+ggsave("Figures/spearman_stack_rev.pdf", height = 7, width = 12)
 
 ##### Replotting a few reactions for figures #####
 
