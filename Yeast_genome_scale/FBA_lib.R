@@ -3220,6 +3220,37 @@ enzyme_control_source <- function(){
 
 allostery_affinity <- function(){
   
+  # plot physiological concentrations of alanine
+  
+  parSubset <- param_set_list[parSetInfo$rx == arxn]
+  load(paste(c("FBGA_files/paramSets/", param_run_info$file[parSubset[[1]]$name$index]), collapse = ""))
+  run_rxn <- run_summary[[arxn]]
+  
+  alanine_conc <- 2^run_rxn$metabolites[,names(run_rxn$rxnSummary$metNames)[run_rxn$rxnSummary$metNames == "L-alanine"], drop = F]
+  alanine_conc <- alanine_conc %>% as.data.frame() %>% mutate(condition = rownames(.)) %>% dplyr::select(alanine = t_0461, condition) %>%
+    mutate(limitation = substr(condition, 1, 1), GR = substr(condition, 2, length(condition))) %>%
+    mutate(limitation = factor(limitation, levels = c("P", "C", "N", "U")), condition = factor(condition, levels = condition))
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 20, face = "bold"), 
+                         panel.background = element_rect(fill = "gray80"), legend.position = "right", 
+                         axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90, hjust = 0.5, vjust = 0.5),
+                         panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                         axis.line = element_line(color = "black", size = 1),
+                         axis.ticks.y = element_line(size = 3, color = "black"), axis.ticks.x = element_blank(), axis.ticks.length = unit(0.6, "lines")
+  )
+  
+  ggplot(alanine_conc, aes(x = condition, y = alanine * 1000, group = limitation)) + geom_path(size = 4, alpha = 1, col = "RED",) + geom_point(size = 10, col = "RED") +
+    barplot_theme + scale_color_identity(guide = "none") + scale_size_identity() + expand_limits(y = 0) + geom_blank(aes(y = alanine*1000*1.05)) +
+    scale_y_continuous("Alanine Concentration (mM)", breaks = c(0, 25, 50, 75, 100, 125), expand = c(0,0)) + scale_x_discrete("Conditions") +
+    geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3)
+  
+  ggsave("Figures/alanineConcentration.pdf", height = 10, width = 10)
+  
+  
+  
+  
+  
+  # plot marginal distribution of alanine ki
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
