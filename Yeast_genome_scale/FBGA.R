@@ -983,167 +983,114 @@ ML_rxn_summary$reaction_info <- reactionInfo$FullName[chmatch(ML_rxn_summary$rea
 write.table(ML_rxn_summary, "flux_cache/control_layout.tsv", col.names = T, row.names = F, quote = F, sep = "\t")
 
 
+
+
 ######### Compare Km values found through optimization to those from literature ################
 
-all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
-all_affinities <- all_affinities[!is.na(all_affinities$log10mean),]
+all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv") # all BRENA substrates and regulators
+all_affinities <- all_affinities[!is.na(all_affinities$log10mean),] # substrates and regulators with a ki or km
 
-all_affinities <- all_affinities[unname(unique(unlist(sapply(unique(reactionInfo$reaction), function(x){grep(x, all_affinities$reactions)})))),] #only looking at reactions of interest
+all_affinities <- lapply(1:nrow(all_affinities), function(i){
+  data.frame(expand.grid(modelName = strsplit(all_affinities$tID[i], split = '/') %>% unlist(),
+  rxn = strsplit(all_affinities$reactions[i], split = '/') %>% unlist()),
+  all_affinities[i, !(colnames(all_affinities) %in% c('tID', 'reactions'))], row.names = NULL
+  )
+})
+all_affinities <- do.call("rbind", all_affinities) %>% tbl_df() %>%
+  mutate(modelName = as.character(modelName), rxn = as.character(rxn))
 
+all_affinities <- all_affinities %>% filter(rxn %in% unique(reactionInfo$reaction))
+
+substrate_affinities <- all_affinities %>% filter(speciesType == "substrate")
+regulator_affinities <- all_affinities %>% filter(speciesType == "regulator")
 
 ### Using 95% confidence intervals for reaction parameters
 yeast_only <- F
-
 affinity_comparisons <- NULL
 
-for(rxn in names(rxn_fit_params)){
+for(rxn in adequate_fit_optimal_rxn_form){
   
   rxData <- data.frame(rxn = reactionInfo$reaction[reactionInfo$rMech == rxn], rxnForm = rxn, 
-                       specie = rownames(rxn_fit_params[[rxn]]$param_interval[rownames(rxn_fit_params[[rxn]]$param_interval) != "keq",]), rxn_fit_params[[rxn]]$param_interval[rownames(rxn_fit_params[[rxn]]$param_interval) != "keq",], 
-                       lit_mean = NA, lit_SD = NA)
-  rxData <- rxData[grep('^t_', rownames(rxData)),]
-  rxData$absoluteQuant <- as.logical(rxData$absoluteQuant)
+                       cbind(rxn_fit_params[[rxn]]$kineticParPrior[rxn_fit_params[[rxn]]$kineticParPrior$SpeciesType == "Metabolite",] %>% dplyr::select(modelName, commonName, formulaName, measured),
+                             rxn_fit_params[[rxn]]$param_interval[rxn_fit_params[[rxn]]$kineticParPrior$SpeciesType == "Metabolite",] %>% dplyr::select(parLB = get('X2.5.'), parUB = get('X97.5.'), parMLE = MLE, absoluteQuant),
+                             rxn_fit_params[[rxn]]$param_species %>% dplyr::select(Subtype, medianAbund))
+  )
+  rxData <- rxData %>% mutate(absoluteQuant = as.logical(absoluteQuant))
   
-  rxData <- rxData[chmatch(rxn_fit_params[[rxn]]$param_species$SubstrateID, rxData$specie),]
-  rxData$speciesType <- rxn_fit_params[[rxn]]$param_species$Type
-  rxData$speciesSubtype <- rxn_fit_params[[rxn]]$param_species$Subtype
-  rxData$medianAbund <- rxn_fit_params[[rxn]]$param_species$medianAbund
+  rxnData <- rbind(rxData %>% filter(Subtype %in% c("substrate", "product")) %>% left_join(substrate_affinities, by = c("rxn", "modelName")),
+                   rxData %>% filter(!(Subtype %in% c("substrate", "product"))) %>% left_join(regulator_affinities, by = c("rxn", "modelName")))
   
-  # Pass BRENDA data to reaction-from-specific parameter estimates
-  
-  rxAffinities <- all_affinities[grep(reactionInfo$reaction[reactionInfo$rMech == rxn], all_affinities$reactions),]
-  
-  for(a_spec_n in c(1:nrow(rxData))[rxData$absoluteQuant]){
-    modSubset <- rxAffinities[rxAffinities$tID == rxData$specie[a_spec_n],]
-    
-    if(rxData$speciesType[a_spec_n] == "rct"){
-      output <- modSubset[modSubset$speciesType == "substrate" & modSubset$isYeast == yeast_only,]
-    }
-    
-    if(rxData$speciesType[a_spec_n] == "inh"){
-      output <- modSubset[modSubset$speciesType == "regulator" & modSubset$modtype == "inh" & modSubset$isYeast == yeast_only,]
-    }
-    
-    if(rxData$speciesType[a_spec_n] == "act"){
-      output <- modSubset[modSubset$speciesType == "regulator" & modSubset$modtype == "act" & modSubset$isYeast == yeast_only,]
-    }
-    
-    if(nrow(output) > 1){
-      # if multiple E.C. IDs collide when matched to reactions with the same modifiers, choose the better supported
-      output <- output[which.max(output$nQuant),]
-    }
-    
-    if(nrow(output) == 1){
-      rxData[a_spec_n, c("lit_mean", "lit_SD")] <- output[,c("log10mean", "sdOflog10")]
-    } 
+  if(yeast_only){
+    rxnData <- rxnData %>% filter(is.na(isYeast) | isYeast) 
+  }else{
+    rxnData <- rxnData %>% filter(is.na(isYeast) | !isYeast)
   }
-  affinity_comparisons <- rbind(affinity_comparisons, rxData)
+  
+  if(length(unique(rxnData$EC[!is.na(rxnData$EC)])) != 1){
+    # multiple EC numbers inform this reaction
+    rxnData <- rxnData %>% group_by(formulaName) %>% filter(nQuant == max(nQuant) | is.na(nQuant))
+  }
+  
+  affinity_comparisons <- rbind(affinity_comparisons, rxnData)
 }
 
+affinity_comparisons <- affinity_comparisons %>% tbl_df()
 
-### Use literature mean & SD of Km as a comparison
+### compare substrate affinities for metabolites with absolute concentrations ###
 
-### Looking at species with absolue quantification ###
-
-absolute_quant <- affinity_comparisons[!is.na(affinity_comparisons$lit_mean),]
-absolute_quant$lit_mean <- absolute_quant$lit_mean - 3 # convert from log mM to log M
+absolute_comparison <- affinity_comparisons %>% filter(Subtype %in% c("substrate", "product"), absoluteQuant, !is.na(log10mean)) %>% mutate(log10mean = log10mean - 3) # convert from mM to M
 
 boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
                        legend.position = "right", panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1), 
                        axis.line = element_blank(), axis.text = element_text(color = "black"))
 
-### only look at rm kinetics and significant modifications ###
-
-rxn_of_interest <- reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == "" | !is.na(reactionInfo$Qvalue) & reactionInfo$Qvalue < 0.1]
-
-ggplot(absolute_quant[absolute_quant$rxnForm %in% rxn_of_interest,], aes(x = lit_mean, y = log10(MLE), color = speciesType)) + geom_point(size = 1.3) + stat_abline(size = 2, alpha = 0.5) +
-  boxplot_theme + stat_smooth(method = "lm", fill = "black") +
-  scale_color_brewer("Metabolite Class", palette = "Set1", labels = c("Inhibitors", 'Substrates/\nProducts')) + 
+ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(parLB), ymax = log10(parUB))) + geom_pointrange() + geom_smooth(method = "lm") +
   scale_x_continuous(expression("Literature" ~ log[10] ~ "Affinity (M)")) +
   scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ "Affinity (M)"))
-ggsave("Figures/affinity_match.pdf", height = 10, width = 12)
+hist(absolute_comparison$sdOflog10)
 
-summary(lm(data = absolute_quant[absolute_quant$rxnForm %in% rxn_of_interest,], formula = "log10(MLE) ~ lit_mean"))
-
-
-##
-
-### Look at the differences between predicted and literature values versus the quality of fit ###
-
-par_lb <- absolute_quant$X2.5.
-par_ub <- absolute_quant$X97.5.
-lit_mean <- absolute_quant$lit_mean
-lit_SD <- absolute_quant$lit_SD
-
-dist_overlap <- function(par_lb, par_ub, lit_mean, lit_SD){
-  sapply(1:length(par_lb), function(i){
-    diff(pnorm(c(log10(par_lb[i]), log10(par_ub[i])), mean = lit_mean[i], sd = lit_SD[i]))/(log10(par_ub[i]) - log10(par_lb[i]))
-  })
-}
-absolute_quant$dist_overlap <- dist_overlap(absolute_quant$X2.5., absolute_quant$X97.5., absolute_quant$lit_mean, absolute_quant$lit_SD)
-absolute_quant$param_range <- log2(absolute_quant$X97.5.) - log2(absolute_quant$X2.5.)
-
-
-absolute_quant_deviation <- absolute_quant[,c('rxn', 'rxnForm', 'MLE', 'lit_mean', 'lit_SD', 'speciesType', 'speciesSubtype', 'dist_overlap', 'param_range')]
-absolute_quant_deviation$MLE <- log10(absolute_quant_deviation$MLE)
-absolute_quant_deviation$Interval_Overlap <- fraction_flux_deviation$"Interval Overlap"[chmatch(absolute_quant_deviation$rxnForm, fraction_flux_deviation$rxn)]
-absolute_quant_deviation$Deviation <- absolute_quant_deviation$MLE - absolute_quant_deviation$lit_mean
-absolute_quant_deviation <- absolute_quant_deviation[absolute_quant$param_range < 10 & !is.na(absolute_quant_deviation$dist_overlap),]
-
-scatter_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "azure"), 
-      legend.position = "right", panel.grid.minor = element_blank(), panel.grid.major = element_line(colour = "pink"), axis.ticks = element_line(colour = "pink"),
-      strip.background = element_rect(fill = "cyan"), axis.text = element_text(color = "black")) 
-
-
-ggplot(absolute_quant_deviation[absolute_quant_deviation$rxnForm %in% rxn_of_interest,], aes(x = Interval_Overlap, y = dist_overlap, color = factor(speciesType))) + 
-  geom_point(size = 4) + stat_smooth(method = "lm", size = 2) + scale_color_brewer("Metabolite Class", palette = "Set1", labels = c("Inhibitors", 'Substrates/\nProducts')) +
-  scatter_theme + scale_x_continuous("Fit Quality") + scale_y_continuous('Overlap of affinity distribution\nand literature values') + 
-  ggtitle('Accuracy of metabolite affinity predictions\n increases with fit quality')
-ggsave("Figures/KmConsistencyVersusFit.pdf", height = 14, width = 14)
-
-
-
-summary(lm(data = absolute_quant_deviation[absolute_quant_deviation$rxnForm %in% rxn_of_interest,], formula = "dist_overlap ~ Interval_Overlap * factor(speciesType)"))
 
 ### Look at metabolism-wide occupancy ###
 
-mw_occupancy <- data.table(affinity_comparisons)[,list(rxnForm = rxnForm, specie = specie, log10S_km = log10(2^medianAbund/MLE), log10occ = (2^medianAbund/(2^medianAbund + MLE)), type = speciesSubtype)]
+occupancy_comparison <- affinity_comparisons %>% filter(measured) %>% dplyr::select(-formulaName, -measured, -absoluteQuant, -(EC:speciesType))
 
-common_mets <- sort(table(mw_occupancy$specie), decreasing = T)[1:6]
+# use concentrations of species across all conditions rather than just median
 
-mw_occupancy$chosenSpecies <- "The Rest"
-mw_occupancy$chosenSpecies[mw_occupancy$specie %in% names(common_mets)] <- mw_occupancy$specie[mw_occupancy$specie %in% names(common_mets)]
+rxn_met_pairs <- occupancy_comparison %>% dplyr::select(rxnForm, modelName)
 
-mw_occupancy$chosenSpecies[mw_occupancy$chosenSpecies != "The Rest"] <- 
-  sapply(corrFile$SpeciesName[chmatch(mw_occupancy$chosenSpecies[mw_occupancy$chosenSpecies != "The Rest"], corrFile$SpeciesType)], function(x){
-  strsplit(x, split = ' \\[')[[1]][1]
+rxn_met_abundances <- lapply(1:nrow(rxn_met_pairs), function(i){
+  metConc <- rxnList[[rxn_met_pairs[i,'rxnForm'] %>% unlist()]]$rxnMet[,rxn_met_pairs[i,'modelName'] %>% unlist()]
+ cbind(rxn_met_pairs[i,'rxnForm'], rxn_met_pairs[i,'modelName'], logConc = metConc)
 })
+rxn_met_abundances <- do.call("rbind", rxn_met_abundances)
 
-mw_occupancy$type[mw_occupancy$type %in% c("competitive", "noncompetitive")] <- "non(competitive)"
-mw_occupancy$type <- factor(mw_occupancy$type)
-
-mw_occupancy <- mw_occupancy[!mw_occupancy$chosenSpecies %in% "H+",]
-
-mw_occupancy$chosenSpecies <- factor(mw_occupancy$chosenSpecies, levels = names(sort(table(mw_occupancy$chosenSpecies), decreasing = T)))
-
-# subset mw_occupany if desired #
-mw_occupancy <- mw_occupancy[mw_occupancy$rxnForm %in% rxn_of_interest,]
+occupancy_comparison <- occupancy_comparison %>% left_join(rxn_met_abundances)
 
 
-table(mw_occupancy$type, mw_occupancy$chosenSpecies)
-spec_counts <- melt(table(mw_occupancy$type, mw_occupancy$chosenSpecies))
-colnames(spec_counts) <- c("type", "chosenSpecies", "Counts")
+occupancy_comparison$Subtype[!(occupancy_comparison$Subtype %in% c("substrate", "product"))] <- "regulator"
+occupancy_comparison$Specie <- NA
+
+species_of_interest <- c("ATP", "ADP")
+#species_of_interest <- c("ATP", "ADP", "AMP", "NADH", "NAD")
+occupancy_comparison$Specie[occupancy_comparison$commonName %in% species_of_interest] <- occupancy_comparison$commonName[occupancy_comparison$commonName %in% species_of_interest]
+occupancy_comparison$Specie[is.na(occupancy_comparison$Specie)] <- "The Rest"
+
+occupancy_comparison <- occupancy_comparison %>% mutate(log10S_km = log10(2^medianAbund / parMLE), log10occ = (2^medianAbund/(2^medianAbund + parMLE)))
+
+occupancy_comparison <- occupancy_comparison %>% mutate(Subtype = factor(Subtype, levels = c("substrate", "product", "regulator")))
+occupancy_comparison$Specie <- factor(occupancy_comparison$Specie, levels = c(species_of_interest, "The Rest"))
+
+spec_counts <- occupancy_comparison %>% group_by(Specie, Subtype) %>% summarize(counts = n())
 
 # S / Km
-ggplot() + geom_violin(data = mw_occupancy, aes(x = chosenSpecies, y = log10S_km), fill = "firebrick2", scale = "width") +
-  facet_grid(type ~ .) + geom_text(data = spec_counts, aes(x = chosenSpecies, y = 0, label = Counts), color = "BLUE", size = 6) +
+ggplot() + geom_violin(data = occupancy_comparison, aes(x = Specie, y = log10S_km), fill = "firebrick2", scale = "width") +
+  facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0, label = counts), color = "BLUE", size = 6) +
   scale_y_continuous(expression(frac(S, K[M])), breaks = seq(-3, 3, by = 1), labels = 10^seq(-3, 3, by = 1)) +
   boxplot_theme
-ggsave("Figures/speciesSKm.pdf", width = 12, height = 14)
 
 # S / S + Km
-ggplot() + geom_violin(data = mw_occupancy, aes(x = chosenSpecies, y = log10occ), fill = "firebrick2", scale = "width") +
-  facet_grid(type ~ .) + geom_text(data = spec_counts, aes(x = chosenSpecies, y = 0.5, label = Counts), color = "BLUE", size = 6) +
+ggplot() + geom_violin(data = occupancy_comparison, aes(x = Specie, y = log10occ), fill = "firebrick2", scale = "width") +
+  facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0.5, label = counts), color = "BLUE", size = 6) +
   scale_y_continuous(expression(frac(S, S + K[M])), breaks = seq(0, 1, by = 0.2), label = sapply(seq(0, 1, by = 0.2) * 100, function(x){paste(x, "%", sep = "")})) +
   boxplot_theme
 ggsave("Figures/speciesOccupancy.pdf", width = 12, height = 14)
@@ -1158,56 +1105,92 @@ ggsave("Figures/speciesOccupancy.pdf", width = 12, height = 14)
 # Q = prod[P]/prod[S]
 # Q/keq
 
-
-
 reaction_free_energy <- read.delim("companionFiles/cc_dG_python.tsv")
 
-free_energy_table <- data.frame(RXform = names(rxn_fit_params), reaction = substr(names(rxn_fit_params), 1, 6), cc_dGr = NA, cc_dGrSD = NA, log_keq_LB = NA, 
-                                log_keq_UB = NA, log_keq_MLE = NA, logQmedian = NA, intervalOverlap = NA)
+free_energy_table <- data.frame(RXform = adequate_fit_optimal_rxn_form, reaction = substr(adequate_fit_optimal_rxn_form, 1, 6))
 
-free_energy_table <- free_energy_table[free_energy_table$reaction %in% reaction_free_energy$reaction,]
+free_energy_table <- free_energy_table %>% left_join( reversibleRx %>% dplyr::select(reaction = rx, cc_dGr = CCdG, cc_dGrSD = CCdGsd, reversible = modelBound) %>% mutate(reversible = ifelse(reversible == "reversible", T, F)))
 
-free_energy_table$formType = ifelse(free_energy_table$RXform %in% reactionInfo$rMech[reactionInfo$form == "rm" & reactionInfo$modification == ""], "MM", "modification")
+free_energy_table[,c("log_keq_LB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X2.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("log_keq_UB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X97.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("log_keq_MLE")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$MLE[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"])})
+free_energy_table[,c("measuredProducts")] <- sapply(free_energy_table$RXform, function(x){any(rxn_fit_params[[x]]$kineticParPrior$measured[!is.na(rxn_fit_params[[x]]$kineticParPrior$modelName) & rxn_fit_params[[x]]$kineticParPrior$modelName %in% rxn_fit_params[[x]]$param_species$SubstrateID[rxn_fit_params[[x]]$param_species$Subtype == "product"]])})
 
-free_energy_table$cc_dGr = reaction_free_energy$dGr[chmatch(free_energy_table$reaction, reaction_free_energy$reaction)]
-free_energy_table$cc_dGrSD = reaction_free_energy$dGrSD[chmatch(free_energy_table$reaction, reaction_free_energy$reaction)]
+free_energy_table <- free_energy_table %>% mutate(QkeqDiff_MLE = logQmedian - log_keq_MLE, QkeqDiff_UB = logQmedian - log_keq_LB, QkeqDiff_LB = logQmedian - log_keq_UB) %>% dplyr::select(-c(log_keq_LB, log_keq_UB, log_keq_MLE, logQmedian))
+free_energy_table <- free_energy_table %>% filter(!is.na(cc_dGr))
 
-free_energy_table[,c("log_keq_LB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval[rownames(rxn_fit_params[[x]]$param_interval) == "keq", 1]}))
-free_energy_table[,c("log_keq_UB")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval[rownames(rxn_fit_params[[x]]$param_interval) == "keq", 2]}))
-free_energy_table[,c("log_keq_MLE")] <- log(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$MLE[rownames(rxn_fit_params[[x]]$param_interval) == "keq"]}))
-free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rownames(rxn_fit_params[[x]]$param_interval) == "keq"])})
-free_energy_table[,c("intervalOverlap")] <- sapply(free_energy_table$RXform, function(x){fraction_flux_deviation$"Interval Overlap"[fraction_flux_deviation$rxn == x]})
+# for reactions with always negative flux, flip Q-Keq
+reverse_rxns <- free_energy_table %>% filter(QkeqDiff_LB > 0) %>% mutate(QkeqDiff_MLE = -1*QkeqDiff_MLE, QkeqDiff_UBtmp = QkeqDiff_UB, QkeqDiff_LBtmp = QkeqDiff_LB, QkeqDiff_LB = -1*QkeqDiff_UBtmp, QkeqDiff_UB = -1*QkeqDiff_LBtmp) %>%
+  dplyr::select(-QkeqDiff_LBtmp, -QkeqDiff_UBtmp)
 
-free_energy_table <- free_energy_table[free_energy_table$cc_dGrSD < 10,] #remove reactions with highly uncertain CC predictions
+free_energy_table <- free_energy_table %>% filter(QkeqDiff_LB <= 0) %>% left_join(reverse_rxns)
 
-# Find the best fitting form (which doesn't have a hypothetical regulator) #
-core_form_bool <- c(1:nrow(reactionInfo)) %in% grep('t_metX|rmCond', reactionInfo$modification, invert = T)
-for(rxn in unique(free_energy_table$reaction)){
-  free_energy_table$formType[free_energy_table$RXform == reactionInfo$rMech[reactionInfo$reaction == rxn & core_form_bool][which.max(reactionInfo$ML[reactionInfo$reaction == rxn & core_form_bool])]] <- "Best Fit"
-  }
+free_energy_table <- free_energy_table %>% arrange(QkeqDiff_UB) %>% mutate(reaction = factor(reaction, levels = reaction))
+
+ggplot() + geom_errorbar(data = free_energy_table, aes(x = reaction, ymin = 2^QkeqDiff_LB, ymax = 2^QkeqDiff_UB), size = 1) + facet_grid(~ reversible, scale = "free_x", space = "free_x") +
+  scale_y_log10(expand = c(0,0))
 
 
+free_energy_table <- free_energy_table[free_energy_table$cc_dGrSD < 100,] # remove reactions with unknown free energy
+
+free_energy_table[,c("log_keq_LB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X2.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("log_keq_UB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X97.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("log_keq_MLE")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$MLE[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"])})
+
+free_energy_table <- free_energy_table %>% arrange(logQmedian - log_keq_LB) %>% mutate(reaction = factor(reaction, levels = reaction))
+
+ggplot() + geom_pointrange(data = free_energy_table, aes(x = reaction, y = logQmedian - log_keq_MLE, ymin = logQmedian - log_keq_LB, ymax = logQmedian - log_keq_UB), size = 1) + 
+  geom_point(data = free_energy_table, aes(x = reaction, y = log2(exp(free_energy_table$cc_dGr / ((8.315 * (273 + 30)) / 1000)))), col = "RED", size = 4)
+
+flagged_rxns <- data.frame(rxName = c("PFK", "ALD", "TPI", "GAPDH", "PGK", "PGM", "PYK"), reaction = c("r_0886", "r_0450", "r_1054", "r_0486", "r_0892", "r_0893", "r_0962"), reversible = c(F, rep(T, 5), F))
+
+ggplot() + geom_pointrange(data = flagged_rxns %>% left_join(free_energy_table), aes(x = reaction, y = logQmedian - log_keq_MLE, ymin = logQmedian - log_keq_LB, ymax = logQmedian - log_keq_UB), size = 1) + 
+  geom_point(data = flagged_rxns %>% left_join(free_energy_table), aes(x = reaction, y = log2(exp(free_energy_table$cc_dGr / ((8.315 * (273 + 30)) / 1000)))), col = "RED", size = 4)
+
+reversibleRx$modelBound
+
+
+
+data.frame(free_energy_table$cc_dGr, log2(exp(free_energy_table$cc_dGr / ((8.315 * (273 + 30)) / 1000)))
+
+
+free_energy_table$prediction <- log(2^free_energy_table$logQmedian/2^free_energy_table$log_keq_MLE)*(8.315 * (273 + 25) / 1000)
+free_energy_table$prediction_ub <- log(2^free_energy_table$logQmedian/2^free_energy_table$log_keq_UB)*(8.315 * (273 + 25) / 1000)
+free_energy_table$prediction_lb <- log(2^free_energy_table$logQmedian/2^free_energy_table$log_keq_LB)*(8.315 * (273 + 25) / 1000)
 
 
 boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
                        legend.position = "right", panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1), 
                        axis.line = element_blank(), axis.text = element_text(color = "black"))
 
+flagged_rxns <- data.frame(rxName = c("PFK", "ALD", "TPI", "GAPDH", "PGK", "PGM", "PYK"), reaction = c("r_0886", "r_0450", "r_1054", "r_0486", "r_0892", "r_0893", "r_0962"), reversible = c(F, rep(T, 5), F))
+flagged_rxns %>% left_join(free_energy_table)
+ggplot(flagged_rxns %>% left_join(free_energy_table), aes(x = cc_dGr, y = prediction, ymin = prediction_lb, ymax = prediction_ub)) + geom_errorbar()
 
-energy_fit <- free_energy_table#[free_energy_table$formType == "Best Fit",]
-energy_weight <- energy_fit$intervalOverlap; energy_weight[energy_weight < 0] <- 0
+ggplot(free_energy_table, aes(x = cc_dGr, y = prediction)) + boxplot_theme + geom_point() + geom_abline(intercept = 0, slope = 1)
 
-freeEfit <- lm((energy_fit$logQmedian - energy_fit$log_keq_MLE)*(8.315 * (273 + 25) / 1000) ~ energy_fit$cc_dGr, weights = energy_weight)
+free_energy_table %>% mutate(q_per_keq = logQmedian - log_keq_MLE, diff = prediction - cc_dGr) %>% arrange(q_per_keq)
 
-weight_fit <- coef(freeEfit)
-summary(freeEfit)$coef[2,4]
 
-ggplot(free_energy_table[free_energy_table$formType == "Best Fit",], aes(x = cc_dGr, xmin = cc_dGr - 2*cc_dGrSD, xmax = cc_dGr + 2*cc_dGrSD,
+
+lm(data = free_energy_table, prediction ~ cc_dGr)
+
+       geom_abline(intercept = 0, slope = 1) +
+  scale_x_continuous(expression("Component Contribution" ~ Delta[G]^o)) + 
+  scale_y_continuous(expression("Parameter Inference" ~ Delta[G])) +
+  scale_color_gradient2("Par ~ FBA interval overlap", low = "green", mid = "green", high = "red", limits = c(0,1))
+
+
+
+
+
+ggplot(free_energy_table, aes(x = cc_dGr, xmin = cc_dGr - 2*cc_dGrSD, xmax = cc_dGr + 2*cc_dGrSD,
                               y = (logQmedian - log_keq_MLE)*(8.315 * (273 + 25) / 1000),
                               ymin = (logQmedian - log_keq_LB)*(8.315 * (273 + 25) / 1000),
                               ymax = (logQmedian - log_keq_UB)*(8.315 * (273 + 25) / 1000))) +
-  geom_errorbar(aes(color = intervalOverlap), size = 1) + geom_errorbarh(aes(color = intervalOverlap), size = 1) + boxplot_theme +
-  geom_abline(intercept = weight_fit[1], slope = weight_fit[2], size = 2, color = "BLUE") +
+  geom_errorbar(size = 1) + geom_errorbarh(size = 1) + boxplot_theme +
   geom_abline(intercept = 0, slope = 1) +
   scale_x_continuous(expression("Component Contribution" ~ Delta[G]^o)) + 
   scale_y_continuous(expression("Parameter Inference" ~ Delta[G])) +
