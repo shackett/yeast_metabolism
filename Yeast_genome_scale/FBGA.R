@@ -488,8 +488,8 @@ if(!(all(custom_plotted_rxns %in% reactionInfo$rMech))){stop("Some reaction mech
                                                         
 #arxn <- c("r_0214-rm")
 #for(arxn in rxn_subset){
-for(arxn in custom_plotted_rxns){
-#for(arxn in reactionInfo$rMech){
+#for(arxn in custom_plotted_rxns){
+for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -660,6 +660,10 @@ validRxnA <- sapply(rxnList_form[names(rxnList_form) %in% RMMrxns], function(x){
   substrates <- substrates[names(substrates) %in% names(x$metNames)[!(x$metNames %in% measure_exception)]]
   ifelse(any(substrates == "nm"), F, T)
 })
+
+rxn_fits %>% dplyrr( %>% filter(parSpearman > 0.6)
+
+###
 
 validRxnB <- rxn_fits$parSpearman[chmatch(RMMrxns, rxn_fits$rxn)] > 0.6
 
@@ -913,6 +917,23 @@ metabolic_leverage_summary_plots("P0.05")
 
 adequate_fit_optimal_rxn_form <- union(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
 
+# check for cases where variable hill coefficient regulation may have been missing
+# check arginosuccinate lyase |- Arginine (r_0207)
+# glutamate dehydrogenase |- quinolinate (r_0471)
+
+significant_hill <- reactionInfo %>% filter(grepl('ultra', modification) & Qvalue < 0.1)
+
+# when multiple regulatory candidates have similar fits but one is a far better candidate based upon the literature, choose the literature-supported one
+reactionInfo %>% filter(reaction == "r_0962")
+adequate_fit_optimal_rxn_form[grep('r_0962-rm', adequate_fit_optimal_rxn_form)] <- "r_0962-rm-t_0290-act-mm" # pyruvate kinase activation by F16bisP over citrate inhibition
+reactionInfo %>% filter(reaction == "r_0215") 
+adequate_fit_optimal_rxn_form[grep('r_0215-rm', adequate_fit_optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra"
+# aspartate kinase regulation by ultrasensitivie inhbition of threonine
+
+
+
+# summarize metabolic leverage
+
 ML_inducibility_summary <- enzyme_control_source()
 
 
@@ -1040,15 +1061,27 @@ affinity_comparisons <- affinity_comparisons %>% tbl_df()
 
 absolute_comparison <- affinity_comparisons %>% filter(Subtype %in% c("substrate", "product"), absoluteQuant, !is.na(log10mean)) %>% mutate(log10mean = log10mean - 3) # convert from mM to M
 
-boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
-                       legend.position = "right", panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1), 
-                       axis.line = element_blank(), axis.text = element_text(color = "black"))
+boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+                       panel.background = element_rect(fill = "gray92"), legend.position = "top", 
+                       axis.ticks = element_line(color = "black", size = 1),
+                       axis.text = element_text(color = "black", size = 20),
+                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
+                       )
 
-ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(parLB), ymax = log10(parUB))) + geom_pointrange() + geom_smooth(method = "lm") +
+
+ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(parLB), ymax = log10(parUB))) + geom_errorbar(size = 0.6, alpha = 0.5, width = 0.1) + geom_smooth(method = "lm", se = F, size = 2) +
+  geom_abline(a = 0, b = 1, size = 2) + boxplot_theme +
   scale_x_continuous(expression("Literature" ~ log[10] ~ "Affinity (M)")) +
-  scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ "Affinity (M)"))
-hist(absolute_comparison$sdOflog10)
+  scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ "Affinity (M) 95% credicibility interval")) + coord_cartesian(ylim = c(-8,0))
+ggsave("Figures/brendaAffinity.pdf", width = 8, height = 10)
+ggsave("Figures/brendaAffinity.eps", width = 8, height = 10, device=cairo_ps)
 
+brendaAgree <- absolute_comparison %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10), parCapture = log10(parLB) < log10mean & log10(parUB) > log10mean, parCaptureInterval = log10(parLB) < log10mean + 2*sdOflog10 & log10(parUB) > log10mean - 2&sdOflog10) %>%
+  dplyr::select(rxn, rxnForm, parCapture, parCaptureInterval)
+
+brendaAgree$parCapture %>% table()
+brendaAgree$parCaptureInterval %>% table()
 
 ### Look at metabolism-wide occupancy ###
 
@@ -1066,7 +1099,6 @@ rxn_met_abundances <- do.call("rbind", rxn_met_abundances)
 
 occupancy_comparison <- occupancy_comparison %>% left_join(rxn_met_abundances)
 
-
 occupancy_comparison$Subtype[!(occupancy_comparison$Subtype %in% c("substrate", "product"))] <- "regulator"
 occupancy_comparison$Specie <- NA
 
@@ -1075,26 +1107,30 @@ species_of_interest <- c("ATP", "ADP")
 occupancy_comparison$Specie[occupancy_comparison$commonName %in% species_of_interest] <- occupancy_comparison$commonName[occupancy_comparison$commonName %in% species_of_interest]
 occupancy_comparison$Specie[is.na(occupancy_comparison$Specie)] <- "The Rest"
 
-occupancy_comparison <- occupancy_comparison %>% mutate(log10S_km = log10(2^medianAbund / parMLE), log10occ = (2^medianAbund/(2^medianAbund + parMLE)))
+occupancy_comparison <- occupancy_comparison %>% mutate(log10S_km = log10(2^logConc / parMLE), log10occ = (2^logConc/(2^logConc + parMLE)))
 
 occupancy_comparison <- occupancy_comparison %>% mutate(Subtype = factor(Subtype, levels = c("substrate", "product", "regulator")))
 occupancy_comparison$Specie <- factor(occupancy_comparison$Specie, levels = c(species_of_interest, "The Rest"))
 
-spec_counts <- occupancy_comparison %>% group_by(Specie, Subtype) %>% summarize(counts = n())
+spec_counts <- occupancy_comparison %>% group_by(Specie, Subtype, rxn) %>% summarize(counts = n()) %>% group_by(Specie, Subtype) %>% summarize(counts = n())
+
+boxplot_theme_label_rotate <- boxplot_theme + theme(axis.title.y = element_text(angle = 0))
 
 # S / Km
 ggplot() + geom_violin(data = occupancy_comparison, aes(x = Specie, y = log10S_km), fill = "firebrick2", scale = "width") +
   facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0, label = counts), color = "BLUE", size = 6) +
-  scale_y_continuous(expression(frac(S, K[M])), breaks = seq(-3, 3, by = 1), labels = 10^seq(-3, 3, by = 1)) +
-  boxplot_theme
+  scale_y_continuous(expression(frac(S, K[M])), breaks = seq(-5, 5, by = 1), labels = 10^seq(-5, 5, by = 1), expand = c(0,0)) +
+  boxplot_theme_label_rotate
+ggsave("Figures/speciesSKm.pdf", width = 10, height = 10)
+ggsave("Figures/speciesSKm.eps", width = 10, height = 10, device=cairo_ps)
 
 # S / S + Km
 ggplot() + geom_violin(data = occupancy_comparison, aes(x = Specie, y = log10occ), fill = "firebrick2", scale = "width") +
   facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0.5, label = counts), color = "BLUE", size = 6) +
   scale_y_continuous(expression(frac(S, S + K[M])), breaks = seq(0, 1, by = 0.2), label = sapply(seq(0, 1, by = 0.2) * 100, function(x){paste(x, "%", sep = "")})) +
-  boxplot_theme
-ggsave("Figures/speciesOccupancy.pdf", width = 12, height = 14)
-
+  boxplot_theme_label_rotate
+ggsave("Figures/speciesOccupancy.pdf", width = 10, height = 10)
+ggsave("Figures/speciesOccupancy.eps", width = 10, height = 10, device=cairo_ps)
 
 
 ######## Compare Keq to Gibbs free energy ########
@@ -1105,130 +1141,95 @@ ggsave("Figures/speciesOccupancy.pdf", width = 12, height = 14)
 # Q = prod[P]/prod[S]
 # Q/keq
 
+reaction_names <- read.delim('companionFiles/control_layout.tsv')
 reaction_free_energy <- read.delim("companionFiles/cc_dG_python.tsv")
 
 free_energy_table <- data.frame(RXform = adequate_fit_optimal_rxn_form, reaction = substr(adequate_fit_optimal_rxn_form, 1, 6))
 
-free_energy_table <- free_energy_table %>% left_join( reversibleRx %>% dplyr::select(reaction = rx, cc_dGr = CCdG, cc_dGrSD = CCdGsd, reversible = modelBound) %>% mutate(reversible = ifelse(reversible == "reversible", T, F)))
+free_energy_table <- free_energy_table %>% left_join( reversibleRx %>% dplyr::select(reaction = rx, cc_dGr = CCdG, cc_dGrSD = CCdGsd, reversible = modelBound) %>% mutate(reversible = ifelse(reversible == "reversible", "Reversible", "Irreversible")))
 
 free_energy_table[,c("log_keq_LB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X2.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
 free_energy_table[,c("log_keq_UB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X97.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
 free_energy_table[,c("log_keq_MLE")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$MLE[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
 free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"])})
-free_energy_table[,c("measuredProducts")] <- sapply(free_energy_table$RXform, function(x){any(rxn_fit_params[[x]]$kineticParPrior$measured[!is.na(rxn_fit_params[[x]]$kineticParPrior$modelName) & rxn_fit_params[[x]]$kineticParPrior$modelName %in% rxn_fit_params[[x]]$param_species$SubstrateID[rxn_fit_params[[x]]$param_species$Subtype == "product"]])})
-
-free_energy_table <- free_energy_table %>% mutate(QkeqDiff_MLE = logQmedian - log_keq_MLE, QkeqDiff_UB = logQmedian - log_keq_LB, QkeqDiff_LB = logQmedian - log_keq_UB) %>% dplyr::select(-c(log_keq_LB, log_keq_UB, log_keq_MLE, logQmedian))
 free_energy_table <- free_energy_table %>% filter(!is.na(cc_dGr))
+
+free_energy_table <- free_energy_table %>% left_join(reaction_names %>% dplyr::select(RXform = reaction, genes, abbrev, pathway))
+free_energy_table$genes[is.na(free_energy_table$genes)] <- free_energy_table$abbrev[is.na(free_energy_table$abbrev)] <- free_energy_table$reaction[is.na(free_energy_table$abbrev)]
+free_energy_table$pathway[is.na(free_energy_table$pathway)] <- "other"
+
+freebee_species <- c(water = "t_0399", proton = "t_0398", ammonium = "t_0233", diphosphate = "t_0332", co2 = "t_0249")
+missing_species <- lapply(free_energy_table$RXform, function(x){
+  unmeasuredSpec = rxn_fit_params[[x]]$kineticParPrior %>% filter(!is.na(measured) & !measured) %>% dplyr::select(SubstrateID = rel_spec, commonName)
+  unmeasuredSpec = unmeasuredSpec %>% left_join(rxn_fit_params[[x]]$param_species %>% dplyr::select(SubstrateID, ReactionID, Subtype), by = "SubstrateID")
+  unmeasuredSpec %>% filter(!(SubstrateID %in% freebee_species))
+  })
+missing_species <- do.call("rbind", missing_species)
+
+# calculate Q for all conditions to compare relative to Keq
+
+library(tidyr)
+
+all_condition_Q <- lapply(1:nrow(free_energy_table), function(i){
+  metStoi <- rxnList[[free_energy_table$RXform[i]]]$rxnStoi
+  metConc <- rxnList[[free_energy_table$RXform[i]]]$rxnMet
+  metConc[is.na(metConc)] <- 0
+  metConc$condition <- rownames(metConc)
+  
+  metInfo <- metConc %>% gather(specie, conc, -condition) %>% mutate(specie = as.character(specie)) %>% left_join(data.frame(specie = names(metStoi), coef = unname(metStoi)), by = "specie")
+  metInfo %>% tbl_df() %>% group_by(condition) %>% summarize(Q = sum(conc * coef)) %>% mutate(reaction = free_energy_table$reaction[i])
+})
+all_condition_Q <- do.call("rbind", all_condition_Q)
+
+# keep track of Q relative to median Q
+all_condition_Q <- free_energy_table %>% left_join(all_condition_Q, join = "reaction") %>% tbl_df() %>% dplyr::select(RXform, reaction, condition, Q, logQmedian)
+
+# back to one estimate-per-reaction
+free_energy_table <- free_energy_table %>% mutate(QkeqDiff_MLE = logQmedian - log_keq_MLE, QkeqDiff_UB = logQmedian - log_keq_LB, QkeqDiff_LB = logQmedian - log_keq_UB) %>% dplyr::select(-c(log_keq_LB, log_keq_UB, log_keq_MLE, logQmedian))
 
 # for reactions with always negative flux, flip Q-Keq
 reverse_rxns <- free_energy_table %>% filter(QkeqDiff_LB > 0) %>% mutate(QkeqDiff_MLE = -1*QkeqDiff_MLE, QkeqDiff_UBtmp = QkeqDiff_UB, QkeqDiff_LBtmp = QkeqDiff_LB, QkeqDiff_LB = -1*QkeqDiff_UBtmp, QkeqDiff_UB = -1*QkeqDiff_LBtmp) %>%
   dplyr::select(-QkeqDiff_LBtmp, -QkeqDiff_UBtmp)
+free_energy_table <- free_energy_table %>% filter(QkeqDiff_LB <= 0) %>% rbind(reverse_rxns)
 
-free_energy_table <- free_energy_table %>% filter(QkeqDiff_LB <= 0) %>% left_join(reverse_rxns)
+free_energy_table$measuredProducts <- sapply(free_energy_table$reaction, function(x){
+  # check missing substrates (because reaction flows backwards) or products otherwise
+  missing_species %>% filter(ReactionID == x & Subtype == ifelse(x %in% reverse_rxns$reaction, "substrate", "product")) %>% nrow() != 0
+})
 
+# remove zero variance reactions - these will only exist if the substrate and product use the same measurement - e.g. G1P and G6P
+zeroVarRxns <- all_condition_Q %>% group_by(reaction) %>% summarize(var = var(Q)) %>% filter(var == 0) %>% dplyr::select(reaction) %>% unlist() %>% as.character()
+free_energy_table <- free_energy_table %>% filter(!(reaction %in% zeroVarRxns))
+all_condition_Q <- all_condition_Q %>% filter(!(reaction %in% zeroVarRxns))
+
+# order reactions according to free energy
 free_energy_table <- free_energy_table %>% arrange(QkeqDiff_UB) %>% mutate(reaction = factor(reaction, levels = reaction))
 
-ggplot() + geom_errorbar(data = free_energy_table, aes(x = reaction, ymin = 2^QkeqDiff_LB, ymax = 2^QkeqDiff_UB), size = 1) + facet_grid(~ reversible, scale = "free_x", space = "free_x") +
-  scale_y_log10(expand = c(0,0))
+# also flipping Q and logQmedian Q when keeping track of all conditions
+all_conditions_rev <- all_condition_Q %>% filter(RXform %in% reverse_rxns$RXform) %>% mutate(Q = -1*Q, logQmedian = -1*logQmedian)
+all_condition_Q <- all_condition_Q %>% filter(!(RXform %in% reverse_rxns$RXform)) %>% rbind(all_conditions_rev)
 
+# comparing variable Q across conditions to the median condition where Q / keq was calculated
+all_condition_Q <- all_condition_Q %>% mutate(reaction = factor(reaction, levels = free_energy_table$reaction)) %>% left_join(free_energy_table %>% dplyr::select(RXform, reaction, reversible, genes, abbrev, pathway, measuredProducts, QkeqDiff_UB), join = "reaction") %>%
+  mutate(Qkeq = Q - logQmedian + QkeqDiff_UB)
 
-free_energy_table <- free_energy_table[free_energy_table$cc_dGrSD < 100,] # remove reactions with unknown free energy
+fast_C_lim <- all_condition_Q %>% filter(condition == "C0.30")
 
-free_energy_table[,c("log_keq_LB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X2.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
-free_energy_table[,c("log_keq_UB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X97.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
-free_energy_table[,c("log_keq_MLE")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$MLE[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
-free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"])})
+free_energy_theme <- boxplot_theme_label_rotate + theme(axis.text.x = element_text(angle = 90, hjust = 1), strip.background = element_rect(fill = "coral"))
 
-free_energy_table <- free_energy_table %>% arrange(logQmedian - log_keq_LB) %>% mutate(reaction = factor(reaction, levels = reaction))
+# Visualizing disequilibrium ratio
 
-ggplot() + geom_pointrange(data = free_energy_table, aes(x = reaction, y = logQmedian - log_keq_MLE, ymin = logQmedian - log_keq_LB, ymax = logQmedian - log_keq_UB), size = 1) + 
-  geom_point(data = free_energy_table, aes(x = reaction, y = log2(exp(free_energy_table$cc_dGr / ((8.315 * (273 + 30)) / 1000)))), col = "RED", size = 4)
+ggplot() + facet_grid(~ pathway, scale = "free_x", space = "free_x") +
+  geom_violin(data = all_condition_Q, aes(x = reaction, y = 2^Qkeq, fill = reversible), scale = "width") +
+  geom_errorbar(data = free_energy_table, aes(x = reaction, ymin = 2^QkeqDiff_LB, ymax = 2^QkeqDiff_UB), size = 1) +
+  geom_point(data = fast_C_lim, aes(x = reaction, y = 2^Qkeq), fill = "chartreuse3", size = 3, shape = 21) + 
+  geom_point(data = free_energy_table, aes(x = reaction, y = 2^QkeqDiff_MLE), fill = "darkblue", size = 3, shape = 21) +
+  scale_y_log10(expression(frac(Q, K[eq]) ~ "=" ~ frac(v[r], v[f])), expand = c(0,0)) + coord_cartesian(ylim = c(10^-3, 1)) + free_energy_theme +
+  scale_fill_discrete() +
+  scale_x_discrete(breaks = free_energy_table$reaction, labels = free_energy_table$abbrev)
 
-flagged_rxns <- data.frame(rxName = c("PFK", "ALD", "TPI", "GAPDH", "PGK", "PGM", "PYK"), reaction = c("r_0886", "r_0450", "r_1054", "r_0486", "r_0892", "r_0893", "r_0962"), reversible = c(F, rep(T, 5), F))
-
-ggplot() + geom_pointrange(data = flagged_rxns %>% left_join(free_energy_table), aes(x = reaction, y = logQmedian - log_keq_MLE, ymin = logQmedian - log_keq_LB, ymax = logQmedian - log_keq_UB), size = 1) + 
-  geom_point(data = flagged_rxns %>% left_join(free_energy_table), aes(x = reaction, y = log2(exp(free_energy_table$cc_dGr / ((8.315 * (273 + 30)) / 1000)))), col = "RED", size = 4)
-
-reversibleRx$modelBound
-
-
-
-data.frame(free_energy_table$cc_dGr, log2(exp(free_energy_table$cc_dGr / ((8.315 * (273 + 30)) / 1000)))
-
-
-free_energy_table$prediction <- log(2^free_energy_table$logQmedian/2^free_energy_table$log_keq_MLE)*(8.315 * (273 + 25) / 1000)
-free_energy_table$prediction_ub <- log(2^free_energy_table$logQmedian/2^free_energy_table$log_keq_UB)*(8.315 * (273 + 25) / 1000)
-free_energy_table$prediction_lb <- log(2^free_energy_table$logQmedian/2^free_energy_table$log_keq_LB)*(8.315 * (273 + 25) / 1000)
-
-
-boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
-                       legend.position = "right", panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1), 
-                       axis.line = element_blank(), axis.text = element_text(color = "black"))
-
-flagged_rxns <- data.frame(rxName = c("PFK", "ALD", "TPI", "GAPDH", "PGK", "PGM", "PYK"), reaction = c("r_0886", "r_0450", "r_1054", "r_0486", "r_0892", "r_0893", "r_0962"), reversible = c(F, rep(T, 5), F))
-flagged_rxns %>% left_join(free_energy_table)
-ggplot(flagged_rxns %>% left_join(free_energy_table), aes(x = cc_dGr, y = prediction, ymin = prediction_lb, ymax = prediction_ub)) + geom_errorbar()
-
-ggplot(free_energy_table, aes(x = cc_dGr, y = prediction)) + boxplot_theme + geom_point() + geom_abline(intercept = 0, slope = 1)
-
-free_energy_table %>% mutate(q_per_keq = logQmedian - log_keq_MLE, diff = prediction - cc_dGr) %>% arrange(q_per_keq)
-
-
-
-lm(data = free_energy_table, prediction ~ cc_dGr)
-
-       geom_abline(intercept = 0, slope = 1) +
-  scale_x_continuous(expression("Component Contribution" ~ Delta[G]^o)) + 
-  scale_y_continuous(expression("Parameter Inference" ~ Delta[G])) +
-  scale_color_gradient2("Par ~ FBA interval overlap", low = "green", mid = "green", high = "red", limits = c(0,1))
-
-
-
-
-
-ggplot(free_energy_table, aes(x = cc_dGr, xmin = cc_dGr - 2*cc_dGrSD, xmax = cc_dGr + 2*cc_dGrSD,
-                              y = (logQmedian - log_keq_MLE)*(8.315 * (273 + 25) / 1000),
-                              ymin = (logQmedian - log_keq_LB)*(8.315 * (273 + 25) / 1000),
-                              ymax = (logQmedian - log_keq_UB)*(8.315 * (273 + 25) / 1000))) +
-  geom_errorbar(size = 1) + geom_errorbarh(size = 1) + boxplot_theme +
-  geom_abline(intercept = 0, slope = 1) +
-  scale_x_continuous(expression("Component Contribution" ~ Delta[G]^o)) + 
-  scale_y_continuous(expression("Parameter Inference" ~ Delta[G])) +
-  scale_color_gradient2("Par ~ FBA interval overlap", low = "green", mid = "green", high = "red", limits = c(0,1))
-
-
-### Remap axes ###
-free_energy_direct_comp_table <- data.frame(predicted = (free_energy_table$logQmedian - free_energy_table$log_keq_MLE)*(8.315 * (273 + 25) / 1000),
-                                            free_energy_table[,c('cc_dGr', 'intervalOverlap', 'RXform', 'formType')])
-free_energy_direct_comp_table$Deviation <- free_energy_direct_comp_table$predicted - free_energy_direct_comp_table$cc_dGr
-
-free_energy_subset <- free_energy_direct_comp_table#[free_energy_direct_comp_table$formType == "Best Fit",]
-reversible_rxn_match <- reversibleRx[chmatch(substr(free_energy_subset$RXform, 1, 6), reversibleRx$rx),]
-
-free_energy_subset$is_reversible <- ifelse(reversible_rxn_match$modelBound == "reversible", T, F)
-
-ggplot(free_energy_subset, aes(x = cc_dGr, y = predicted, color = intervalOverlap)) + geom_point() + facet_wrap(~ is_reversible, ncol = 1) +
-  scale_x_continuous(expression("Component Contribution" ~ Delta[G]^o)) + 
-  scale_y_continuous(expression("Parameter Inference" ~ Delta[G])) +
-  geom_abline(intercept = 0, slope = 1) + geom_point(x = 0, y = 0, size = 5, col = "BLACK") +
-  scale_color_gradient("Par ~ FBA interval overlap", low = "green", high = "red", limits = c(0,1)) + boxplot_theme
-
-chisq.test(table(free_energy_subset$predicted < 0, !free_energy_subset$is_reversible))
-chisq.test(table(free_energy_subset$predicted < 0, free_energy_subset$cc_dGr < 0 ))
-
-deviation_design_matrix <- as.matrix(data.frame(int = 1, reversible_effect = ifelse(free_energy_subset$is_reversible, 1, 0), 
-                                                irreversible_slope = free_energy_subset$intervalOverlap * !free_energy_subset$is_reversible,
-                                                reversible_slope = free_energy_subset$intervalOverlap * free_energy_subset$is_reversible))
-
-summary(lm(abs(free_energy_subset$Deviation) ~ deviation_design_matrix + 0))
-
-ggplot(free_energy_subset, aes(x = intervalOverlap, y = abs(Deviation), col = factor(is_reversible))) + geom_point() + stat_smooth(method = "lm", size = 2) +
-  scale_y_continuous(expression("abs( Parameter Inference" ~ Delta[G] - ~ 'Component Contribution' ~ Delta[G]^o ~ ")")) + 
-  scale_x_continuous("Par ~ FBA interval overlap") + scale_color_brewer("Reversible\nReaction?", palette = "Set1") + boxplot_theme
-ggsave("Figures/gibbsDeviation.pdf", width = 12, height = 14)
-
-
-
+free_energy_table %>% mutate(Gstandard_LB = cc_dGr - 2*cc_dGrSD, Gstandard_UB = cc_dGr + 2*cc_dGrSD) %>% ungroup() # delta G / RT
+(8.315 * (273 + 25) / 1000
 
 ##### Determine which metabolite or protein is most correlated with pathway flux for each pathway #####
 # topology: metabolism_stoichiometry - set of all directed reactions
