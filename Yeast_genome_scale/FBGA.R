@@ -642,13 +642,15 @@ if(sum(!(reactionInfo$rMech %in% rxn_fits$rxn)) != 0){
 
 ### Determine which reactions to follow-up on based upon either
 ## A) Contain all substrates
-## B) RM is well-fit despite missing substrates
-
-RMMrxns <- reactionInfo$rMech[reactionInfo$modification %in% c("rmCond", "")]
+## B) RM or regulation is well-fit despite missing substrates
 
 load("paramOptim.Rdata")
+
+RMMrxns <- reactionInfo$rMech[reactionInfo$modification == ""]
 measure_exception <- c("H+", "H2O")
-validRxnA <- sapply(rxnList_form[names(rxnList_form) %in% RMMrxns], function(x){
+
+validRxnA <- sapply(RMMrxns, function(i){
+  x <- rxnList_form[[i]]
   if(all(x$flux$standardQP >= 0)){
     substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi < 0], names(x$originMet))]
   }else if(all(x$flux$standardQP <= 0)){
@@ -658,16 +660,18 @@ validRxnA <- sapply(rxnList_form[names(rxnList_form) %in% RMMrxns], function(x){
   }
   
   substrates <- substrates[names(substrates) %in% names(x$metNames)[!(x$metNames %in% measure_exception)]]
-  ifelse(any(substrates == "nm"), F, T)
+  if(any(substrates == "nm")){
+   x$rxnID
+  }
 })
-
-rxn_fits %>% dplyrr( %>% filter(parSpearman > 0.6)
+validRxnA <- unlist(validRxnA) %>% unname()
 
 ###
 
-validRxnB <- rxn_fits$parSpearman[chmatch(RMMrxns, rxn_fits$rxn)] > 0.6
+validRxnB <- rxn_fits %>% tbl_df() %>% dplyr::select(rxn, parSpearman) %>% filter(parSpearman > 0.6) %>% left_join(reactionInfo %>% tbl_df() %>% dplyr::select(rxn = rMech, reaction, modification, Qvalue)) %>%
+  filter(!grepl('t_metX', rxn)) %>% filter(is.na(Qvalue) | Qvalue < 0.05) %>% dplyr::select(reaction) %>% unlist() %>% unname() %>% unique()
 
-valid_rxns <- substr(RMMrxns[validRxnA | validRxnB], 1, 6) %>% unique()
+valid_rxns <- union(validRxnA, validRxnB)
 rmCond_rxns <- unique(reactionInfo$reaction[grep('rmCond', reactionInfo$modification)]) # reactions which carry zero flux under some conditions - consider only non-zero reactions
 
 optimal_rxn_form <- sapply(valid_rxns, function(x){
@@ -893,8 +897,6 @@ stacked_spearman_rev <- stacked_spearman_rev %>% dplyr::filter(spearman >= 0)%>%
   mutate(reaction = as.character(reaction)) %>% mutate(reaction = factor(reaction, levels = unique(reaction)))
 stacked_spearman_rev$reaction = factor(stacked_spearman_rev$reaction, levels = unique(stacked_spearman_rev$reaction))
 
-ggplot(spearman_reversibility, aes(x = reaction, y = spearman)) + facet_grid(Type ~ .) + geom_bar(stat = "identity")
-
 ggplot(stacked_spearman_rev, aes(x = reaction, y = spearman, fill = Type)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
   ggtitle('Correlation between measured and predicted flux') +
   barplot_theme_nox + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
@@ -930,7 +932,8 @@ reactionInfo %>% filter(reaction == "r_0215")
 adequate_fit_optimal_rxn_form[grep('r_0215-rm', adequate_fit_optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra"
 # aspartate kinase regulation by ultrasensitivie inhbition of threonine
 
-
+reactionInfo %>% filter(reaction == "r_0471") %>% arrange(Qvalue)
+rxn_fits %>% filter(grepl('r_0471', rxn)) %>% arrange(parSpearman)
 
 # summarize metabolic leverage
 
