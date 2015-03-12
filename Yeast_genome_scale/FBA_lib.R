@@ -1582,8 +1582,8 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
     tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
   
-    fit_summary$nnlsPearson <- cor(-1*nnls_fit$fitted, avg_flux, method = "pearson")
-    fit_summary$nnlsSpearman <- cor(-1*nnls_fit$fitted, avg_flux, method = "spearman")
+    fit_summary$nnlsPearson <- c(cor(-1*nnls_fit$fitted, avg_flux, method = "pearson"))
+    fit_summary$nnlsSpearman <- c(cor(-1*nnls_fit$fitted, avg_flux, method = "spearman"))
     
   }else{
     
@@ -1591,14 +1591,14 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
     tpred <- nnls_fit$residuals
     fit_summary$NNLS <- fit_summary$TSS-sum((tpred)^2)
     
-    fit_summary$nnlsPearson <- cor(nnls_fit$fitted, avg_flux, method = "pearson")
-    fit_summary$nnlsSpearman <- cor(nnls_fit$fitted, avg_flux, method = "spearman")
+    fit_summary$nnlsPearson <- c(cor(nnls_fit$fitted, avg_flux, method = "pearson"))
+    fit_summary$nnlsSpearman <- c(cor(nnls_fit$fitted, avg_flux, method = "spearman"))
   
   }
    
   ### correlations
-  fit_summary$parPearson <- cor(flux_fit$fitted, avg_flux, method = "pearson")
-  fit_summary$parSpearman <- cor(flux_fit$fitted, avg_flux, method = "spearman")
+  fit_summary$parPearson <- c(cor(flux_fit$fitted, avg_flux, method = "pearson"))
+  fit_summary$parSpearman <- c(cor(flux_fit$fitted, avg_flux, method = "spearman"))
   
   # correct pearson correlation for measurement noise propagated through reaction eqtn # assume accuracy of flux for now
   # for simplicity currently assume fixed noise - equal to the median SD - ideally this should be replaced with a weighted measure which
@@ -2862,9 +2862,9 @@ allostery_affinity <- function(){
   
   # plot physiological concentrations of alanine
   
-  parSubset <- param_set_list[parSetInfo$rx == arxn]
+  parSubset <- param_set_list[parSetInfo$rx == "r_0816-rm-t_0461-inh-comp_rmCond"]
   load(paste(c("FBGA_files/paramSets/", param_run_info$file[parSubset[[1]]$name$index]), collapse = ""))
-  run_rxn <- run_summary[[arxn]]
+  run_rxn <- run_summary[["r_0816-rm-t_0461-inh-comp_rmCond"]]
   
   alanine_conc <- 2^run_rxn$metabolites[,names(run_rxn$rxnSummary$metNames)[run_rxn$rxnSummary$metNames == "L-alanine"], drop = F]
   alanine_conc <- alanine_conc %>% as.data.frame() %>% mutate(condition = rownames(.)) %>% dplyr::select(alanine = t_0461, condition) %>%
@@ -2885,9 +2885,6 @@ allostery_affinity <- function(){
     geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3)
   
   ggsave("Figures/alanineConcentration.pdf", height = 10, width = 10)
-  
-  
-  
   
   
   # plot marginal distribution of alanine ki
@@ -2921,7 +2918,7 @@ allostery_affinity <- function(){
   
   ggplot(otcase_alanine_ki, aes(x = ki)) + geom_bar(binwidth = 0.05) + 
     geom_vline(xintercept = otcase_alanine_ki_mle, color = "RED", size = 2) + geom_vline(xintercept = otcase_alanine_ki_exp, color = "BLUE", size = 2) +
-    scale_x_log10("Affinity", breaks = c(1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1), labels = c("100uM", "1mM", "10mM", "100mM", "1M", "10M"), expand = c(0,0)) + barplot_theme + 
+    scale_x_log10("Affinity", breaks = c(1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1, 1e2), labels = c("10uM", "100uM", "1mM", "10mM", "100mM", "1M", "10M", "100M"), expand = c(0,0)) + barplot_theme + 
     scale_y_continuous("Counts", expand = c(0,0)) + geom_blank(aes(y=1.1*..count..), binwidth = 0.05, stat="bin") +
     geom_text(data = data.frame(label = c("MLE", "Measured"), x = 8, y = c(87.5, 80), color = c("RED", "BLUE")), aes(x = x, y = y, label = label, color = color), size = 10) +
     scale_color_identity()
