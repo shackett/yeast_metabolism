@@ -929,11 +929,7 @@ significant_hill <- reactionInfo %>% filter(grepl('ultra', modification) & Qvalu
 reactionInfo %>% filter(reaction == "r_0962")
 adequate_fit_optimal_rxn_form[grep('r_0962-rm', adequate_fit_optimal_rxn_form)] <- "r_0962-rm-t_0290-act-mm" # pyruvate kinase activation by F16bisP over citrate inhibition
 reactionInfo %>% filter(reaction == "r_0215") 
-adequate_fit_optimal_rxn_form[grep('r_0215-rm', adequate_fit_optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra"
-# aspartate kinase regulation by ultrasensitivie inhbition of threonine
-
-reactionInfo %>% filter(reaction == "r_0471") %>% arrange(Qvalue)
-rxn_fits %>% filter(grepl('r_0471', rxn)) %>% arrange(parSpearman)
+adequate_fit_optimal_rxn_form[grep('r_0215-rm', adequate_fit_optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra" # aspartate kinase regulation by ultrasensitive inhbition by threonine
 
 # summarize metabolic leverage
 
