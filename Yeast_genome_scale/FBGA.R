@@ -660,7 +660,7 @@ validRxnA <- sapply(RMMrxns, function(i){
   }
   
   substrates <- substrates[names(substrates) %in% names(x$metNames)[!(x$metNames %in% measure_exception)]]
-  if(any(substrates == "nm")){
+  if(!any(substrates == "nm")){
    x$rxnID
   }
 })
@@ -668,8 +668,8 @@ validRxnA <- unlist(validRxnA) %>% unname()
 
 ###
 
-validRxnB <- rxn_fits %>% tbl_df() %>% dplyr::select(rxn, parSpearman) %>% filter(parSpearman > 0.6) %>% left_join(reactionInfo %>% tbl_df() %>% dplyr::select(rxn = rMech, reaction, modification, Qvalue)) %>%
-  filter(!grepl('t_metX', rxn)) %>% filter(is.na(Qvalue) | Qvalue < 0.05) %>% dplyr::select(reaction) %>% unlist() %>% unname() %>% unique()
+validRxnB <- rxn_fits %>% tbl_df() %>% dplyr::select(rxn, parSpearman) %>% filter(parSpearman > 0.3) %>% left_join(reactionInfo %>% tbl_df() %>% dplyr::select(rxn = rMech, reaction, modification, Qvalue)) %>%
+  filter(!grepl('t_metX', rxn)) %>% filter(is.na(Qvalue) | Qvalue < 1) %>% dplyr::select(reaction) %>% unlist() %>% unname() %>% unique()
 
 valid_rxns <- union(validRxnA, validRxnB)
 rmCond_rxns <- unique(reactionInfo$reaction[grep('rmCond', reactionInfo$modification)]) # reactions which carry zero flux under some conditions - consider only non-zero reactions
@@ -693,8 +693,14 @@ optimal_rxn_form <- sapply(valid_rxns, function(x){
   }
 })
 
+### load manually annotated abbreviation of reaction name and pathway
 
-#reactionInfo[chmatch(optimal_rxn_form, reactionInfo$rMech),]
+fitReactionNames <- read.delim('companionFiles/fitReactionNames.txt')
+
+if(!all(valid_rxns %in% fitReactionNames$reaction)){
+ stop("some reactions that were tested need to be added to fitReactionNames.txt") 
+}
+
 
 ##### Summary based on interval overlap #####
 
@@ -935,21 +941,60 @@ adequate_fit_optimal_rxn_form[grep('r_0215-rm', adequate_fit_optimal_rxn_form)] 
 
 ML_inducibility_summary <- enzyme_control_source()
 
-
-
 ######## Split ML of well-fit reactions into enzyme and allosteric control ###########
 
-ML_rxn_summary <- tbl_df(MLdata) %>% dplyr::filter(reaction %in% adequate_fit_optimal_rxn_form) %>% 
-  dplyr::mutate(Type = ifelse(Type %in% c("substrate", "product"), "rxn_metabolite", Type)) %>%
-  dplyr::mutate(Type = ifelse(!(Type %in% c("rxn_metabolite", "enzyme")), "regulator", Type)) %>%
+# if any reactions flow in reverse, there substrate and product leverage needs to be flipped
+reverse_rxns <- sapply(adequate_fit_optimal_rxn_form, function(x){all(rxnList_form[[x]]$flux$standardQP < 0)})
+reverse_rxns <- names(reverse_rxns)[reverse_rxns]
+
+ML_rxn_summary <- tbl_df(MLdata) %>% dplyr::filter(reaction %in% adequate_fit_optimal_rxn_form)
+
+ML_rxn_summary <- rbind(
+  ML_rxn_summary %>% filter(reaction %in% reverse_rxns, Type == "substrate") %>% mutate(Type = "product"),
+  ML_rxn_summary %>% filter(reaction %in% reverse_rxns, Type == "product") %>% mutate(Type = "substrate"),
+  ML_rxn_summary %>% filter(reaction %in% reverse_rxns, !(Type %in% c("substrate", "product"))),
+  ML_rxn_summary %>% filter(!(reaction %in% reverse_rxns))
+)
+
+ML_rxn_summary <- ML_rxn_summary %>% mutate(Type = ifelse(Type %in% c("substrate", "product", "enzyme"), Type, "regulator")) %>%
   dplyr::select(reaction, specie, Type, condition, ML = get("0.5")) %>% group_by(reaction, Type, condition) %>%
   dplyr::summarize(ML = sum(ML)) %>% group_by(reaction, Type) %>% dplyr::summarize(ML = median(ML)) %>%
   group_by(reaction) %>% dplyr::mutate(ML = ML / sum(ML))
 
+ML_rxn_tall <- ML_rxn_summary %>% left_join(ML_inducibility_summary %>% dplyr::select(reaction, genes, reversibility)) %>%
+  mutate(Type = factor(Type, levels = c("substrate", "enzyme", "product", "regulator")))
+
 ML_rxn_summary <- tbl_df(dcast(ML_rxn_summary, reaction ~ Type, value.var = "ML", fill = 0)) # each rxn with assocaited enzyme, regulator and metabolic control fraction
 
 ML_rxn_summary <- ML_rxn_summary %>% dplyr::mutate(rID = substr(reaction, 1,6)) %>% left_join(ML_inducibility_summary %>% dplyr::select(reaction, genes, reversibility)) %>%
-  left_join(reversibleRx %>% dplyr::select(rID = rx, CCdG, CCdGsd)) %>% arrange(rxn_metabolite)
+  arrange(substrate, product)
+
+ML_rxn_tall <- ML_rxn_tall %>% ungroup() %>% mutate(reaction = factor(reaction, levels = rev(ML_rxn_summary$reaction))) %>% arrange(reaction)
+
+TypeColors <- c("firebrick1", "blue2", "chartreuse3", "darkorange")
+  names(TypeColors) <- levels(ML_rxn_tall$Type)
+
+boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+                       panel.background = element_rect(fill = "gray92"), legend.position = "top", 
+                       axis.ticks = element_line(color = "black", size = 1),
+                       axis.text = element_text(color = "black", size = 20),
+                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank(),
+)
+
+ML_rxn_tall <- ML_rxn_tall %>% mutate(reversibility = ifelse(reversibility == "T", "Kinetically Reversible", "Kinetically Irreversible"),
+                                      reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible")))
+
+ggplot(ML_rxn_tall, aes(x = reaction, y = ML, fill = Type, order = Type)) + geom_bar(stat = "identity", width = 0.85) +
+  boxplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+  scale_fill_manual(values = TypeColors) + facet_grid(~ reversibility, scales = "free_x", space = "free_x")
+
+
+
+
+
+
+
 
 
 color_key <- color_ternary(100)
