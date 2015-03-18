@@ -848,18 +848,22 @@ ggsave("Figures/spearman_two_pane.pdf", height = 9, width = 12)
 # stack regulator
 
 stacked_spearman <- rbind(mm_spearman %>% dplyr::select(reaction, spearman, regulator),
-                          reg_spearman %>% dplyr::select(reaction, spearman = spearDiff, regulator))
-stacked_spearman <- stacked_spearman %>% dplyr::mutate(reaction = factor(reaction, levels = mm_order))
+                          reg_spearman %>% dplyr::select(reaction, spearman = spearDiff, regulator)) %>%
+  left_join(fitReactionNames %>% dplyr::select(reaction, abbrev))
 
-ggplot(stacked_spearman %>% filter(spearman >= 0), aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
+stacked_spearman <- stacked_spearman %>% dplyr::mutate(reaction = factor(reaction, levels = mm_order)) %>%
+  filter(spearman >= 0)
+
+barplot_theme_withx <- barplot_theme_nox + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+ggplot(stacked_spearman, aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
   ggtitle('Correlation between measured and predicted flux') +
-  barplot_theme_nox + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
-  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("skyblue2", "orangered1"), breaks = c(T, F), label = c("Metabolite Regulator", "Reversible Michaelis-Menten"))
+  barplot_theme_withx + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
+  scale_x_discrete(name = "Reactions", expand = c(0,0), breaks = stacked_spearman$reaction, labels = stacked_spearman$abbrev) + scale_fill_manual("", values = c("skyblue2", "orangered1"), breaks = c(T, F), label = c("Metabolite Regulator", "Reversible Michaelis-Menten"))
 
-ggsave("Figures/spearman_stack.pdf", height = 7, width = 12)
+ggsave("Figures/spearman_stack.pdf", height = 9, width = 14)
 
 #### Comparison of reversible michaelis-menten and irreversible kinetics #####
-
 
 spearman_reversibility <- data.frame(reactionInfo[,c('reaction', 'modification', 'Qvalue')], spearman = rxn_fits[,'parSpearman']) %>% tbl_df()  # all reactions
 spearman_reversibility <- spearman_reversibility %>% dplyr::filter(is.na(Qvalue) | grepl('^(forward|reverse)', modification)) %>%
@@ -905,10 +909,10 @@ stacked_spearman_rev$reaction = factor(stacked_spearman_rev$reaction, levels = u
 
 ggplot(stacked_spearman_rev, aes(x = reaction, y = spearman, fill = Type)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
   ggtitle('Correlation between measured and predicted flux') +
-  barplot_theme_nox + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
-  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("Reversible" = "skyblue2", "Irreversible" = "moccasin"), label = c("Irreversible Michaelis-Menten", "+ Reversibility"))
+  barplot_theme_withx + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
+  scale_x_discrete(name = "Reactions", expand = c(0,0), breaks = fitReactionNames$reaction, labels = fitReactionNames$abbrev) + scale_fill_manual("", values = c("Reversible" = "skyblue2", "Irreversible" = "moccasin"), label = c("Irreversible Michaelis-Menten", "+ Reversibility"))
 
-ggsave("Figures/spearman_stack_rev.pdf", height = 7, width = 12)
+ggsave("Figures/spearman_stack_rev.pdf", height = 9, width = 14)
 
 ##### Replotting a few reactions for figures #####
 
@@ -925,17 +929,25 @@ metabolic_leverage_summary_plots("P0.05")
 
 adequate_fit_optimal_rxn_form <- union(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
 
-# check for cases where variable hill coefficient regulation may have been missing
-# check arginosuccinate lyase |- Arginine (r_0207)
-# glutamate dehydrogenase |- quinolinate (r_0471)
-
-significant_hill <- reactionInfo %>% filter(grepl('ultra', modification) & Qvalue < 0.1)
-
 # when multiple regulatory candidates have similar fits but one is a far better candidate based upon the literature, choose the literature-supported one
 reactionInfo %>% filter(reaction == "r_0962")
 adequate_fit_optimal_rxn_form[grep('r_0962-rm', adequate_fit_optimal_rxn_form)] <- "r_0962-rm-t_0290-act-mm" # pyruvate kinase activation by F16bisP over citrate inhibition
 reactionInfo %>% filter(reaction == "r_0215") 
 adequate_fit_optimal_rxn_form[grep('r_0215-rm', adequate_fit_optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra" # aspartate kinase regulation by ultrasensitive inhbition by threonine
+
+adequate_rxn_form_data <- data.frame(rxnForm = adequate_fit_optimal_rxn_form) %>% mutate(reaction = substr(rxnForm, 1, 6)) %>% left_join(fitReactionNames)
+
+# remove reactions where major substrates are missing and a high-influence regulator is suggested likely mimicking this missing substrate
+flawed_rxns <- c("r_0990", "r_0888", "r_0534", "r_0988", "r_0032")
+
+adequate_fit_optimal_rxn_form <- adequate_fit_optimal_rxn_form[!(adequate_rxn_form_data$reaction %in% flawed_rxns)]
+adequate_rxn_form_data <- adequate_rxn_form_data %>% filter(!(reaction %in% flawed_rxns))
+
+# check for cases where variable hill coefficient regulation may have been missing
+# check arginosuccinate lyase |- Arginine (r_0207)
+# glutamate dehydrogenase |- quinolinate (r_0471)
+
+# significant_hill <- reactionInfo %>% filter(grepl('ultra', modification) & Qvalue < 0.1)
 
 # summarize metabolic leverage
 
@@ -969,31 +981,30 @@ ML_rxn_summary <- tbl_df(dcast(ML_rxn_summary, reaction ~ Type, value.var = "ML"
 ML_rxn_summary <- ML_rxn_summary %>% dplyr::mutate(rID = substr(reaction, 1,6)) %>% left_join(ML_inducibility_summary %>% dplyr::select(reaction, genes, reversibility)) %>%
   arrange(substrate, product)
 
-ML_rxn_tall <- ML_rxn_tall %>% ungroup() %>% mutate(reaction = factor(reaction, levels = rev(ML_rxn_summary$reaction))) %>% arrange(reaction)
+ML_rxn_tall <- ML_rxn_tall %>% ungroup() %>% mutate(rxnForm = reaction, reaction = substr(reaction, 1, 6)) %>% 
+  left_join(fitReactionNames %>% dplyr::select(reaction, abbrev)) %>%
+  mutate(rxnForm = factor(rxnForm, levels = rev(ML_rxn_summary$reaction))) %>% arrange(rxnForm)
 
-TypeColors <- c("firebrick1", "blue2", "chartreuse3", "darkorange")
+ML_rxn_tall <- ML_rxn_tall %>% mutate(reversibility = ifelse(reversibility == "T", "Kinetically Reversible", "Kinetically Irreversible"),
+                                      reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible")))
+
+TypeColors <- c("firebrick1", "deepskyblue", "chocolate1", "black")
   names(TypeColors) <- levels(ML_rxn_tall$Type)
 
-boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+barplot_facet_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
                        panel.background = element_rect(fill = "gray92"), legend.position = "top", 
                        axis.ticks = element_line(color = "black", size = 1),
                        axis.text = element_text(color = "black", size = 20),
                        panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
                        axis.line = element_line(color = "black", size = 1), legend.title=element_blank(),
+                       axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
 )
 
-ML_rxn_tall <- ML_rxn_tall %>% mutate(reversibility = ifelse(reversibility == "T", "Kinetically Reversible", "Kinetically Irreversible"),
-                                      reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible")))
-
-ggplot(ML_rxn_tall, aes(x = reaction, y = ML, fill = Type, order = Type)) + geom_bar(stat = "identity", width = 0.85) +
-  boxplot_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
-  scale_fill_manual(values = TypeColors) + facet_grid(~ reversibility, scales = "free_x", space = "free_x")
-
-
-
-
-
-
+ggplot(ML_rxn_tall, aes(x = rxnForm, y = ML, fill = Type, order = Type)) + geom_bar(stat = "identity", width = 0.85) +
+  barplot_facet_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
+  scale_fill_manual(values = TypeColors) + facet_grid(~ reversibility, scales = "free_x", space = "free_x") +
+  scale_x_discrete("Reactions", breaks = ML_rxn_tall$rxnForm, labels =ML_rxn_tall$abbrev)
+ggsave("Figures/metabolicLeverageBar.pdf", height = 10, width = 16)
 
 
 
@@ -1004,44 +1015,72 @@ color_index <- mapply(function(x,y){
   which.min(abs(color_key$Table$enzyme - x) + abs(color_key$Table$allostery - y))
 }, x = ML_rxn_summary$enzyme, y = ML_rxn_summary$regulator)
 
-ML_rxn_summary <- ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(color_index) %>% dplyr::select(color))
+ML_rxn_summary <- ML_rxn_summary %>% mutate(rxnForm = reaction) %>% dplyr::select(-rID, -reaction, -genes) %>% left_join(adequate_rxn_form_data, by = "rxnForm")
 
-ML_rxn_ternaryPoints <- ML_rxn_summary %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
+# Look at two alternative ways of describing the 3 components forming the ternary space
+# substrates & products, enzymes, regulators
+# substrates, enzymes, regulators & products
+
+# substrates & products, enzymes, regulators
+
+ML_rxn_summary_1 <- ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(color_index) %>% dplyr::select(color)) %>%
+  mutate(rxn_metabolite = substrate + product)
+
+ML_rxn_ternaryPoints_1 <- ML_rxn_summary_1 %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
                                               y = sqrt(3)/2 * enzyme*(regulator + enzyme + rxn_metabolite))
 
-summary(lm(ML_rxn_summary, formula = rxn_metabolite ~ reversibility))
+summary(lm(ML_rxn_summary_1, formula = rxn_metabolite ~ reversibility))
 
-# Reversible
 color_key$Figure_BW + 
-  geom_point(data = ML_rxn_ternaryPoints %>% dplyr::filter(reversibility == "T"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
-  geom_point(data = ML_rxn_ternaryPoints %>% dplyr::filter(reversibility == "T"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
-ggsave("Figures/MLcolorKey_REV.pdf", height = 9.1, width = 10.7)
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == "T"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == "T"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
+ggsave("Figures/MLcolorKey_REV_1.pdf", height = 9.1, width = 10.7)
 
 # Irreversible
 color_key$Figure_BW + 
-  geom_point(data = ML_rxn_ternaryPoints %>% dplyr::filter(reversibility == "F"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
-  geom_point(data = ML_rxn_ternaryPoints %>% dplyr::filter(reversibility == "F"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
-  ggsave("Figures/MLcolorKey_FOR.pdf", height = 9.1, width = 10.7)
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == "F"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == "F"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
+  ggsave("Figures/MLcolorKey_FOR_1.pdf", height = 9.1, width = 10.7)
 
+ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints_1 %>% filter(regulator != 0)
 
-# Name point according to the metabolic layout
+color_key$Figure_Color + 
+  geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE") +
+  geom_text(data = ML_rxn_ternaryPoints_labels, aes(x = x + 0.05, y = y + 0.05, label = abbrev), color = "WHITE")
+ggsave("Figures/MLcolorKey_1.pdf", height = 9.1, width = 10.7)
 
-rxn_names <- c('r_1838' = 'HCS', 'r_0988' = 'SDH', 'r_0915' = 'PPAT', 'r_0042' = 'DAHP synthase', 'r_0886' = 'PFK', 'r_0718' = 'ME',
-  'r_0468' = 'G5K', 'r_0962' = 'PyK', 'r_4040' = 'PPK', 'r_0225' = 'ATP-PRTase', 'r_0887' = 'S7P PFK', 'r_0888' = 'PGM',
-  'r_0195' = 'TPS', 'r_0214' = 'ATCase', 'r_0310' = 'CBL', 'r_0816' = 'OTCase', 'r_0450' = 'ALD', 'r_0215' = 'AspK',
-  'r_0491' = 'G3PDH', 'r_0250' = 'CPS')
+# substrates, enzymes, regulators & products
 
-ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints %>% filter(regulator != 0) %>% rowwise() %>% mutate(label = rxn_names[names(rxn_names) == rID])
+ML_rxn_summary_2 <- ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(color_index) %>% dplyr::select(color)) %>%
+  mutate(rxn_metabolite = substrate, regulator = regulator + product)
 
-color_key$Figure <- color_key$Figure + 
-  geom_point(data = ML_rxn_ternaryPoints, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
-  geom_point(data = ML_rxn_ternaryPoints, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE") +
-  geom_text(data = ML_rxn_ternaryPoints_labels, aes(x = x + 0.05, y = y + 0.05, label = label), color = "WHITE")
+ML_rxn_ternaryPoints_2 <- ML_rxn_summary_2 %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
+                                              y = sqrt(3)/2 * enzyme*(regulator + enzyme + rxn_metabolite))
 
-#color_key$Figure + geom_point(data = ML_rxn_summary, aes(x = enzyme, y = regulator), color = "yellow")
+summary(lm(ML_rxn_summary_2, formula = rxn_metabolite ~ reversibility))
 
-#plot(1:45, 1:45, col = ML_rxn_summary$color, pch = 16, cex = 2)
-ggsave("Figures/MLcolorKey.pdf", color_key$Figure, height = 9.1, width = 10.7)
+color_key$Figure_BW + 
+  geom_point(data = ML_rxn_ternaryPoints_2 %>% dplyr::filter(reversibility == "T"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_2 %>% dplyr::filter(reversibility == "T"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
+ggsave("Figures/MLcolorKey_REV_2.pdf", height = 9.1, width = 10.7)
+
+# Irreversible
+color_key$Figure_BW + 
+  geom_point(data = ML_rxn_ternaryPoints_2 %>% dplyr::filter(reversibility == "F"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_2 %>% dplyr::filter(reversibility == "F"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
+  ggsave("Figures/MLcolorKey_FOR_2.pdf", height = 9.1, width = 10.7)
+
+ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints_2 %>% filter(regulator != 0)
+
+ML_rxn_ternaryPoints_2 <- ML_rxn_ternaryPoints_2 %>% mutate(regulatorDominates = ifelse(regulator > 2*product, "BLACK", "WHITE"))
+
+color_key$Figure_Color + 
+  geom_point(data = ML_rxn_ternaryPoints_2, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_2, aes(x = x, y = y, fill = regulatorDominates), size = 6, shape = 21)
+ggsave("Figures/MLcolorKey_2.pdf", height = 9.1, width = 10.7)
+
+##
 
 ML_rxn_summary$reaction_info <- reactionInfo$FullName[chmatch(ML_rxn_summary$reaction, reactionInfo$rMech)]
 
@@ -1128,6 +1167,7 @@ brendaAgree$parCapture %>% table()
 brendaAgree$parCaptureInterval %>% table()
 
 ### Look at metabolism-wide occupancy ###
+# need to fully load up to *import cluster parameters* in this script
 
 occupancy_comparison <- affinity_comparisons %>% filter(measured) %>% dplyr::select(-formulaName, -measured, -absoluteQuant, -(EC:speciesType))
 
@@ -1156,13 +1196,21 @@ occupancy_comparison <- occupancy_comparison %>% mutate(log10S_km = log10(2^logC
 occupancy_comparison <- occupancy_comparison %>% mutate(Subtype = factor(Subtype, levels = c("substrate", "product", "regulator")))
 occupancy_comparison$Specie <- factor(occupancy_comparison$Specie, levels = c(species_of_interest, "The Rest"))
 
+# check whether distribution of Q/keq values departs from null expectation
+
+occupancy_dist_test <- occupancy_comparison %>% dplyr::select(Subtype, Specie, rxn, modelName, medianAbund, parMLE) %>% unique()
+occupancy_dist_test <- occupancy_dist_test %>% mutate(QKeqDiff = medianAbund - log2(parMLE)) %>%
+  group_by(Subtype, Specie) %>% summarize(KSp = ks.test(QKeqDiff, "punif", -15, 15)$p.value)
+occupancy_dist_test <- occupancy_dist_test %>% mutate(Sig = ifelse(KSp < 0.05, "*", ""), Sig = ifelse(KSp < 0.01, "**", Sig), Sig = ifelse(KSp < 0.001, "***", Sig))
+
 spec_counts <- occupancy_comparison %>% group_by(Specie, Subtype, rxn) %>% summarize(counts = n()) %>% group_by(Specie, Subtype) %>% summarize(counts = n())
+spec_counts <- spec_counts %>% left_join(occupancy_dist_test) %>% mutate(Sig = ifelse(Sig != "", paste0('\n',Sig), Sig), label = paste0(counts, Sig))
 
 boxplot_theme_label_rotate <- boxplot_theme + theme(axis.title.y = element_text(angle = 0))
 
 # S / Km
 ggplot() + geom_violin(data = occupancy_comparison, aes(x = Specie, y = log10S_km), fill = "firebrick2", scale = "width") +
-  facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0, label = counts), color = "BLUE", size = 6) +
+  facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0, label = label), color = "BLUE", size = 6) +
   scale_y_continuous(expression(frac(S, K[M])), breaks = seq(-5, 5, by = 1), labels = 10^seq(-5, 5, by = 1), expand = c(0,0)) +
   boxplot_theme_label_rotate
 ggsave("Figures/speciesSKm.pdf", width = 10, height = 10)
@@ -1170,11 +1218,23 @@ ggsave("Figures/speciesSKm.eps", width = 10, height = 10, device=cairo_ps)
 
 # S / S + Km
 ggplot() + geom_violin(data = occupancy_comparison, aes(x = Specie, y = log10occ), fill = "firebrick2", scale = "width") +
-  facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0.5, label = counts), color = "BLUE", size = 6) +
+  facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0.5, label = label), color = "BLUE", size = 6) +
   scale_y_continuous(expression(frac(S, S + K[M])), breaks = seq(0, 1, by = 0.2), label = sapply(seq(0, 1, by = 0.2) * 100, function(x){paste(x, "%", sep = "")})) +
   boxplot_theme_label_rotate
 ggsave("Figures/speciesOccupancy.pdf", width = 10, height = 10)
 ggsave("Figures/speciesOccupancy.eps", width = 10, height = 10, device=cairo_ps)
+
+#Iexp <- 2^(rnorm(100, 0, 1))
+#Ivals <- 2^seq(-5,5,by = 0.01)
+
+#Icomp <- expand.grid(conc = Iexp, affinity = Ivals) %>% tbl_df()
+#Isummary <- Icomp %>% mutate(rate = affinity / (affinity + conc)) %>% group_by(affinity) %>%
+#  summarize(average = mean(rate), rate_sd = sd(rate))
+
+#ggplot(Isummary, aes(x = log2(affinity), y = average, ymin = average - 2*rate_sd, ymax = average + 2*rate_sd)) + geom_pointrange()
+#ggplot(Isummary, aes(x = log2(affinity), y = rate_sd)) + geom_line()
+
+
 
 
 ######## Compare Keq to Gibbs free energy ########
@@ -1185,25 +1245,16 @@ ggsave("Figures/speciesOccupancy.eps", width = 10, height = 10, device=cairo_ps)
 # Q = prod[P]/prod[S]
 # Q/keq
 
-reaction_names <- read.delim('companionFiles/control_layout.tsv')
-reaction_free_energy <- read.delim("companionFiles/cc_dG_python.tsv")
+free_energy_table <- adequate_rxn_form_data %>% left_join(reversibleRx %>% dplyr::select(reaction = rx, cc_dGr = CCdG, cc_dGrSD = CCdGsd, reversible = modelBound) %>% mutate(reversible = ifelse(reversible == "reversible", "Kinetically reversible", "Kinetically irreversible")))
 
-free_energy_table <- data.frame(RXform = adequate_fit_optimal_rxn_form, reaction = substr(adequate_fit_optimal_rxn_form, 1, 6))
-
-free_energy_table <- free_energy_table %>% left_join( reversibleRx %>% dplyr::select(reaction = rx, cc_dGr = CCdG, cc_dGrSD = CCdGsd, reversible = modelBound) %>% mutate(reversible = ifelse(reversible == "reversible", "Reversible", "Irreversible")))
-
-free_energy_table[,c("log_keq_LB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X2.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
-free_energy_table[,c("log_keq_UB")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$'X97.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
-free_energy_table[,c("log_keq_MLE")] <- log2(sapply(free_energy_table$RXform, function(x){rxn_fit_params[[x]]$param_interval$MLE[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
-free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$RXform, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"])})
+free_energy_table[,c("log_keq_LB")] <- log2(sapply(free_energy_table$rxnForm, function(x){rxn_fit_params[[x]]$param_interval$'X2.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("log_keq_UB")] <- log2(sapply(free_energy_table$rxnForm, function(x){rxn_fit_params[[x]]$param_interval$'X97.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("log_keq_MLE")] <- log2(sapply(free_energy_table$rxnForm, function(x){rxn_fit_params[[x]]$param_interval$MLE[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
+free_energy_table[,c("logQmedian")] <- sapply(free_energy_table$rxnForm, function(x){as.numeric(rxn_fit_params[[x]]$param_interval$absoluteQuant[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"])})
 free_energy_table <- free_energy_table %>% filter(!is.na(cc_dGr))
 
-free_energy_table <- free_energy_table %>% left_join(reaction_names %>% dplyr::select(RXform = reaction, genes, abbrev, pathway))
-free_energy_table$genes[is.na(free_energy_table$genes)] <- free_energy_table$abbrev[is.na(free_energy_table$abbrev)] <- free_energy_table$reaction[is.na(free_energy_table$abbrev)]
-free_energy_table$pathway[is.na(free_energy_table$pathway)] <- "other"
-
 freebee_species <- c(water = "t_0399", proton = "t_0398", ammonium = "t_0233", diphosphate = "t_0332", co2 = "t_0249")
-missing_species <- lapply(free_energy_table$RXform, function(x){
+missing_species <- lapply(free_energy_table$rxnForm, function(x){
   unmeasuredSpec = rxn_fit_params[[x]]$kineticParPrior %>% filter(!is.na(measured) & !measured) %>% dplyr::select(SubstrateID = rel_spec, commonName)
   unmeasuredSpec = unmeasuredSpec %>% left_join(rxn_fit_params[[x]]$param_species %>% dplyr::select(SubstrateID, ReactionID, Subtype), by = "SubstrateID")
   unmeasuredSpec %>% filter(!(SubstrateID %in% freebee_species))
@@ -1215,8 +1266,8 @@ missing_species <- do.call("rbind", missing_species)
 library(tidyr)
 
 all_condition_Q <- lapply(1:nrow(free_energy_table), function(i){
-  metStoi <- rxnList[[free_energy_table$RXform[i]]]$rxnStoi
-  metConc <- rxnList[[free_energy_table$RXform[i]]]$rxnMet
+  metStoi <- rxnList[[free_energy_table$rxnForm[i]]]$rxnStoi
+  metConc <- rxnList[[free_energy_table$rxnForm[i]]]$rxnMet
   metConc[is.na(metConc)] <- 0
   metConc$condition <- rownames(metConc)
   
@@ -1226,10 +1277,11 @@ all_condition_Q <- lapply(1:nrow(free_energy_table), function(i){
 all_condition_Q <- do.call("rbind", all_condition_Q)
 
 # keep track of Q relative to median Q
-all_condition_Q <- free_energy_table %>% left_join(all_condition_Q, join = "reaction") %>% tbl_df() %>% dplyr::select(RXform, reaction, condition, Q, logQmedian)
+all_condition_Q <- free_energy_table %>% left_join(all_condition_Q, join = "reaction") %>% tbl_df() %>% dplyr::select(rxnForm, reaction, condition, Q, logQmedian)
 
 # back to one estimate-per-reaction
-free_energy_table <- free_energy_table %>% mutate(QkeqDiff_MLE = logQmedian - log_keq_MLE, QkeqDiff_UB = logQmedian - log_keq_LB, QkeqDiff_LB = logQmedian - log_keq_UB) %>% dplyr::select(-c(log_keq_LB, log_keq_UB, log_keq_MLE, logQmedian))
+free_energy_table <- free_energy_table %>% mutate(QkeqDiff_MLE = logQmedian - log_keq_MLE, QkeqDiff_UB = logQmedian - log_keq_LB, QkeqDiff_LB = logQmedian - log_keq_UB) %>% 
+  dplyr::select(-c(log_keq_LB, log_keq_UB, log_keq_MLE, logQmedian))
 
 # for reactions with always negative flux, flip Q-Keq
 reverse_rxns <- free_energy_table %>% filter(QkeqDiff_LB > 0) %>% mutate(QkeqDiff_MLE = -1*QkeqDiff_MLE, QkeqDiff_UBtmp = QkeqDiff_UB, QkeqDiff_LBtmp = QkeqDiff_LB, QkeqDiff_LB = -1*QkeqDiff_UBtmp, QkeqDiff_UB = -1*QkeqDiff_LBtmp) %>%
@@ -1250,16 +1302,17 @@ all_condition_Q <- all_condition_Q %>% filter(!(reaction %in% zeroVarRxns))
 free_energy_table <- free_energy_table %>% arrange(QkeqDiff_UB) %>% mutate(reaction = factor(reaction, levels = reaction))
 
 # also flipping Q and logQmedian Q when keeping track of all conditions
-all_conditions_rev <- all_condition_Q %>% filter(RXform %in% reverse_rxns$RXform) %>% mutate(Q = -1*Q, logQmedian = -1*logQmedian)
-all_condition_Q <- all_condition_Q %>% filter(!(RXform %in% reverse_rxns$RXform)) %>% rbind(all_conditions_rev)
+all_conditions_rev <- all_condition_Q %>% filter(rxnForm %in% reverse_rxns$rxnForm) %>% mutate(Q = -1*Q, logQmedian = -1*logQmedian)
+all_condition_Q <- all_condition_Q %>% filter(!(rxnForm %in% reverse_rxns$rxnForm)) %>% rbind(all_conditions_rev)
 
 # comparing variable Q across conditions to the median condition where Q / keq was calculated
-all_condition_Q <- all_condition_Q %>% mutate(reaction = factor(reaction, levels = free_energy_table$reaction)) %>% left_join(free_energy_table %>% dplyr::select(RXform, reaction, reversible, genes, abbrev, pathway, measuredProducts, QkeqDiff_UB), join = "reaction") %>%
-  mutate(Qkeq = Q - logQmedian + QkeqDiff_UB)
+all_condition_Q <- all_condition_Q %>% mutate(reaction = factor(reaction, levels = free_energy_table$reaction)) %>% 
+  left_join(free_energy_table %>% dplyr::select(rxnForm, reaction, reversible, genes, abbrev, pathway, measuredProducts, QkeqDiff_UB), join = "reaction") %>%
+  mutate(Qkeq = (Q - logQmedian) + QkeqDiff_UB)
 
 fast_C_lim <- all_condition_Q %>% filter(condition == "C0.30")
 
-free_energy_theme <- boxplot_theme_label_rotate + theme(axis.text.x = element_text(angle = 90, hjust = 1), strip.background = element_rect(fill = "coral"))
+free_energy_theme <- boxplot_theme_label_rotate + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), strip.background = element_rect(fill = "coral"))
 
 # Visualizing disequilibrium ratio
 
@@ -1271,9 +1324,9 @@ ggplot() + facet_grid(~ pathway, scale = "free_x", space = "free_x") +
   scale_y_log10(expression(frac(Q, K[eq]) ~ "=" ~ frac(v[r], v[f])), expand = c(0,0)) + coord_cartesian(ylim = c(10^-3, 1)) + free_energy_theme +
   scale_fill_discrete() +
   scale_x_discrete(breaks = free_energy_table$reaction, labels = free_energy_table$abbrev)
+ggsave("Figures/reactionDisequilibrium.eps", width = 15, height = 9)
+ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 9)
 
-free_energy_table %>% mutate(Gstandard_LB = cc_dGr - 2*cc_dGrSD, Gstandard_UB = cc_dGr + 2*cc_dGrSD) %>% ungroup() # delta G / RT
-(8.315 * (273 + 25) / 1000
 
 ##### Determine which metabolite or protein is most correlated with pathway flux for each pathway #####
 # topology: metabolism_stoichiometry - set of all directed reactions
