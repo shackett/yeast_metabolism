@@ -2211,8 +2211,13 @@ reactionProperties <-  function(){
   
   ### Summarize physiological leverage to look for general trends over reactions ###
   
+  # leverage implied by the most likely parameter set
+  ML_MLE <- we_melt %>% filter(markovSample == which.max(par_likelihood$likelihood)) %>% ungroup() %>% dplyr::select(condition, specie, conditions, MLE = physiological_leverage)
+  # distribution of leverage over posterior credibility interval
   ML_summary <- we_melt %>% group_by(specie, condition, conditions) %>% dplyr::summarize("0.025" = quantile(physiological_leverage, probs = 0.025), "0.5" = quantile(physiological_leverage, probs = 0.5), 
                               "0.975" = quantile(physiological_leverage, probs = 0.975)) %>% ungroup()
+  
+  ML_summary <- ML_summary %>% left_join(ML_MLE, by = c("specie", "condition", "conditions"))
   
   ML_summary$Type <- NA
   ML_summary$Type[ML_summary$specie %in% colnames(enzyme_abund)] <- "enzyme"
@@ -2380,11 +2385,8 @@ param_compare <- function(){
   
   ### Generate bivariate histograms of mcmc parameter estimates and marginal histograms ###
   
-  hex_theme <- theme(text = element_text(size = 23, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), 
-                     legend.position = "left", strip.background = element_rect(fill = "cornflowerblue"), strip.text = element_text(color = "cornsilk"), panel.grid.minor = element_blank(), 
-                     panel.grid.major = element_blank(), axis.line = element_blank(), legend.key.height = unit(4, "line"), axis.title = element_blank(), 
-                     axis.text = element_text(color = "black"), axis.text.x = element_text(angle = 90)) 
-  
+  require(dplyr)
+  require(tidyr)
   
   ### write common names ###
   
@@ -2436,19 +2438,37 @@ param_compare <- function(){
   
   max_density <- max(apply(named_par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
   
-  density_trans_inv <- function(x){x*(max_density/20) + max_density/2}
-  density_trans <- function(x){(x - max_density/2)/(max_density/20)}
+  density_trans_inv <- function(x){x*(max_density/30) + max_density/2}
+  density_trans <- function(x){(x - max_density/2)/(max_density/30)}
   
   par_comp_dissimilar$yval <- density_trans_inv(par_comp_dissimilar$yval)
   MLEpoints$yval <- density_trans_inv(MLEpoints$yval)
   
+  # extend axes to bounds of prior
   
-  return(ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "fixed") + hex_theme +
-    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), trans = "log10") +
-    scale_x_continuous(expression(log[2]), expand = c(0.02,0.02)) + scale_y_continuous(NULL, expand = c(0.01,0.01), labels = density_trans, breaks = density_trans_inv(seq(-10, 10, by = 5))) +
-    geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 2, col = "cornflowerblue") +
+  bound_expand <- rename_table %>% left_join(run_rxn$kineticParPrior %>% dplyr::select(tID = rel_spec, lb = par_1, ub = par_2), by = "tID") %>% mutate(center = (lb + ub)/2, lb = lb - center, ub = ub - center) %>%
+    gather(bound, value, lb:ub) %>% mutate(parameter_1 = commonPrint, parameter_2 = commonPrint)
+  
+  
+  hex_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+                       panel.background = element_rect(fill = "gray92"), legend.position = "left", 
+                       axis.ticks = element_line(color = "black", size = 1),
+                       axis.text = element_text(color = "black", size = 20),
+                       panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1), legend.key.height = unit(4, "line"),
+                       axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), strip.background = element_rect(fill = "coral"),
+                     panel.margin = unit(1.5, "lines"), axis.title = element_blank()
+                     )
+
+
+  return(
+    ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "free", space = "free") + hex_theme +
+    scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), trans = "log10", breaks = c(1,3,10,30,100)) +
+    scale_x_continuous(expression(log[2]), expand = c(0, 0), breaks = seq(-20, 20, by = 5)) + scale_y_continuous(NULL, expand = c(0, 0), labels = density_trans, breaks = density_trans_inv(seq(-20, 20, by = 5))) +
+    geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 4, col = "cornflowerblue") +
     geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) +  geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") +
-    ggtitle('Optimized parameter values \n'))
+    geom_blank(data = bound_expand, aes(x = value, y = density_trans_inv(value)))
+    )
 
   }
 
