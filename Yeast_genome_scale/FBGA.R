@@ -805,9 +805,9 @@ all_neg_reactions <- select_spearman_MMandReg %>% group_by(reaction) %>% dplyr::
 
 select_spearman_MMandReg <- select_spearman_MMandReg %>% filter(!(reaction %in% all_neg_reactions$reaction))
 
-barplot_theme_nox <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+barplot_theme_nox <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), 
                        panel.background = element_rect(fill = "gray92"), legend.position = "top", 
-                       axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black"),
+                       axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black", size = 1),
                        axis.text = element_text(color = "black"), axis.text.x = element_blank(),
                        panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
                        axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
@@ -855,7 +855,7 @@ stacked_spearman <- rbind(mm_spearman %>% dplyr::select(reaction, spearman, regu
 stacked_spearman <- stacked_spearman %>% dplyr::mutate(reaction = factor(reaction, levels = mm_order)) %>%
   filter(spearman >= 0)
 
-barplot_theme_withx <- barplot_theme_nox + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+barplot_theme_withx <- barplot_theme_nox + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 16))
 
 ggplot(stacked_spearman, aes(x = reaction, y = spearman, fill = regulator)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
   ggtitle('Correlation between measured and predicted flux') +
@@ -978,18 +978,19 @@ ML_rxn_summary <- rbind(
   ML_rxn_summary %>% filter(!(reaction %in% reverse_rxns))
 )
 
+# Use metabolic leverage associated with parameter MLE
 ML_rxn_summary <- ML_rxn_summary %>% mutate(Type = ifelse(Type %in% c("substrate", "product", "enzyme"), Type, "regulator")) %>%
-  dplyr::select(reaction, specie, Type, condition, ML = get("0.5")) %>% group_by(reaction, Type, condition) %>%
+  dplyr::select(reaction, specie, Type, condition, ML = MLE) %>% group_by(reaction, Type, condition) %>%
   dplyr::summarize(ML = sum(ML)) %>% group_by(reaction, Type) %>% dplyr::summarize(ML = median(ML)) %>%
   group_by(reaction) %>% dplyr::mutate(ML = ML / sum(ML))
 
 ML_rxn_tall <- ML_rxn_summary %>% left_join(ML_inducibility_summary %>% dplyr::select(reaction, genes, reversibility)) %>%
-  mutate(Type = factor(Type, levels = c("substrate", "enzyme", "product", "regulator")))
+  mutate(Type = factor(Type, levels = c("substrate", "product", "enzyme", "regulator")))
 
 ML_rxn_summary <- tbl_df(dcast(ML_rxn_summary, reaction ~ Type, value.var = "ML", fill = 0)) # each rxn with assocaited enzyme, regulator and metabolic control fraction
 
 ML_rxn_summary <- ML_rxn_summary %>% dplyr::mutate(rID = substr(reaction, 1,6)) %>% left_join(ML_inducibility_summary %>% dplyr::select(reaction, genes, reversibility)) %>%
-  arrange(substrate, product)
+  arrange(substrate + product)
 
 ML_rxn_tall <- ML_rxn_tall %>% ungroup() %>% mutate(rxnForm = reaction, reaction = substr(reaction, 1, 6)) %>% 
   left_join(fitReactionNames %>% dplyr::select(reaction, abbrev)) %>%
@@ -998,7 +999,7 @@ ML_rxn_tall <- ML_rxn_tall %>% ungroup() %>% mutate(rxnForm = reaction, reaction
 ML_rxn_tall <- ML_rxn_tall %>% mutate(reversibility = ifelse(reversibility == "T", "Kinetically Reversible", "Kinetically Irreversible"),
                                       reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible")))
 
-TypeColors <- c("firebrick1", "deepskyblue", "chocolate1", "black")
+TypeColors <- c("chartreuse3", "chartreuse", "deepskyblue", "orangered1")
   names(TypeColors) <- levels(ML_rxn_tall$Type)
 
 barplot_facet_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
@@ -1010,7 +1011,7 @@ barplot_facet_theme <- theme(text = element_text(size = 20, face = "bold"), titl
                        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
 )
 
-ggplot(ML_rxn_tall, aes(x = rxnForm, y = ML, fill = Type, order = Type)) + geom_bar(stat = "identity", width = 0.85) +
+ggplot(ML_rxn_tall, aes(x = rxnForm, y = ML, fill = Type, order = Type)) + geom_bar(stat = "identity", width = 0.85, color = "BLACK") +
   barplot_facet_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
   scale_fill_manual(values = TypeColors) + facet_grid(~ reversibility, scales = "free_x", space = "free_x") +
   scale_x_discrete("Reactions", breaks = ML_rxn_tall$rxnForm, labels =ML_rxn_tall$abbrev)
@@ -1092,9 +1093,10 @@ ggsave("Figures/MLcolorKey_2.pdf", height = 9.1, width = 10.7)
 
 ##
 
-ML_rxn_summary$reaction_info <- reactionInfo$FullName[chmatch(ML_rxn_summary$reaction, reactionInfo$rMech)]
+control_layout <- ML_rxn_summary_1 %>% left_join(reactionInfo %>% dplyr::select(rxnForm = rMech, Name)) %>%
+  dplyr::select(reaction, reaction.name, abbrev, rxnForm, form = Name, rxn_metabolite, enzyme, regulator, color)
 
-write.table(ML_rxn_summary, "flux_cache/control_layout.tsv", col.names = T, row.names = F, quote = F, sep = "\t")
+write.table(control_layout, "flux_cache/control_layout.tsv", col.names = T, row.names = F, quote = F, sep = "\t")
 
 
 
@@ -1168,9 +1170,9 @@ ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(p
   geom_abline(a = 0, b = 1, size = 2) + boxplot_theme +
   scale_x_continuous(expression("Literature consensus" ~ log[10] ~ "Affinity (M)")) +
   scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ "Affinity (M) 95% credicibility interval")) + coord_cartesian(ylim = c(-8,0)) +
-  scale_color_manual(values = c("TRUE" = "chartreuse4", "FALSE" = "firebrick2"))
-ggsave("Figures/brendaAffinity.pdf", width = 8, height = 10)
-ggsave("Figures/brendaAffinity.eps", width = 8, height = 10, device=cairo_ps)
+  scale_color_manual(guide = "none", values = c("TRUE" = "chartreuse4", "FALSE" = "firebrick2"))
+ggsave("Figures/brendaAffinity.pdf", width = 10, height = 10)
+ggsave("Figures/brendaAffinity.eps", width = 10, height = 10, device=cairo_ps)
 
 brendaAgree <- absolute_comparison %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10), parCapture = log10(parLB) < log10mean & log10(parUB) > log10mean, parCaptureInterval = log10(parLB) < log10mean + 2*sdOflog10 & log10(parUB) > log10mean - 2&sdOflog10) %>%
   dplyr::select(rxn, rxnForm, parCapture, parCaptureInterval)
