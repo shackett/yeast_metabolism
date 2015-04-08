@@ -1168,15 +1168,30 @@ boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
                        axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
                        )
 
-absolute_comparison <- absolute_comparison %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10), parCapture = log10(parLB) < log10mean & log10(parUB) > log10mean, parCaptureInterval = log10(parLB) < log10mean + 2*sdOflog10 & log10(parUB) > log10mean - 2&sdOflog10)
+absolute_comparison <- absolute_comparison %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10), parCapture = log10(parLB) < log10mean & log10(parUB) > log10mean, parCaptureInterval = log10(parLB) < log10mean + 2*sdOflog10 & log10(parUB) > log10mean - 2*sdOflog10)
 
-ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(parLB), ymax = log10(parUB))) + geom_pointrange(aes(color = parCapture), size = 0.9, alpha = 0.7, width = 0.15) +
-  geom_abline(a = 0, b = 1, size = 2) + boxplot_theme + coord_flip() + 
+absolute_comparison$paramConsistency <- factor(mapply(x = absolute_comparison$parCapture, y = absolute_comparison$parCaptureInterval, function(x,y){
+ if(x & y){
+   "parameter interval contains BRENDA average"
+ }else if(!x & y){
+   "parameter interval consistent given BRENDA uncertainty"
+ }else{
+   "parameter estimate is inconsistent with BRENDA"
+ }
+}), levels = c("parameter interval contains BRENDA average",
+               "parameter interval consistent given BRENDA uncertainty",
+               "parameter estimate is inconsistent with BRENDA"))
+
+ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), fill = paramConsistency, group = measured)) + geom_point(size = 6, shape = 21) + 
+  geom_smooth(method = "lm", size = 2, color = "black", se = F) +
+  boxplot_theme + scale_fill_brewer(palette = "Set1") + scale_size_identity() +
   scale_x_continuous(expression("Literature consensus" ~ log[10] ~ "Affinity (M)")) +
-  scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ "Affinity (M) 95% credicibility interval")) + #coord_cartesian(ylim = c(-8,0)) +
-  scale_color_manual(guide = "none", values = c("TRUE" = "chartreuse4", "FALSE" = "firebrick2"))
+  scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ 'Affinity (M) 95% credicibility interval')) +
+  guides(fill = guide_legend(nrow = 3))
+ggsave("Figures/brendaConsistency.pdf", width = 8, height = 10)  
 
-ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE))) + geom_point() + geom_smooth(method = "lm")
+summary(lm(log10(absolute_comparison$parMLE) ~ absolute_comparison$log10mean))
+  
 
 ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(parLB), ymax = log10(parUB))) + geom_errorbar(aes(color = parCapture), size = 0.9, alpha = 0.7, width = 0.15) +
   geom_abline(a = 0, b = 1, size = 2) + boxplot_theme +
@@ -1256,6 +1271,11 @@ occupancy_dist_test <- occupancy_dist_test %>% mutate(Sig = ifelse(KSp < 0.05, "
 
 boxplot_theme_label_rotate <- boxplot_theme + theme(axis.title.y = element_text(angle = 0, size = 30), axis.title.x = element_blank(),
                                                     axis.text = element_text(size = 25))
+
+ggplot() + geom_violin(data = occupancy_comparison, aes(x = Subtype, y = log10S_km), fill = "firebrick2", scale = "width") +
+  geom_text(data = occupancy_dist_test, aes(x = Subtype, y = 0.5, label = label), color = "black", size = 8) +
+  scale_y_continuous(expression(frac('[S]', K[M])), expand = c(0,0)) +
+  boxplot_theme_label_rotate
 
 ggplot() + geom_violin(data = occupancy_comparison, aes(x = Subtype, y = log10occ), fill = "firebrick2", scale = "width") +
   geom_text(data = occupancy_dist_test, aes(x = Subtype, y = 0.5, label = label), color = "black", size = 8) +
