@@ -483,12 +483,15 @@ t_start = proc.time()[3]
 custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm", "r_0816-rm", "r_0816-rm-t_0461-inh-uncomp", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond",
                          "r_0514-im-forward", "r_0514-rm", "r_0916-im-forward", "r_0916-rm", "r_0208-im-forward", "r_0208-rm")
 
+custom_plotted_rxns <- c(custom_plotted_rxns, reactionInfo$rMech[reactionInfo$modification %in% c("", "rmCond")])
+custom_plotted_rxns <- unique(custom_plotted_rxns)
+
 if(!(all(custom_plotted_rxns %in% reactionInfo$rMech))){stop("Some reaction mechanisms that you want to plot were not located")}
                                                         
 #arxn <- c("r_0214-rm")
 #for(arxn in rxn_subset){
-#for(arxn in custom_plotted_rxns){
-for(arxn in reactionInfo$rMech){
+for(arxn in custom_plotted_rxns){
+#for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -568,7 +571,8 @@ for(arxn in reactionInfo$rMech){
     # Generate custom plots for a subset of reactions
     customPlots(run_rxn, flux_fit, chemostatInfo)
     param_dist <- param_compare()
-    ggsave(param_dist, file = paste0("Figures/rxnPlots/", arxn, "-paramHist", ".pdf"),  width = 20, height = 20)
+    ggsave(param_dist$bivariateHist, file = paste0("Figures/rxnPlots/", arxn, "-BiparamHist", ".pdf"),  width = min(ncol(par_markov_chain)*4.5, 49), height = min(ncol(par_markov_chain)*4.5, 49))
+    ggsave(param_dist$univariateHist, file = paste0("Figures/rxnPlots/", arxn, "-UniparamHist", ".pdf"),  width = min(ncol(par_markov_chain)*5.5, 49), height = 6)
     }
   
   #if(grepl('0816', arxn)){
@@ -930,9 +934,9 @@ metabolic_leverage_summary_plots("P0.05")
 # Only looking at reactions that are well-fit
 # Look at the best significant reaction form for reaction where CI overlap with flux carried is substantial (>50%)
 
-check_rxns <- setdiff(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
-rxn_fits[rxn_fits$rxn %in% check_rxns,]
-fraction_flux_deviation[fraction_flux_deviation$rxn %in% check_rxns,]
+#check_rxns <- setdiff(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
+#rxn_fits[rxn_fits$rxn %in% check_rxns,]
+#fraction_flux_deviation[fraction_flux_deviation$rxn %in% check_rxns,]
 
 adequate_fit_optimal_rxn_form <- union(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
 
@@ -1103,7 +1107,7 @@ write.table(control_layout, "flux_cache/control_layout.tsv", col.names = T, row.
 
 ######### Compare Km values found through optimization to those from literature ################
 
-all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv") # all BRENA substrates and regulators
+all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv") # all BRENDA substrates and regulators
 all_affinities <- all_affinities[!is.na(all_affinities$log10mean),] # substrates and regulators with a ki or km
 
 all_affinities <- lapply(1:nrow(all_affinities), function(i){
@@ -1139,7 +1143,7 @@ for(rxn in adequate_fit_optimal_rxn_form){
   if(yeast_only){
     rxnData <- rxnData %>% filter(is.na(isYeast) | isYeast) 
   }else{
-    rxnData <- rxnData %>% filter(is.na(isYeast) | !isYeast)
+    rxnData <- rxnData %>% filter(is.na(isYeast) | !isYeast | (isYeast & formulaName %in% names(table(rxnData$formulaName))[unname(table(rxnData$formulaName)) == 1]))
   }
   
   if(length(unique(rxnData$EC[!is.na(rxnData$EC)])) != 1){
@@ -1166,6 +1170,14 @@ boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = el
 
 absolute_comparison <- absolute_comparison %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10), parCapture = log10(parLB) < log10mean & log10(parUB) > log10mean, parCaptureInterval = log10(parLB) < log10mean + 2*sdOflog10 & log10(parUB) > log10mean - 2&sdOflog10)
 
+ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(parLB), ymax = log10(parUB))) + geom_pointrange(aes(color = parCapture), size = 0.9, alpha = 0.7, width = 0.15) +
+  geom_abline(a = 0, b = 1, size = 2) + boxplot_theme + coord_flip() + 
+  scale_x_continuous(expression("Literature consensus" ~ log[10] ~ "Affinity (M)")) +
+  scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ "Affinity (M) 95% credicibility interval")) + #coord_cartesian(ylim = c(-8,0)) +
+  scale_color_manual(guide = "none", values = c("TRUE" = "chartreuse4", "FALSE" = "firebrick2"))
+
+ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE))) + geom_point() + geom_smooth(method = "lm")
+
 ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(parLB), ymax = log10(parUB))) + geom_errorbar(aes(color = parCapture), size = 0.9, alpha = 0.7, width = 0.15) +
   geom_abline(a = 0, b = 1, size = 2) + boxplot_theme +
   scale_x_continuous(expression("Literature consensus" ~ log[10] ~ "Affinity (M)")) +
@@ -1174,16 +1186,45 @@ ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), ymin = log10(p
 ggsave("Figures/brendaAffinity.pdf", width = 10, height = 10)
 ggsave("Figures/brendaAffinity.eps", width = 10, height = 10, device=cairo_ps)
 
-brendaAgree <- absolute_comparison %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10), parCapture = log10(parLB) < log10mean & log10(parUB) > log10mean, parCaptureInterval = log10(parLB) < log10mean + 2*sdOflog10 & log10(parUB) > log10mean - 2&sdOflog10) %>%
-  dplyr::select(rxn, rxnForm, parCapture, parCaptureInterval)
+brendaAgree <- absolute_comparison %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10), 
+                                              parCapture = log10(parLB) < log10mean & log10(parUB) > log10mean, 
+                                              parCaptureInterval = log10(parLB) < log10mean + 2*sdOflog10 & log10(parUB) > log10mean - 2*sdOflog10) %>%
+  dplyr::select(rxn, rxnForm, modelName, nQuant, parCapture, parCaptureInterval)
 
 brendaAgree$parCapture %>% table()
 brendaAgree$parCaptureInterval %>% table()
 
+brendaAgree %>% filter($parCaptureInterval
+
 ### Look at metabolism-wide occupancy ###
 # need to fully load up to *import cluster parameters* in this script
 
-occupancy_comparison <- affinity_comparisons %>% filter(measured) %>% dplyr::select(-formulaName, -measured, -absoluteQuant, -(EC:speciesType))
+# Comparing occupancy implied by BRENDA versus optimized
+
+occpuancy_comparison_BRENDA <- affinity_comparisons %>% filter(measured, absoluteQuant, !is.na(log10mean), Subtype %in% c("substrate", "product")) %>% dplyr::select(-formulaName, -measured, -absoluteQuant, -(EC:isYeast), -(nQuant:speciesType)) %>%
+  mutate(log10mean = log10mean - 3)
+
+occpuancy_comparison_BRENDA <- occpuancy_comparison_BRENDA %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10),
+                                                                      occ_parLB = 2^medianAbund / (2^medianAbund + parUB),
+                                                                      occ_parUB = 2^medianAbund / (2^medianAbund + parLB),
+                                                                      occ_parMLE = 2^medianAbund / (2^medianAbund + parMLE),
+                                                                      occ_brendaLB = 2^medianAbund / (2^medianAbund + 10^(log10mean + 2*sdOflog10)),
+                                                                      occ_brendaUB = 2^medianAbund / (2^medianAbund + 10^(log10mean - 2*sdOflog10)),
+                                                                      occ_brendaMLE = 2^medianAbund / (2^medianAbund + 10^(log10mean)))
+
+occpuancy_comparison_BRENDA <- occpuancy_comparison_BRENDA %>% mutate(well_constrained = ifelse(occ_parUB - occ_parLB < 0.5, T, F))
+
+occpuancy_comparison_BRENDA <- left_join(occpuancy_comparison_BRENDA, brendaAgree)
+
+ggplot(occpuancy_comparison_BRENDA, aes(x = occ_brendaMLE, xmin = occ_brendaLB, xmax = occ_brendaUB, 
+                                        y = occ_parMLE, ymin = occ_parLB, ymax = occ_parUB, color = parCaptureInterval)) + 
+  geom_point(position = "jitter") + geom_rug() +
+  geom_errorbar() + geom_errorbarh() + facet_wrap(~ well_constrained) +
+  scale_color_brewer(palette = "Set1")
+
+#
+
+occupancy_comparison <- affinity_comparisons %>% filter(measured) %>% dplyr::select(-formulaName, -measured, -absoluteQuant, -(EC:isYeast), -(nQuant:speciesType))
 
 # use concentrations of species across all conditions rather than just median
 
@@ -1200,43 +1241,29 @@ occupancy_comparison <- occupancy_comparison %>% left_join(rxn_met_abundances)
 occupancy_comparison$Subtype[!(occupancy_comparison$Subtype %in% c("substrate", "product"))] <- "regulator"
 occupancy_comparison$Specie <- NA
 
-species_of_interest <- c("ATP", "ADP")
-#species_of_interest <- c("ATP", "ADP", "AMP", "NADH", "NAD")
-occupancy_comparison$Specie[occupancy_comparison$commonName %in% species_of_interest] <- occupancy_comparison$commonName[occupancy_comparison$commonName %in% species_of_interest]
-occupancy_comparison$Specie[is.na(occupancy_comparison$Specie)] <- "The Rest"
-
 occupancy_comparison <- occupancy_comparison %>% mutate(log10S_km = log10(2^logConc / parMLE), log10occ = (2^logConc/(2^logConc + parMLE)))
 
-occupancy_comparison <- occupancy_comparison %>% mutate(Subtype = factor(Subtype, levels = c("substrate", "product", "regulator")))
-occupancy_comparison$Specie <- factor(occupancy_comparison$Specie, levels = c(species_of_interest, "The Rest"))
+occupancy_comparison <- occupancy_comparison %>% mutate(Subtype = gsub("(^|[[:space:]])([[:alpha:]])", "\\1\\U\\2", Subtype, perl=TRUE))
+occupancy_comparison <- occupancy_comparison %>% mutate(Subtype = factor(Subtype, levels = c("Substrate", "Product", "Regulator")))
 
-# check whether distribution of Q/keq values departs from null expectation
+# check whether distribution of affinities departs from null expectation
 
-occupancy_dist_test <- occupancy_comparison %>% dplyr::select(Subtype, Specie, rxn, modelName, medianAbund, parMLE) %>% unique()
+occupancy_dist_test <- occupancy_comparison %>% dplyr::select(Subtype, rxn, modelName, medianAbund, parMLE) %>% unique()
 occupancy_dist_test <- occupancy_dist_test %>% mutate(QKeqDiff = medianAbund - log2(parMLE)) %>%
-  group_by(Subtype, Specie) %>% summarize(KSp = ks.test(QKeqDiff, "punif", -15, 15)$p.value)
-occupancy_dist_test <- occupancy_dist_test %>% mutate(Sig = ifelse(KSp < 0.05, "*", ""), Sig = ifelse(KSp < 0.01, "**", Sig), Sig = ifelse(KSp < 0.001, "***", Sig))
+  group_by(Subtype) %>% summarize(KSp = ks.test(QKeqDiff, "punif", -15, 15)$p.value, counts = n())
+occupancy_dist_test <- occupancy_dist_test %>% mutate(Sig = ifelse(KSp < 0.05, "*", ""), Sig = ifelse(KSp < 0.01, "**", Sig), Sig = ifelse(KSp < 0.001, "***", Sig)) %>%
+  mutate(Sig = ifelse(Sig != "", paste0('\n',Sig), Sig), label = paste0(counts, Sig))
 
-spec_counts <- occupancy_comparison %>% group_by(Specie, Subtype, rxn) %>% summarize(counts = n()) %>% group_by(Specie, Subtype) %>% summarize(counts = n())
-spec_counts <- spec_counts %>% left_join(occupancy_dist_test) %>% mutate(Sig = ifelse(Sig != "", paste0('\n',Sig), Sig), label = paste0(counts, Sig))
+boxplot_theme_label_rotate <- boxplot_theme + theme(axis.title.y = element_text(angle = 0, size = 30), axis.title.x = element_blank(),
+                                                    axis.text = element_text(size = 25))
 
-boxplot_theme_label_rotate <- boxplot_theme + theme(axis.title.y = element_text(angle = 0))
-
-# S / Km
-ggplot() + geom_violin(data = occupancy_comparison, aes(x = Specie, y = log10S_km), fill = "firebrick2", scale = "width") +
-  facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0, label = label), color = "BLUE", size = 6) +
-  scale_y_continuous(expression(frac(S, K[M])), breaks = seq(-5, 5, by = 1), labels = 10^seq(-5, 5, by = 1), expand = c(0,0)) +
+ggplot() + geom_violin(data = occupancy_comparison, aes(x = Subtype, y = log10occ), fill = "firebrick2", scale = "width") +
+  geom_text(data = occupancy_dist_test, aes(x = Subtype, y = 0.5, label = label), color = "black", size = 8) +
+  scale_y_continuous(expression(frac('[S]', '[S]' + K[M])), breaks = seq(0, 1, by = 0.2), expand = c(0,0), limits = c(0,1)) +
   boxplot_theme_label_rotate
-ggsave("Figures/speciesSKm.pdf", width = 10, height = 10)
-ggsave("Figures/speciesSKm.eps", width = 10, height = 10, device=cairo_ps)
+ggsave("Figures/speciesOccupancy.pdf", width = 15, height = 8)
+ggsave("Figures/speciesOccupancy.eps", width = 15, height = 8, device=cairo_ps)
 
-# S / S + Km
-ggplot() + geom_violin(data = occupancy_comparison, aes(x = Specie, y = log10occ), fill = "firebrick2", scale = "width") +
-  facet_grid(Subtype ~ .) + geom_text(data = spec_counts, aes(x = Specie, y = 0.5, label = label), color = "BLUE", size = 6) +
-  scale_y_continuous(expression(frac(S, S + K[M])), breaks = seq(0, 1, by = 0.2), label = sapply(seq(0, 1, by = 0.2) * 100, function(x){paste(x, "%", sep = "")})) +
-  boxplot_theme_label_rotate
-ggsave("Figures/speciesOccupancy.pdf", width = 10, height = 10)
-ggsave("Figures/speciesOccupancy.eps", width = 10, height = 10, device=cairo_ps)
 
 #Iexp <- 2^(rnorm(100, 0, 1))
 #Ivals <- 2^seq(-5,5,by = 0.01)
@@ -1245,6 +1272,7 @@ ggsave("Figures/speciesOccupancy.eps", width = 10, height = 10, device=cairo_ps)
 #Isummary <- Icomp %>% mutate(rate = affinity / (affinity + conc)) %>% group_by(affinity) %>%
 #  summarize(average = mean(rate), rate_sd = sd(rate))
 
+#ggplot2::qplot(x = Iexp) + scale_x_log10()
 #ggplot(Isummary, aes(x = log2(affinity), y = average, ymin = average - 2*rate_sd, ymax = average + 2*rate_sd)) + geom_pointrange()
 #ggplot(Isummary, aes(x = log2(affinity), y = rate_sd)) + geom_line()
 
@@ -1259,7 +1287,9 @@ ggsave("Figures/speciesOccupancy.eps", width = 10, height = 10, device=cairo_ps)
 # Q = prod[P]/prod[S]
 # Q/keq
 
-free_energy_table <- adequate_rxn_form_data %>% left_join(reversibleRx %>% dplyr::select(reaction = rx, cc_dGr = CCdG, cc_dGrSD = CCdGsd, reversible = modelBound) %>% mutate(reversible = ifelse(reversible == "reversible", "Kinetically reversible", "Kinetically irreversible")))
+free_energy_table <- adequate_rxn_form_data %>% left_join(reversibleRx %>% dplyr::select(reaction = rx, cc_dGr = CCdG, cc_dGrSD = CCdGsd, reversible = modelBound) %>%
+                                                            mutate(reversible = ifelse(reversible == "reversible", "Kinetically reversible", "Kinetically irreversible")))
+free_energy_table <- free_energy_table %>% mutate(pathway = gsub("(^|[[:space:]])([[:alpha:]])", "\\1\\U\\2", pathway, perl=TRUE))
 
 free_energy_table[,c("log_keq_LB")] <- log2(sapply(free_energy_table$rxnForm, function(x){rxn_fit_params[[x]]$param_interval$'X2.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
 free_energy_table[,c("log_keq_UB")] <- log2(sapply(free_energy_table$rxnForm, function(x){rxn_fit_params[[x]]$param_interval$'X97.5.'[rxn_fit_params[[x]]$kineticParPrior$rel_spec == "keq"]}))
@@ -1326,18 +1356,18 @@ all_condition_Q <- all_condition_Q %>% mutate(reaction = factor(reaction, levels
 
 fast_C_lim <- all_condition_Q %>% filter(condition == "C0.30")
 
-free_energy_theme <- boxplot_theme_label_rotate + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), strip.background = element_rect(fill = "coral"))
+free_energy_theme <- boxplot_theme_label_rotate + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 16), strip.background = element_rect(fill = "coral"))
 
 # Visualizing disequilibrium ratio
 
 ggplot() + facet_grid(~ pathway, scale = "free_x", space = "free_x") +
   geom_violin(data = all_condition_Q, aes(x = reaction, y = 2^Qkeq, fill = reversible), scale = "width") +
   geom_errorbar(data = free_energy_table, aes(x = reaction, ymin = 2^QkeqDiff_LB, ymax = 2^QkeqDiff_UB), size = 1) +
-  geom_point(data = fast_C_lim, aes(x = reaction, y = 2^Qkeq), fill = "chartreuse3", size = 3, shape = 21) + 
-  geom_point(data = free_energy_table, aes(x = reaction, y = 2^QkeqDiff_MLE), fill = "darkblue", size = 3, shape = 21) +
+  geom_point(data = fast_C_lim, aes(x = reaction, y = 2^Qkeq), fill = "chartreuse3", size = 4, shape = 21) + 
+  geom_point(data = free_energy_table, aes(x = reaction, y = 2^QkeqDiff_MLE), fill = "darkblue", size = 4, shape = 21) +
   scale_y_log10(expression(frac(Q, K[eq]) ~ "=" ~ frac(v[r], v[f])), expand = c(0,0)) + coord_cartesian(ylim = c(10^-3, 1)) + free_energy_theme +
   scale_fill_discrete() +
   scale_x_discrete(breaks = free_energy_table$reaction, labels = free_energy_table$abbrev)
-ggsave("Figures/reactionDisequilibrium.eps", width = 15, height = 9)
-ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 9)
+ggsave("Figures/reactionDisequilibrium.eps", width = 15, height = 8)
+ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 8)
 
