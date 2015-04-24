@@ -797,11 +797,11 @@ rct_val_s2p <- read.table("./flux_cache/rxn_bindingsites_validated.csv",sep="\t"
 rct_val_s2p <- rct_val_s2p[,colnames(rct_val_s2p) != 'X']
 
 # Verfiy that these reactions are from the current version of the model
-rct_val_test <- rct_val_s2p %>% select(ReactionID, SpeciesName = Substrate) %>% left_join(corrFile %>% select(SpeciesID, SpeciesName))
+rct_val_test <- rct_val_s2p %>% dplyr::select(ReactionID, SpeciesName = Substrate) %>% left_join(corrFile %>% dplyr::select(SpeciesID, SpeciesName))
 rct_val_test_match <- data.frame(rxn = unique(rct_val_test$ReactionID), rxn_match = sapply(unique(rct_val_test$ReactionID), function(aRxn){
-  nmetMatches <- rct_val_test %>% filter(ReactionID == aRxn) %>% inner_join(rxnFile %>% select(SpeciesID = Metabolite, ReactionID), by = 'SpeciesID') %>%
+  nmetMatches <- rct_val_test %>% filter(ReactionID == aRxn) %>% inner_join(rxnFile %>% dplyr::select(SpeciesID = Metabolite, ReactionID), by = 'SpeciesID') %>%
     group_by(ReactionID.y) %>% dplyr::summarize(nmatch = n())
-  bestMatches <- nmetMatches %>% filter(nmatch == max(nmatch)) %>% select(ReactionID = ReactionID.y) %>% unlist() %>% unname()
+  bestMatches <- nmetMatches %>% filter(nmatch == max(nmatch)) %>% dplyr::select(ReactionID = ReactionID.y) %>% unlist() %>% unname()
   if(aRxn %in% bestMatches){aRxn}else{bestMatches[1]}
 })
 )
@@ -1081,7 +1081,7 @@ addInfo2rxnf <- function(rxnf){
         rxnf[[entry]]$rxnMet[,tID] <- NA
         rxnf[[entry]]$originMet[tID] <- 'nm'
       } else {
-        rxnf[[entry]]$rxnMet[,tID] <- as.numeric(tab_boer[rowBoer,colnames(tab_boer) %in% temprown])
+        rxnf[[entry]]$rxnMet[,tID] <- as.numeric(tab_boer[rowBoer,colnames(tab_boer) %in% temprown]) + ifelse(is.na(tab_boer$concConv[rowBoer]), 0, log2(tab_boer[rowBoer,'concConv']))
         rxnf[[entry]]$originMet[tID] <- ifelse(is.na(tab_boer$concConv[rowBoer]), "rel", "abs")
       }
     }
@@ -1089,6 +1089,12 @@ addInfo2rxnf <- function(rxnf){
     # Add the standard deviation of metabolites and their residual correlations
     
     measuredTid <- rxnf[[entry]]$originMet[rxnf[[entry]]$originMet != "nm"]
+    
+    # Remove reaction form if there arent any measured metabolites (only applicable for irreversible reactions, others should have products or substrates)
+    if(length(measuredTid) == 0){
+      rxnf[[entry]] <- NULL
+      next
+    }
     
     rxnf[[entry]]$met_SD <- matrix(unlist(remapped_SD[chmatch(names(measuredTid), tab_boer$SpeciesType),]), nrow = n_c, ncol = length(measuredTid), byrow = T)
     rownames(rxnf[[entry]]$met_SD) <- temprown; colnames(rxnf[[entry]]$met_SD) <- names(measuredTid)
@@ -1269,7 +1275,7 @@ Mod2reactionEq <- function(modTable,formMode, allInhMods=F, allActMods=F){
         subMod <- 'cc'
         rctLine$Subtype <- 'cc'
       } else {
-        stop("Invalide regulator modtype/subtype")
+        stop("Invalid regulator modtype/subtype")
         }
       
       rctTab <- rbind(rctTab,rctLine)
@@ -1365,7 +1371,7 @@ Mod2reactionEqComplex <- function(modTable){
       rxnForms[[modTable$TechnicalName[modTable$TechnicalName == a_reg][1]]] <- isoenzymeList
       
       }else{
-        ####### Fix tab2reactionForms# #######
+        ####### Fix tab2reactionForms ########
         rctTab <- rbind(rctTab, infoRegulators)
         rxnForms[[modTable$TechnicalName[modTable$TechnicalName == a_reg][1]]] <- tab2ReactionForms(rctTab,formMode)[[1]]
         
@@ -1374,10 +1380,149 @@ Mod2reactionEqComplex <- function(modTable){
     return(rxnForms)
   }
 
+#Mod2reactionEq(significant_regulation, modTable[ modTable$origin == 'Brenda', ],'rm',allInhMods=T, allActMods=T)
+
+Mod2reactionEq_pairwise <- function(significant_regulation, modTable,formMode, allInhMods=F, allActMods=F){
+  # formMode:
+  # cc for convinience kinetics (only supports uncompetitive inhibition)
+  # rm for reversible menten with substrate inhibition
+  
+  # if allInhMods = T:
+  # write equations for comp, uncom and noncomp inhibition for all inhibitors that have a maxSim target
+  
+  # if allActMods = T:
+  # evaluate kinetics with both convenience-kinetics style allosteric activation and conventional MM
+  
+  if (!allInhMods){
+    modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','subtype','hill')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
+  } else {
+    modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','hill')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
+    modTab[modTab$modtype == 'inh','subtype'] <- 'uncompetitive'
+    tmodTab <- modTab[modTab$modtype == 'inh' & !is.na(modTab$SimMatch),]
+    tmodTab$subtype <- 'noncompetitive'
+    modTab <- rbind(modTab,tmodTab)
+    tmodTab$subtype <- 'competitive'
+    modTab <- rbind(modTab,tmodTab)
+  }
+  
+  if (!allActMods){
+    modTab[modTab$modtype == "act",'subtype'] <- "mm"
+  }else{
+    modTab[modTab$modtype == "act",'subtype'] <- "mm"
+    tModTab <- modTab[modTab$modtype == "act",]
+    tModTab[tModTab$modtype == "act",'subtype'] <- "cc"
+    modTab <- rbind(modTab, tModTab)
+  }
+  
+  # proposed secondary regulation
+  modTab <- modTab %>% filter(rxn %in% significant_regulation$rxn)
+  
+  # proposing pairwise regulation
+  
+  all_pairwise_regulation <- lapply(unique(significant_regulation$rxn), function(a_rxn){
+    rxn_possible <- modTab %>% filter(rxn == a_rxn)
+    rxn_sig <- significant_regulation %>% filter(rxn == a_rxn)
+    rxn_sig <- rxn_sig %>% left_join(rxn_possible, by = c("rxn", "tID", "modtype", "subtype"))
+    
+    rxn_pairs <- expand.grid(sig_n = 1:nrow(rxn_sig), propose_n = 1:nrow(rxn_possible))
+    
+    invalid_pairs <- lapply(1:nrow(rxn_pairs), function(x){
+      if(rxn_sig[rxn_pairs[x,1],'tID'] == rxn_possible[rxn_pairs[x,2],'tID']){
+        c("") # only regulation by two different metabolites is considered
+      }else{
+        paste(sort(c(paste(rxn_sig[rxn_pairs[x,1], c('tID', 'subtype')], collapse = "_"), 
+                     paste(rxn_possible[rxn_pairs[x,2], c('tID', 'subtype')], collapse = "_"))), collapse = "_")
+      }
+    })
+    invalid_pairs <- unlist(invalid_pairs)
+    rxn_pairs <- rxn_pairs[!duplicated(invalid_pairs) & invalid_pairs != "",]
+    if(nrow(rxn_pairs) == 0){
+      return(NULL) 
+    }else{
+      lapply(1:nrow(rxn_pairs), function(x){
+        rbind(rxn_sig[rxn_pairs[x,1],], rxn_possible[rxn_pairs[x,2],])
+      })
+    }
+  })
+  
+  pairwise_forms <- all_pairwise_regulation[[1]]
+  for(i in 2:length(all_pairwise_regulation)){
+    pairwise_forms <- append(pairwise_forms, all_pairwise_regulation[[i]])
+  }
+  
+  rxnForms <- list()
+  for (i in 1:length(pairwise_forms)){
+    rctLine <- rct_s2p[1:nrow(pairwise_forms[[i]]),]
+    rctLine[] <- NA
+    rctTab <- rct_s2p[rct_s2p$ReactionID == pairwise_forms[[i]]$rxn[1],]
+    if (nrow(rctTab) > 0){
+      rctLine$ReactionID <- pairwise_forms[[i]]$rxn
+      rctLine$SubstrateID <- pairwise_forms[[i]]$tID
+      rctLine$Substrate <- tIDtoName(unlist(strsplit(pairwise_forms[[i]]$tID,'/')))
+      rctLine$Stoi <- 0
+      rctLine$Hill <- pairwise_forms[[i]]$hill
+      rctLine$Type <- pairwise_forms[[i]]$modtype
+      rctLine$Reversible <- rct_s2p$Reversible[ rct_s2p$ReactionID == rctLine$ReactionID[1]][1]
+      rctLine$Subtype <- pairwise_forms[[i]]$subtype
+      
+      subMod <- c()
+      for(a_reg in 1:nrow(pairwise_forms[[i]])){
+        
+        if (pairwise_forms[[i]]$modtype[a_reg] == 'inh' & !is.na(pairwise_forms[[i]]$subtype[a_reg]) & pairwise_forms[[i]]$subtype[a_reg] == 'competitive'){
+          rctLine$BindingSite[a_reg] <- rct_s2p$BindingSite[ rct_s2p$ReactionID == pairwise_forms[[i]]$rxn[a_reg] & rct_s2p$SubstrateType == pairwise_forms[[i]]$SimMatch[a_reg]]
+          subMod <- c(subMod, 'comp')
+        } else if (pairwise_forms[[i]]$modtype[a_reg] == 'inh' & !is.na(pairwise_forms[[i]]$subtype[a_reg]) & pairwise_forms[[i]]$subtype[a_reg] == 'noncompetitive'){
+          rctLine$BindingSite[a_reg] <- rct_s2p$BindingSite[ rct_s2p$ReactionID == pairwise_forms[[i]]$rxn[a_reg] & rct_s2p$SubstrateType == pairwise_forms[[i]]$SimMatch[a_reg]]
+          subMod <- c(subMod, 'noncomp')
+        } else if (pairwise_forms[[i]]$modtype[a_reg] == 'inh'){
+          rctLine$BindingSite[a_reg] <- 0
+          subMod <- c(subMod, 'uncomp')
+        } else if (pairwise_forms[[i]]$modtype[a_reg] == "act" & pairwise_forms[[i]]$subtype[a_reg] == "mm"){
+          rctLine$BindingSite[a_reg] <- 0
+          subMod <- c(subMod, 'mm')
+        } else if (pairwise_forms[[i]]$modtype[a_reg] == "act" & pairwise_forms[[i]]$subtype[a_reg] == "cc"){
+          rctLine$BindingSite[a_reg] <- 0
+          subMod <- c(subMod, 'cc')
+        } else {
+          stop("Invalid regulator modtype/subtype")
+        } 
+      }
+      
+      rctTab <- rbind(rctTab,rctLine)
+      print(i)
+      entry <- paste(rctTab$ReactionID[1],'-',as.character(formMode),'-pairwise-',
+                     paste(paste(unlist(strsplit(rctLine$SubstrateID, split = '/')), '-', rctLine$Type, '-', subMod,
+                                 ifelse(is.na(rctLine$Hill) | rctLine$Hill == 1, '', '_ultra'), sep = ''), collapse = "+"), sep = '')
+      rxnForms[[entry]]<- tab2ReactionForms(rctTab,formMode)[[1]]
+      
+    }
+  }
+  return(rxnForms)
+}
 
 ##### Generate all reaction forms #####
 
 rxnf <- list() # a list
+
+# Generate reaaction forms just using irreversible michaelis-menten kinetics
+
+# For reactions flowing in the canonical forward direction : evaluate when V > 
+rct_s <- rct_s2p[rct_s2p$Subtype == "substrate",]
+rct_s$Reversible <- 1
+rxnForms <- tab2ReactionForms(rct_s,'rm')
+names(rxnForms) <- unname(sapply(names(rxnForms), function(x){sub('rm$', 'im-forward', x)}))
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
+
+# For reactions flowing in reverse : evaluate when V < 0
+rct_p <- rct_s2p[rct_s2p$Subtype == "product",]
+rct_p$Reversible <- -1
+rxnForms <- tab2ReactionForms(rct_p,'rm')
+names(rxnForms) <- unname(sapply(names(rxnForms), function(x){sub('rm$', 'im-reverse', x)}))
+for (x in names(rxnForms)){
+  rxnf[[x]] <- rxnForms[[x]]
+}
 
 ## Generate reaction forms for reversible michaelis-menten and convenience kinetics
 rxnForms <- tab2ReactionForms(rct_s2p,'rm') # with product inhibition
@@ -1385,7 +1530,7 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 
-rxnForms <- tab2ReactionForms(rct_s2p,'cc') # convinience kinetics
+rxnForms <- tab2ReactionForms(rct_s2p,'cc') # convenience kinetics
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
@@ -1395,6 +1540,7 @@ rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T,T)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
+Brenda_rxn_forms <- names(rxnForms) # save 
 
 ## for allosteric regulators, also look at a varaible hill coefficient
 alloModTable <- modTable[ modTable$origin == 'Brenda', ]
@@ -1415,7 +1561,7 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 ## add information for the hypothetical metabolite, t_metX, to information list
-listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = "", row = nrow(listTID) + 1))
+listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = ""))
 
 ## Add additional regulators of interest from manual_modTable
 manualRegulators <- read.table('companionFiles/manual_modTable.txt', sep = "\t", header = T)
@@ -1432,91 +1578,32 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 rm(rxnForms)
+
+## Look at pairwise interactions involving regulators that improve fit x all BRENDA
+if(file.exists("flux_cache/paramCI.Rdata")){
+  load("flux_cache/paramCI.Rdata")
+
+  library(dplyr)
+  library(tidyr)
+  
+  significant_regulation <- reactionInfo %>% filter(!is.na(Qvalue) & Qvalue < 0.1) %>%
+    filter(rMech %in% Brenda_rxn_forms) %>% dplyr::select(rxn = reaction, modification) %>%
+    separate(modification, into = c("tID", "modtype", "subtype"), sep = "-")  %>%
+    mutate(subtype = gsub('comp', 'competitive', subtype))
+  
+  rxnForms <- Mod2reactionEq_pairwise(significant_regulation, modTable[ modTable$origin == 'Brenda', ],'rm',allInhMods=T, allActMods=T)
+  
+  for (x in names(rxnForms)){
+    rxnf[[x]] <- rxnForms[[x]]
+  }
+  rm(rxnForms)
+}
 
 # add the infos to the rxn structure
 rxnf <- addInfo2rxnf(rxnf)
 save(rxnf,file='./flux_cache/rxnf_formulametab.rdata')
 
 # output latex reaction forms
-
-outtab <- character(length(rxnf))
-for (i in 1:length(rxnf)){
-  outtab[i] <- paste(names(rxnf)[i],' ---- $',rxnf[[i]]$rxnFormTex,'$\\newline',sep='')
-}
-write.table(outtab,file='./latexformula.txt',sep='\t',row.names=F,col.names=F)
-## Generate reaction forms for reversible michaelis-menten and convenience kinetics
-
-rxnForms <- tab2ReactionForms(rct_s2p,'rm') # with product inhibition
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-
-rxnForms <- tab2ReactionForms(rct_s2p,'cc') # convinience kinetics
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-
-## Write all the rate laws with all Brenda modifications and all possible inhibitor modes      
-
-rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T,T)
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-
-## for allosteric regulators, also look at a varaible hill coefficient
-
-alloModTable <- modTable[ modTable$origin == 'Brenda', ]
-alloModTable$hill <- 0
-
-rxnForms <- Mod2reactionEq(alloModTable,'rm',F,T)
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-
-## Write out allosteric activator and inhibitor reaction equations for a hypothetical regulator whose patterns of variation are governed by metabolomic PCs.
-
-deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_metX", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1)
-deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)    
-deNovoRegulators$modtype <- rep(c("act", "inh"), each = length(unique(rct_s2p$ReactionID)))
-deNovoRegulators_bind <- deNovoRegulators; deNovoRegulators_bind$hill <- 0
-deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators_bind)
-
-rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F,T)
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-
-## add information for the hypothetical metabolite, t_metX, to information list
-listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = ""))
-
-## Add additional regulators of interest from manual_modTable
-manualRegulators <- read.table('companionFiles/manual_modTable.txt', sep = "\t", header = T)
-
-rxnForms <- Mod2reactionEq(manualRegulators,'rm',F)
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-rm(rxnForms)
-
-
-## Supervised verification of multiple regulators or isoenzyme specific kinetics/regulation
-manualRegulators <- read.table('companionFiles/manual_ComplexRegulation.txt', sep = "\t", header = T)
-
-rxnForms <- Mod2reactionEqComplex(manualRegulators)
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-rm(rxnForms)
-
-
-
-
-# add the infos to the rxn structure
-rxnf <- addInfo2rxnf(rxnf)
-
-save(rxnf,file='./flux_cache/rxnf_formulametab.rdata')
-
-
 
 outtab <- character(length(rxnf))
 for (i in 1:length(rxnf)){

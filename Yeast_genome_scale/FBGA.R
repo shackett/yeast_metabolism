@@ -35,9 +35,9 @@ n_c <- nrow(chemostatInfo)
 ### To search for novel allosteric modifiers in an unsupervised manner - allow for reaction with extensions an abundance profile that is not specified a priori
 
 if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
-  source("reactionStructures.r")
+  source("reactionStructures.R")
 }else{
-  load("flux_cache/rxnf_formulametab.rdata")
+  load("flux_cache/rxnf_formulametab.Rdata")
 }
 
 ##### Import list of flux fluxes from FBA_run_full_reco.R - **flux_summary**
@@ -65,7 +65,7 @@ rxn_enzyme_measured <- read.delim("./flux_cache/prot_matches.tsv")
 
 ####### Narrow reactions txwo those that are well-constrained & non-zero in a majority of conditions #####
 ### When considering reactions which carry zero flux under a subset of conditions, analyze reactions both when v = 0, and by removing conditions where v = 0 ###
-rmCondList <- data.frame() # reactions which will be duplicated with some conditions rmoved
+rmCondList <- data.frame() # reactions which will be duplicated with some conditions removed
 
 
 # valid reactions have well-constrained, non-zero fluxes and measured enzymes (a reaction possessing a minimal complement of metabolites is enforced in reactionStructures.R -> rxnf"
@@ -176,7 +176,7 @@ rxnList_form <- rxnList_form[order(names(rxnList_form))] # order alpha-numerical
 #### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
 
 # chunks to break rxnList into
-chunk_size <- 100
+chunk_size <- 300
 chunk_assignment <- data.frame(set = names(rxnList_form), chunk = c(rep(1:floor(length(rxnList_form)/chunk_size), each = chunk_size), rep(ceiling(length(rxnList_form)/chunk_size), length(rxnList_form) %% chunk_size)))
 print(paste("The number of parameter chunks is", ceiling(length(rxnList_form)/chunk_size), "submit this parameter when batch submitting processes in FluxOptim.sh"))
 
@@ -1160,7 +1160,7 @@ affinity_comparisons <- affinity_comparisons %>% tbl_df()
 
 absolute_comparison <- affinity_comparisons %>% filter(Subtype %in% c("substrate", "product"), absoluteQuant, !is.na(log10mean)) %>% mutate(log10mean = log10mean - 3) # convert from mM to M
 
-boxplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+boxplot_theme <- theme(text = element_text(size = 20), title = element_text(size = 25, face = "bold"), 
                        panel.background = element_rect(fill = "gray92"), legend.position = "top", 
                        axis.ticks = element_line(color = "black", size = 1),
                        axis.text = element_text(color = "black", size = 20),
@@ -1184,11 +1184,11 @@ absolute_comparison$paramConsistency <- factor(mapply(x = absolute_comparison$pa
 
 ggplot(absolute_comparison, aes(x = log10mean, y = log10(parMLE), fill = paramConsistency, group = measured)) + geom_point(size = 6, shape = 21) + 
   geom_smooth(method = "lm", size = 2, color = "black", se = F) +
-  boxplot_theme + scale_fill_brewer(palette = "Set1") + scale_size_identity() +
+  boxplot_theme + scale_fill_brewer(palette = "Dark2") + scale_size_identity() +
   scale_x_continuous(expression("Literature consensus" ~ log[10] ~ "Affinity (M)")) +
   scale_y_continuous(expression("Inferred" ~ italic("in vivo") ~ log[10] ~ 'Affinity (M) 95% credicibility interval')) +
   guides(fill = guide_legend(nrow = 3))
-ggsave("Figures/brendaConsistency.pdf", width = 8, height = 10)  
+ggsave("Figures/brendaConsistency.pdf", width = 8, height = 10)
 
 summary(lm(log10(absolute_comparison$parMLE) ~ absolute_comparison$log10mean))
   
@@ -1206,38 +1206,11 @@ brendaAgree <- absolute_comparison %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10
                                               parCaptureInterval = log10(parLB) < log10mean + 2*sdOflog10 & log10(parUB) > log10mean - 2*sdOflog10) %>%
   dplyr::select(rxn, rxnForm, modelName, nQuant, parCapture, parCaptureInterval)
 
-brendaAgree$parCapture %>% table()
-brendaAgree$parCaptureInterval %>% table()
-
-brendaAgree %>% filter($parCaptureInterval
+brendaAgree$parCapture %>% table() %>% as.data.frame() %>% summarize(Freq[. == T] / sum(Freq))
+brendaAgree$parCaptureInterval %>% table() %>% as.data.frame() %>% summarize(Freq[. == T] / sum(Freq))
 
 ### Look at metabolism-wide occupancy ###
 # need to fully load up to *import cluster parameters* in this script
-
-# Comparing occupancy implied by BRENDA versus optimized
-
-occpuancy_comparison_BRENDA <- affinity_comparisons %>% filter(measured, absoluteQuant, !is.na(log10mean), Subtype %in% c("substrate", "product")) %>% dplyr::select(-formulaName, -measured, -absoluteQuant, -(EC:isYeast), -(nQuant:speciesType)) %>%
-  mutate(log10mean = log10mean - 3)
-
-occpuancy_comparison_BRENDA <- occpuancy_comparison_BRENDA %>% mutate(sdOflog10 = ifelse(is.na(sdOflog10), 0, sdOflog10),
-                                                                      occ_parLB = 2^medianAbund / (2^medianAbund + parUB),
-                                                                      occ_parUB = 2^medianAbund / (2^medianAbund + parLB),
-                                                                      occ_parMLE = 2^medianAbund / (2^medianAbund + parMLE),
-                                                                      occ_brendaLB = 2^medianAbund / (2^medianAbund + 10^(log10mean + 2*sdOflog10)),
-                                                                      occ_brendaUB = 2^medianAbund / (2^medianAbund + 10^(log10mean - 2*sdOflog10)),
-                                                                      occ_brendaMLE = 2^medianAbund / (2^medianAbund + 10^(log10mean)))
-
-occpuancy_comparison_BRENDA <- occpuancy_comparison_BRENDA %>% mutate(well_constrained = ifelse(occ_parUB - occ_parLB < 0.5, T, F))
-
-occpuancy_comparison_BRENDA <- left_join(occpuancy_comparison_BRENDA, brendaAgree)
-
-ggplot(occpuancy_comparison_BRENDA, aes(x = occ_brendaMLE, xmin = occ_brendaLB, xmax = occ_brendaUB, 
-                                        y = occ_parMLE, ymin = occ_parLB, ymax = occ_parUB, color = parCaptureInterval)) + 
-  geom_point(position = "jitter") + geom_rug() +
-  geom_errorbar() + geom_errorbarh() + facet_wrap(~ well_constrained) +
-  scale_color_brewer(palette = "Set1")
-
-#
 
 occupancy_comparison <- affinity_comparisons %>% filter(measured) %>% dplyr::select(-formulaName, -measured, -absoluteQuant, -(EC:isYeast), -(nQuant:speciesType))
 
@@ -1277,13 +1250,11 @@ ggplot() + geom_violin(data = occupancy_comparison, aes(x = Subtype, y = log10S_
   scale_y_continuous(expression(frac('[S]', K[M])), expand = c(0,0)) +
   boxplot_theme_label_rotate
 
-ggplot() + geom_violin(data = occupancy_comparison, aes(x = Subtype, y = log10occ), fill = "firebrick2", scale = "width") +
+ggplot() + geom_violin(data = occupancy_comparison, aes(x = Subtype, y = log10occ), fill = "darkgoldenrod1", scale = "width") +
   geom_text(data = occupancy_dist_test, aes(x = Subtype, y = 0.5, label = label), color = "black", size = 8) +
   scale_y_continuous(expression(frac('[S]', '[S]' + K[M])), breaks = seq(0, 1, by = 0.2), expand = c(0,0), limits = c(0,1)) +
   boxplot_theme_label_rotate
-ggsave("Figures/speciesOccupancy.pdf", width = 15, height = 8)
-ggsave("Figures/speciesOccupancy.eps", width = 15, height = 8, device=cairo_ps)
-
+ggsave("Figures/speciesOccupancy.pdf", width = 8, height = 8)
 
 #Iexp <- 2^(rnorm(100, 0, 1))
 #Ivals <- 2^seq(-5,5,by = 0.01)
