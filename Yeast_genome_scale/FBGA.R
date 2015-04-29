@@ -176,7 +176,7 @@ rxnList_form <- rxnList_form[order(names(rxnList_form))] # order alpha-numerical
 #### save rxnList_form so that this self-sufficient list can be thrown at the cluster ###
 
 # chunks to break rxnList into
-chunk_size <- 300
+chunk_size <- 100
 chunk_assignment <- data.frame(set = names(rxnList_form), chunk = c(rep(1:floor(length(rxnList_form)/chunk_size), each = chunk_size), rep(ceiling(length(rxnList_form)/chunk_size), length(rxnList_form) %% chunk_size)))
 print(paste("The number of parameter chunks is", ceiling(length(rxnList_form)/chunk_size), "submit this parameter when batch submitting processes in FluxOptim.sh"))
 
@@ -258,6 +258,105 @@ reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(
 reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])}) # the maximum likelihood over all corresponding parameter sets
 
 ### Model comparison between more complex models with additional regulators or alterative reaction forms relative to reversible-MM using LRT and AICc ###
+
+save(reactionInfo, file = "tmp.Rdata")
+
+function(reactionInfo, rxnList_form){
+
+# Evaluate nested comparisons between simpler and more complicated models
+# alternative parametrization of simple kinetics (with the same # of parameters)
+# 1 regulators vs. rMM
+# 1 regulator w/ coopertivity vs. 1 regulator & rMM
+# 2 regulators vs. each single regulator
+
+# rMech | rID | modelType | tID | regulationType | ML | npar
+# rMech is a unique ID with multiple columns if multiple regulators exist
+  
+  regulator_info <- lapply(rxnList_form, function(x){
+    x$rxnFormData %>% dplyr::select(SubstrateID, Hill, Subtype, form = EqType) %>% filter(!(Subtype %in% c("substrate", "product"))) %>%
+      mutate(rMech = x$listEntry, reaction = x$rxnID, isoenzyme_specific = ifelse(all(is.na(x$rxnFormData$enzymeInvolved)), F, T))
+  })
+  regulator_info <- do.call("rbind", regulator_info)
+  
+  reaction_info_comparison <- reactionInfo %>% tbl_df() %>% dplyr::select(rMech, reaction, ML, ncond, npar)
+  
+  # for each reaction, point to its reference kinetic form(s)
+  
+  reaction_info_comparison$modelType <- sapply(rxnList_form, function(x){
+    # At some point this should be converted to a directed graph representation, to allow more sophisticated models to be posed
+    # this should be done when reaction forms are originally generated
+    
+    if(setequal(x$rxnFormData$Subtype, c("substrate", "product"))){
+      # simple kinetics
+     if(x$rxnFormData$EqType[1] == "rm" & all(is.na(x$rxnFormData$enzymeInvolved))){
+      "rMM" 
+      }else{
+       "alternative_simple_kinetics" 
+      }
+    }else if(length(setdiff(c("substrate", "product"), x$rxnFormData$Subtype)) != 0){
+     # irreversible kinetics
+      "irreversible"
+    }else{
+      regulators <- x$rxnFormData[!(x$rxnFormData$Subtype %in% c("substrate", "product")),]
+      if(any(regulators$Hill == 0)){
+       "coopertivity" 
+      }else if(nrow(regulators) == 1){
+        "regulator"
+      }else{
+        "2+ regulators"
+      }
+    }
+  })
+  
+  regulator_info <- regulator_info %>% left_join(reaction_info_comparison %>% dplyr::select(rMech, modelType, ncond), by = "rMech")
+  
+  
+  reaction_info_comparison$parentReaction <- sapply(1:nrow(reaction_info_comparison), function(i){
+    if(reaction_info_comparison$modelType[i] %in% c("alternative_simple_kinetics", "coopertivity", "irreversible", "regulator")){
+      base_model <- reaction_info_comparison %>% filter(reaction == reaction_info_comparison$reaction[i],
+                                                        modelType == "rMM",
+                                                        ncond == reaction_info_comparison$ncond[i])
+      base_model$rMech
+    }else{
+      print(i)
+      # nested regulation
+      evaluated_reg <- regulator_info %>% filter(rMech == reaction_info_comparison$rMech[i]) %>% dplyr::select(-rMech, -reaction)
+      # all regulation of this reaction
+      rxn_reg <- regulator_info %>% filter(reaction ==  reaction_info_comparison$reaction[i], ncond == reaction_info_comparison$ncond[i],
+                                           !isoenzyme_specific)
+      
+      if(reaction_info_comparison$modelType[i] == "coopertivity"){
+        if(nrow(evaluated_reg) > 1){
+          warning("multiple reaction allostery not currently supported") 
+        }else{
+          inner_join(evaluated_reg %>% mutate(Hill = 1), rxn_reg, by = c("SubstrateID", "Subtype", "form", "Hill"))$rMech
+        }
+      }
+      if(reaction_info_comparison$modelType[i] == "2+ regulators"){
+        if(nrow(evaluated_reg) > 2){
+          warning("3+ reactions not supported") 
+        }else{
+          parent_reg <- inner_join(evaluated_reg, rxn_reg %>% filter(modelType == "regulator"), by = c("SubstrateID", "Hill", "Subtype", "form"))$rMech
+          if(length(parent_reg) != 2){
+            warning("non-standard formatting - parental reactions not found")
+          }else{
+            paste(parent_reg, collapse = ",") 
+          }
+        }
+      }
+    }
+  })
+  
+  
+  
+  
+  
+  
+  
+  
+}
+
+
 
 reactionInfo$changeP <- NA
 reactionInfo$changeAIC <- NA
