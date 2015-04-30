@@ -995,6 +995,248 @@ cond_order_check <- function(query){
 
 ########## Functions used in optimization of fitted flux versus actual flux ############
 
+modelComparison <- function(reactionInfo, rxnList_form){
+  
+  require(dplyr)
+  require(qvalue)
+  
+  # Evaluate nested comparisons between simpler and more complicated models
+  # alternative parametrization of simple kinetics (with the same # of parameters)
+  # 1 regulators vs. rMM
+  # 1 regulator w/ coopertivity vs. 1 regulator & rMM
+  # 2 regulators vs. each single regulator
+  
+  # rMech | rID | modelType | tID | regulationType | ML | npar
+  # rMech is a unique ID with multiple columns if multiple regulators exist
+  
+  regulator_info <- lapply(rxnList_form, function(x){
+    x$rxnFormData %>% dplyr::select(SubstrateID, Hill, Subtype, form = EqType) %>% filter(!(Subtype %in% c("substrate", "product"))) %>%
+      mutate(rMech = x$listEntry, reaction = x$rxnID, isoenzyme_specific = ifelse(all(is.na(x$rxnFormData$enzymeInvolved)), F, T))
+  })
+  regulator_info <- do.call("rbind", regulator_info)
+  
+  reaction_info_comparison <- reactionInfo %>% tbl_df() %>% dplyr::select(rMech, reaction, ML, ncond, npar)
+  
+  # for each reaction, the type of reaction form (e.g. rMM, irreversible kinetics) will determine how reaction forms are compared
+  
+  reaction_info_comparison$modelType <- sapply(rxnList_form, function(x){
+    # At some point this should be converted to a directed graph representation, to allow more sophisticated models to be posed
+    # this should be done when reaction forms are originally generated
+    
+    if(setequal(x$rxnFormData$Subtype, c("substrate", "product"))){
+      # simple kinetics
+      if(x$rxnFormData$EqType[1] == "rm" & all(is.na(x$rxnFormData$enzymeInvolved))){
+        "rMM" 
+      }else{
+        "alternative_simple_kinetics" 
+      }
+    }else if(length(setdiff(c("substrate", "product"), x$rxnFormData$Subtype)) != 0){
+      # irreversible kinetics
+      "irreversible"
+    }else{
+      regulators <- x$rxnFormData[!(x$rxnFormData$Subtype %in% c("substrate", "product")),]
+      if(any(regulators$Hill == 0)){
+        "coopertivity" 
+      }else if(nrow(regulators) == 1){
+        "regulator"
+      }else{
+        "2+ regulators"
+      }
+    }
+  })
+  
+  regulator_info <- regulator_info %>% left_join(reaction_info_comparison %>% dplyr::select(rMech, modelType, ncond), by = "rMech")
+  
+  # for each reaction, point to its reference kinetic form(s)
+  
+  reaction_info_comparison$parentReaction <- sapply(1:nrow(reaction_info_comparison), function(i){
+    if(reaction_info_comparison$modelType[i] == "rMM"){
+      NA
+    }else{
+      base_model <- reaction_info_comparison %>% filter(reaction == reaction_info_comparison$reaction[i],
+                                                        modelType == "rMM",
+                                                        ncond == reaction_info_comparison$ncond[i])
+      rMM_form <- base_model$rMech
+      
+      if(reaction_info_comparison$modelType[i] %in% c("alternative_simple_kinetics", "irreversible", "regulator")){
+        rMM_form
+      }else{
+        
+        # nested regulation
+        evaluated_reg <- regulator_info %>% filter(rMech == reaction_info_comparison$rMech[i]) %>% dplyr::select(-rMech, -reaction)
+        # all regulation of this reaction
+        rxn_reg <- regulator_info %>% filter(reaction ==  reaction_info_comparison$reaction[i], ncond == reaction_info_comparison$ncond[i],
+                                             !isoenzyme_specific)
+        
+        if(reaction_info_comparison$modelType[i] == "coopertivity"){
+          if(nrow(evaluated_reg) > 1){
+            warning("multiple reaction allostery not currently supported") 
+          }else{
+            rxn_reg <- rxn_reg %>% filter(modelType == "regulator")
+            reg_parent <- inner_join(evaluated_reg %>% mutate(Hill = 1), rxn_reg, by = c("SubstrateID", "Subtype", "form", "Hill"))$rMech
+          }
+        }
+        if(reaction_info_comparison$modelType[i] == "2+ regulators"){
+          if(nrow(evaluated_reg) > 2){
+            warning("3+ reactions not supported") 
+          }else{
+            parent_reg <- inner_join(evaluated_reg, rxn_reg %>% filter(modelType == "regulator"), by = c("SubstrateID", "Hill", "Subtype", "form"))$rMech
+            if(length(parent_reg) != 2){
+              warning("non-standard formatting - parental reactions not found")
+            }else{
+              reg_parent <- paste(parent_reg, collapse = ",") 
+            }
+          }
+        }
+        paste(c(rMM_form, reg_parent), collapse = ",")
+      }
+    }
+  })
+  
+  # add some additional modelTypes
+  # treat a freely inferred metabolite (w and w/o hill seperately from real metabolites)
+  reaction_info_comparison <- reaction_info_comparison %>% mutate(modelType = ifelse(grepl('t_metX', rMech), paste("hypo met", modelType), modelType))
+  
+  # Compare full and reduced models using AICc and LRT
+  model_comparison_list <- list()
+  
+  for(i in 1:nrow(reaction_info_comparison)){
+    
+    if(is.na(reaction_info_comparison$parentReaction[i])){
+      # RMM 
+      
+    }else{
+      
+      daughter_rxn <- reaction_info_comparison %>% dplyr::slice(i)
+      
+      parent_rxn_names <- strsplit(reaction_info_comparison$parentReaction[i], split = ",")[[1]]
+      parent_rxns <-  reaction_info_comparison %>% filter(rMech %in% parent_rxn_names)
+      
+      # determine the relative probability of eaach null versus full model based on AIC
+      
+      daughter_rxn <- daughter_rxn %>% mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1))
+      parent_rxns <- parent_rxns %>% mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1),
+                                            changeAIC = ifelse(AICc < daughter_rxn$AICc,
+                                                               1 - 1/(exp((daughter_rxn$AICc - AICc)/2) + 1),
+                                                               1 - exp((AICc - daughter_rxn$AICc)/2)/(exp((AICc - daughter_rxn$AICc)/2) + 1))
+      )
+      
+      parent_rxns <- parent_rxns %>% mutate(likDiff = daughter_rxn$ML - ML)
+      
+      # comparing models using LRT
+      
+      parent_rxns <- rbind(
+        parent_rxns %>% filter(npar == daughter_rxn$npar) %>% mutate(changeP = 1/(exp(likDiff) + 1)), # Alternative parameterization with same degrees of freedom
+        parent_rxns %>% filter(npar < daughter_rxn$npar) %>% mutate(changeP = 1 - pchisq(2*likDiff, daughter_rxn$npar - npar)), # Alternative model is more complex
+        parent_rxns %>% filter(npar > daughter_rxn$npar) %>% mutate(changeP = 1 - pchisq(-2*likDiff, npar - daughter_rxn$npar)) # Alternative model is less complex
+      )
+      
+      model_comparison_list[[i]] <- parent_rxns %>% dplyr::mutate(daughter_rMech = as.character(daughter_rxn$rMech), daughterModel = as.character(daughter_rxn$modelType)) %>%
+        dplyr::select(reaction, daughter_rMech, daughterModel, parent_rMech = rMech, parentModel = modelType, changeAIC, changeP)
+    }
+  }
+  
+  # Multiple hypothesis correction
+  # p-values are analyzed seperately for each daughterModel X parentModel
+  
+  model_comparison_list <- do.call("rbind", model_comparison_list)
+  
+  #tmp -> model_comparison_list
+  
+  # when looking at the effect of 2 regulators, look at the smallest improvement relative to simpler models (this is conservative)
+  model_comparison_list <- rbind(
+    model_comparison_list %>% filter(!(daughterModel == "2+ regulators" & parentModel == "regulator")),
+    model_comparison_list %>% filter(daughterModel == "2+ regulators", parentModel == "regulator") %>% group_by(reaction, daughter_rMech, daughterModel) %>%
+      dplyr::summarize(changeAIC = max(changeAIC), changeP = max(changeP)) %>% mutate(parentModel = "regulator", parent_rMech = "combined_regulators")
+  )
+  
+  # qvalue doesn't play nicely with dplyr, so breaking the whole list into pieces and later reforming it
+  # when looking at "hypothetical metabolites" (governed by principle components), use AICc for model comparison because the large number of fitted parameters
+  # results in an misposed LRT
+  comparison_groups <- model_comparison_list %>% group_by(daughterModel, parentModel) %>% dplyr::summarize(N = n()) %>%
+    dplyr::mutate(metricUsed = ifelse(daughterModel %in% c("hypo met regulator", "hypo met coopertivity"), "changeAIC", "changeP"))
+  comparison_groups$pi0 <- NA; comparison_groups$Nsig <- NA
+  comparison_list <- list()
+  
+  for(i in 1:nrow(comparison_groups)){
+    
+    comparison_subset <- model_comparison_list %>% filter(daughterModel == comparison_groups$daughterModel[i], parentModel == comparison_groups$parentModel[i])
+    qvalue_object <- qvalue(comparison_subset[,comparison_groups$metricUsed[i]] %>% unlist(), pi0.method = "bootstrap")
+    comparison_groups$pi0[i] <- qvalue_object$pi0
+    comparison_subset$Qvalue <- qvalue_object$q
+    
+    comparison_groups$Nsig[i] <- sum(qvalue_object$q < 0.1)
+    
+    comparison_list[[i]] <- comparison_subset
+    
+  }
+  
+  all_models <- do.call("rbind", comparison_list)
+  
+  # Each reaction is assigned a consensus measure of significance - based on the least significant comparison between reaction forms
+  all_models <- all_models %>% group_by(reaction, daughter_rMech, daughterModel) %>% dplyr::summarize(Qvalue = max(Qvalue)) %>%
+    dplyr::select(reaction, rMech = daughter_rMech, modelType = daughterModel, Qvalue)
+  
+  # add back the baseline rMM reaction forms
+  all_models <- rbind(all_models, reaction_info_comparison %>% filter(modelType == "rMM") %>% dplyr::select(reaction, rMech, modelType) %>% dplyr::mutate(Qvalue = NA)) %>% ungroup()
+  
+  signifCO <- data.frame(q_cutoff = c(0.1, 0.001, 0.00001), code = c("*", "**", "***"))
+  
+  all_models$signifCode <- sapply(all_models$Qvalue, function(x){
+    if(is.na(x) | x > signifCO$q_cutoff[1]){
+      ""
+    }else{
+      rev(signifCO$code[x < signifCO$q_cutoff])[1]
+    }
+  })
+  
+  # clean-up reaction naming
+  
+  all_models <- all_models %>% mutate(Name = NA) %>% mutate(Name = ifelse(modelType == "rMM", "Reversible michaelis-menten (default)", Name),
+                                                            Name = ifelse(modelType == "alternative_simple_kinetics", "Convenience kinetics", Name),
+                                                            Name = ifelse(modelType == "irreversible", "Irreversible michaelis-menten", Name))
+  
+  for(i in c(1:nrow(all_models))[is.na(all_models$Name)]){
+    
+    rxn_reg <- regulator_info %>% filter(rMech == all_models$rMech[i]) %>%
+      left_join(data.frame(SubstrateID = names(rxnList_form[[all_models$rMech[i]]]$metNames), Name = unname(rxnList_form[[all_models$rMech[i]]]$metNames)), by = "SubstrateID")
+    
+    subnames <- apply(rxn_reg, 1, function(x){
+      paste(x['Subtype'], ifelse(x['Subtype'] %in% c("cc", "mm"), "activation", "inhibition"), ifelse(x['Hill'] == 0, "(variable hill)", ""), "by", x['Name'])
+    })
+    
+    all_models$Name[i] <- paste(subnames, collapse = " + ")
+  }
+  
+  all_models <- rbind( 
+    all_models %>% filter(!grepl('rmCond', rMech)),
+    all_models %>% filter(grepl('rmCond', rMech)) %>% mutate(Name = sub('$', ' (zero flux / overflow conditions removed)', Name))
+  )
+  
+  manualRegulators <- read.delim('./companionFiles/manual_ComplexRegulation.txt')
+  
+  all_models <- rbind(
+    all_models %>% filter(!(rMech %in% manualRegulators$TechnicalName)),
+    all_models %>% filter(rMech %in% manualRegulators$TechnicalName) %>% dplyr::select(-Name) %>% left_join(manualRegulators %>% dplyr::select(rMech = TechnicalName, Name = DisplayName) %>% unique(), by = "rMech")
+  )
+  
+  all_models <- all_models %>% dplyr::mutate(Name = paste(Name, signifCode),
+                                             Name = gsub('^ ', '', Name),
+                                             Name = gsub('  ', ' ', Name))
+  
+  all_models$FullName <- sapply(all_models$rMech, function(a_mech){
+    rxnList_form[[a_mech]]$reaction
+  })
+  all_models <- all_models %>% mutate(FullName = paste(FullName, Name, sep = " - "))
+  
+  # all_models %>% filter(is.na(Qvalue) | Qvalue < 0.1) %>% arrange(reaction) %>% View()
+  return(all_models)
+  
+}
+
+
+
+
 species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   require(data.table)
@@ -2399,10 +2641,19 @@ param_compare <- function(){
   named_par_markov_chain <- par_markov_chain
   colnames(named_par_markov_chain) <- rename_table$commonPrint
   
+  rename_table <- rename_table %>% left_join(run_rxn$rxnSummary$rxnFormData %>% dplyr::select(tID = SubstrateID, Subtype), by = "tID") %>%
+    mutate(Subtype = ifelse(tID == "keq", "keq", Subtype),
+           Subtype = ifelse(Subtype %in% c("substrate", "product", "keq"), Subtype, "regulator"),
+           Subtype = factor(Subtype, levels = c("substrate", "product", "regulator", "keq"))) %>%
+    arrange(Subtype)
+  
+  facet_ordering_key <- rename_table %>% dplyr::select(commonPrint, Subtype) %>% arrange(Subtype) %>%
+    mutate(commonPrint = factor(commonPrint, levels = commonPrint))
+  
   # adjust parameters which are bounded by log-uniform distributions into equal bounds
   
   named_par_markov_chain[,run_rxn$kineticParPrior$distribution == "unif"] <- named_par_markov_chain[,run_rxn$kineticParPrior$distribution == "unif"] -
-  t(t(rep(1, nrow(named_par_markov_chain)))) %*% (run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_1'] + run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_2'])/2
+    t(t(rep(1, nrow(named_par_markov_chain)))) %*% (run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_1'] + run_rxn$kineticParPrior[run_rxn$kineticParPrior$distribution == "unif",'par_2'])/2
   
   named_par_markov_chain <- named_par_markov_chain[,!is.na(rename_table$commonName)] # remove parameters which aren't affinities/keq
   
@@ -2416,24 +2667,24 @@ param_compare <- function(){
   par_comp_like <- NULL
   for(i in 1:sum(like_comparison)){
     par_comp_like <- rbind(par_comp_like, data.frame(xval = named_par_markov_chain[,par_combinations[like_comparison,][i,1]], parameter_1 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]],
-         parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]]))
-      }
+                                                     parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,][i,1]]))
+  }
   
   par_comp_dissimilar <- NULL
   for(i in 1:sum(!like_comparison)){
     par_comp_dissimilar <- rbind(par_comp_dissimilar, data.frame(xval = named_par_markov_chain[,par_combinations[!like_comparison,][i,1]], yval = named_par_markov_chain[,par_combinations[!like_comparison,][i,2]], 
-          parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,2]]))
-      }
+                                                                 parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,][i,2]]))
+  }
   
   MLEbarplot <- data.frame(xval = max_likelihood[par_combinations[like_comparison,1]], parameter_1 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]],
-      parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]])
+                           parameter_2 = colnames(named_par_markov_chain)[par_combinations[like_comparison,1]])
   MLEpoints <- data.frame(xval = max_likelihood[par_combinations[!like_comparison,1]], yval = max_likelihood[par_combinations[!like_comparison,2]],
-      parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,2]])
+                          parameter_1 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,1]], parameter_2 = colnames(named_par_markov_chain)[par_combinations[!like_comparison,2]])
   
   
   
   #### determine the maximum bin from the histogram so that values can be scaled to the bivariate histogram values ###
-
+  
   par_hist_binwidth = 0.4
   
   max_density <- max(apply(named_par_markov_chain, 2, function(x){max(table(round(x/par_hist_binwidth)))}))
@@ -2447,30 +2698,57 @@ param_compare <- function(){
   # extend axes to bounds of prior
   
   bound_expand <- rename_table %>% left_join(run_rxn$kineticParPrior %>% dplyr::select(tID = rel_spec, lb = par_1, ub = par_2), by = "tID") %>% mutate(center = (lb + ub)/2, lb = lb - center, ub = ub - center) %>%
-    gather(bound, value, lb:ub) %>% mutate(parameter_1 = commonPrint, parameter_2 = commonPrint)
+    gather(bound, value, lb:ub) %>% mutate(parameter_1 = commonPrint, parameter_2 = commonPrint) %>%
+    mutate(value_trans = density_trans_inv(value))
   
+  # add factors to paramers so that they are displayed in a logical order
+  par_comp_like <- par_comp_like %>% mutate(parameter_1 = factor(parameter_1, levels = facet_ordering_key$commonPrint), parameter_2 = factor(parameter_2, levels = facet_ordering_key$commonPrint))
+  par_comp_dissimilar <- par_comp_dissimilar%>% mutate(parameter_1 = factor(parameter_1, levels = facet_ordering_key$commonPrint), parameter_2 = factor(parameter_2, levels = facet_ordering_key$commonPrint))
+  MLEbarplot <- MLEbarplot %>% mutate(parameter_1 = factor(parameter_1, levels = facet_ordering_key$commonPrint), parameter_2 = factor(parameter_2, levels = facet_ordering_key$commonPrint))
+  MLEpoints <- MLEpoints %>% mutate(parameter_1 = factor(parameter_1, levels = facet_ordering_key$commonPrint), parameter_2 = factor(parameter_2, levels = facet_ordering_key$commonPrint))
+  bound_expand <- bound_expand %>% mutate(parameter_1 = factor(parameter_1, levels = facet_ordering_key$commonPrint), parameter_2 = factor(parameter_2, levels = facet_ordering_key$commonPrint))
   
   hex_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
-                       panel.background = element_rect(fill = "gray92"), legend.position = "left", 
-                       axis.ticks = element_line(color = "black", size = 1),
-                       axis.text = element_text(color = "black", size = 20),
-                       panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 1),
-                       axis.line = element_line(color = "black", size = 1), legend.key.height = unit(4, "line"),
-                       axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), strip.background = element_rect(fill = "coral"),
+                     panel.background = element_rect(fill = "gray92"), legend.position = "left", 
+                     axis.ticks = element_line(color = "black", size = 1),
+                     axis.text = element_text(color = "black", size = 20),
+                     panel.grid.minor = element_blank(), panel.grid.major = element_line(size = 1),
+                     axis.line = element_line(color = "black", size = 1), legend.key.height = unit(4, "line"),
+                     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), strip.background = element_rect(fill = "coral"),
                      panel.margin = unit(1.5, "lines"), axis.title = element_blank()
-                     )
-
-
-  return(
-    ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "free", space = "free") + hex_theme +
+  )
+  
+  output_plots <- list()
+  
+  output_plots[["bivariateHist"]] <- ggplot() + geom_hex(data = par_comp_dissimilar, aes(x = xval, y = yval)) + facet_grid(parameter_2 ~ parameter_1, scales = "free", space = "free") + hex_theme +
     scale_fill_gradientn(name = "Counts", colours = c("white", "darkgoldenrod1", "chocolate1", "firebrick1", "black"), trans = "log10", breaks = c(1,3,10,30,100)) +
     scale_x_continuous(expression(log[2]), expand = c(0, 0), breaks = seq(-20, 20, by = 5)) + scale_y_continuous(NULL, expand = c(0, 0), labels = density_trans, breaks = density_trans_inv(seq(-20, 20, by = 5))) +
     geom_point(data = MLEpoints, aes(x = xval, y = yval), size = 4, col = "cornflowerblue") +
     geom_vline(data = MLEbarplot, aes(xintercept = xval), col = "cornflowerblue", size = 2) +  geom_bar(data = par_comp_like, aes(x = xval), binwidth = par_hist_binwidth, col = "black") +
-    geom_blank(data = bound_expand, aes(x = value, y = density_trans_inv(value)))
-    )
-
-  }
+    geom_blank(data = bound_expand, aes(x = value, y = value_trans))
+  
+  quantiles <- par_comp_like %>% dplyr::select(parameter_1, xval) %>% group_by(parameter_1) %>% summarize(LH = quantile(xval, probs = c(0.025)), UH = quantile(xval, probs = c(0.975))) %>%
+    gather(bound, xval, -parameter_1)
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+                       panel.background = element_rect(fill = "gray92"), legend.position = "top", 
+                       axis.ticks = element_line(color = "black", size = 1),
+                       axis.text = element_text(color = "black", size = 20),
+                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank(), panel.margin = unit(1.5, "lines")
+                       )
+  
+  output_plots[["univariateHist"]] <- ggplot() + geom_vline(data = quantiles, aes(xintercept = xval), color = "blue", size = 2) + geom_vline(data = MLEbarplot, aes(xintercept = xval), color = "red", size = 2) +
+    geom_bar(data = par_comp_like, aes(x = xval), col = "black", binwidth = 0.5) + 
+    geom_blank(data = bound_expand, aes(x = value)) +
+    geom_blank(data = par_comp_like, aes(x = xval, y=1.05*..count..), stat="bin", binwidth = 0.5) +
+    facet_grid(~ parameter_1, scale = "free_x", space = "free_x") + barplot_theme +
+    scale_y_continuous(NULL, expand = c(0, 0), breaks = seq(0, 1000, by = 50)) +
+    scale_x_continuous(expression(log[2]), expand = c(0, 0), breaks = seq(-20, 20, by = 5))
+  
+  return(output_plots)
+  
+}
 
 metabolic_leverage_summary_plots <- function(nutrient_cond = "P0.05"){
   
