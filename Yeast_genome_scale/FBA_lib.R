@@ -1161,7 +1161,8 @@ modelComparison <- function(reactionInfo, rxnList_form){
   for(i in 1:nrow(comparison_groups)){
     
     comparison_subset <- model_comparison_list %>% filter(daughterModel == comparison_groups$daughterModel[i], parentModel == comparison_groups$parentModel[i])
-    qvalue_object <- qvalue(comparison_subset[,comparison_groups$metricUsed[i]] %>% unlist(), pi0.method = "bootstrap")
+    
+    qvalue_object <- qvalue(comparison_subset[,comparison_groups$metricUsed[i]] %>% unlist() %>% unname(), pi0.method = "bootstrap")
     comparison_groups$pi0[i] <- qvalue_object$pi0
     comparison_subset$Qvalue <- qvalue_object$q
     
@@ -1856,19 +1857,139 @@ flux_fitting <- function(run_rxn, par_markov_chain, par_likelihood){
 }
 
 
-pathwayPlots <- function(pathway){
+modelComparisonPlots <- function(rxn, reactionInfo, all_reactionInfo){
   
-  require(data.table)
-  require(reshape2)
   require(ggplot2)
+  require(dplyr)
   
   barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, color = "black", hjust = 1), axis.line = element_blank(),
-                         strip.background = element_rect(fill = "cornflowerblue"), axis.text.y = element_text(size = 6, color = "black"))
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.y = element_text(size = 20, color = "black", hjust = 1), axis.line = element_blank(),
+                         strip.background = element_rect(fill = "cornflowerblue"), axis.ticks.y = element_line(size = 1, color = "black"))
   
-  #barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
-  #                       panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 20, color = "black", hjust = 1), axis.line = element_blank(),
-  #                       strip.background = element_rect(fill = "cornflowerblue"), panel.margin = unit(1.5, "lines"), axis.text.y = element_text(size = 6, color = "black"))
+  
+  # Look at alternative models for a single reaction 
+  rxInfo_subset <- reactionInfo %>% filter(reaction %in% rxn) %>% filter(is.na(Qvalue) | Qvalue < 0.1)
+  
+  # pull in fit information
+  rxInfo_subset <- rxInfo_subset %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, parSpearman), by = "rMech") %>%
+    left_join(fraction_flux_deviation %>% dplyr::select(rMech = rxn, dotProduct, angle, get("Interval Overlap")), by = "rMech") %>%
+    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "coopertivity"), "coop/2+reg", modelType))
+  
+  maskedReg <- all_reactionInfo %>% filter(reaction == rxn) %>% filter(!(rMech %in% rxInfo_subset$rMech)) %>%
+    filter(!(modelType %in% c("alternative_simple_kinetics", "irreversible", "hypo met regulator", "hypo met coopertivity"))) %>%
+    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "coopertivity"), "coop/2+reg", modelType)) %>%
+    group_by(reaction, modelType, ncond) %>% dplyr::summarize(N = n())
+  
+  if(nrow(maskedReg) == 0){
+    neglectedNull <- expand.grid(modelType = c("regulator", "coop/2+reg"),  ncond = unique(rxInfo_subset$ncond), stringsAsFactors = F)  
+  }else{
+    neglectedNull <- expand.grid(modelType = c("regulator", "coop/2+reg"),  ncond = unique(rxInfo_subset$ncond), stringsAsFactors = F) %>% anti_join(maskedReg %>% dplyr::select(modelType, ncond), by = c("modelType", "ncond"))
+  }
+  
+  if(nrow(neglectedNull) != 0){
+    maskedReg <- rbind(maskedReg, 
+                       data.frame(neglectedNull, reaction = rxn, N = 0))
+  }
+  
+  barplot_theme <- barplot_theme + theme(axis.text.x = element_text(size = min(8 + 80/(nrow(rxInfo_subset)+nrow(maskedReg)), 24), color = "black", vjust = 0.5, hjust = 1, angle = 90))
+  
+  pathwayPlot_list <- list()
+  
+  for(plotType in c("SpCorr", "DotProduct")){
+    
+    #### Define plotting variables ####
+    if(plotType == "SpCorr"){
+      plotDat <- rxInfo_subset %>% dplyr::select(Name, modelType, metric = parSpearman, ncond)
+      good_dir = "+"
+    }
+    if(plotType == "DotProduct"){
+      plotDat <- rxInfo_subset %>% dplyr::select(Name, modelType, metric = dotProduct, ncond)
+      good_dir = "+"
+    }
+    #if(plotType == "Angle"){
+    #  plotDat <- rxInfo_subset %>% dplyr::select(Name, modelType, metric = angle, ncond)
+    #  good_dir = "-"
+    #}
+    #if(plotType == "Capture"){
+    #  plotDat <- rxInfo_subset %>% dplyr::select(Name, modelType, metric = get("Interval Overlap"), ncond)
+    #  good_dir = "+"
+    #}
+    
+    #### Order reactions first by lowest/highest value for a rxn and then within a reaction ####
+    
+    nullRegulation <- maskedReg %>% ungroup() %>% mutate(Name = paste("Not improved by", modelType)) %>% left_join(plotDat %>% filter(modelType == "rMM") %>% dplyr::select(ncond, metric), by = "ncond") %>%
+      ungroup() %>% dplyr::mutate(modelType = paste("null", modelType))
+    
+    plotDat <- rbind(plotDat, nullRegulation %>% dplyr::select(-c(reaction, N)))
+    
+    classAesthetics <- data.frame(modelType = c("irreversible", "rMM", "alternative_simple_kinetics", "null regulator", "regulator", "null coop/2+reg",
+                                                "coop/2+reg", "hypo met regulator", "hypo met coopertivity"),
+                                  fill = c("cornflowerblue", "dodgerblue3", "blueviolet", "white", "firebrick1", "white", "limegreen", "darkgoldenrod1", "darkgoldenrod3"),
+                                  color = c("black", "black", "black", "firebrick1", "black", "limegreen", "black", "black", "black"))
+    
+    plotDat <- plotDat %>% left_join(classAesthetics, by = "modelType") %>%
+      mutate(modelType = factor(modelType, levels = classAesthetics$modelType))
+    
+    
+    if(good_dir == "+"){
+      
+      plotDat <- plotDat %>% group_by(modelType) %>% arrange(metric)
+      
+    }else{
+      
+      plotDat <- plotDat %>% group_by(modelType) %>% arrange(desc(metric))
+      
+    }
+    
+    plotDat <- plotDat %>% ungroup() %>% mutate(Name = ifelse(modelType == "coop/2+reg", gsub('\\+', '+\n', Name), Name)) %>%
+      mutate(Name = factor(Name, levels = unique(Name)))
+    
+    if(plotType == "SpCorr"){
+      
+      compPlot <- ggplot(data = plotDat, aes(x = Name, y = metric)) +
+        geom_bar(aes(color = color, fill = fill), stat = "identity", position = "dodge", width = 0.75) + 
+        barplot_theme + scale_x_discrete(name = "Reactions") +
+        scale_y_continuous(expression("Spearman correlation between "~ V^FBA ~ "&" ~ V^PAR), expand = c(0,0)) + expand_limits(y = 1) +
+        geom_text(data = nullRegulation, aes(x = Name, y = metric/2, label = N)) +
+        scale_color_identity() + scale_fill_identity() +
+        geom_hline(yintercept = -Inf, size = 2) +
+        geom_vline(xintercept = -Inf, size = 2) + scale_size_identity()
+        
+    }
+    
+    if(plotType == "DotProduct"){
+      
+      compPlot <- ggplot(data = plotDat, aes(x = Name, y = metric)) +
+        geom_bar(aes(color = color, fill = fill), stat = "identity", position = "dodge", width = 0.75) + 
+        barplot_theme + scale_x_discrete(name = "Reactions") +
+        scale_y_continuous(name = "Unit dot product", expand = c(0,0)) +
+        coord_cartesian(ylim = c(round(min(plotDat$metric) - 0.1, 1),1)) +
+        geom_text(data = nullRegulation, aes(x = Name, y = (metric + round(min(plotDat$metric) - 0.1, 1))/2, label = N)) +
+        scale_color_identity() + scale_fill_identity() +
+        geom_hline(yintercept = round(min(plotDat$metric) - 0.1, 1), size = 2) +
+        geom_vline(xintercept = -Inf, size = 2) + scale_size_identity()
+        
+    }  
+    
+    if(length(unique(plotDat$ncond)) != 1){
+     compPlot <- compPlot + facet_wrap(~ ncond, scale = "free_x")
+    }
+    
+    pathwayPlot_list[[plotType]] <- compPlot
+  }
+  return(pathwayPlot_list)
+}
+  
+  
+
+pathwayPlots <- function(pathway){
+  
+  require(ggplot2)
+  require(dplyr)
+  
+  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "aliceblue"), legend.position = "top", 
+                         panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.y = element_text(size = 20, color = "black", hjust = 1), axis.line = element_blank(),
+                         strip.background = element_rect(fill = "cornflowerblue"), axis.ticks.y = element_line(size = 1, color = "black"))
   
   
   #### Generate plots which show how well the optimization is performing according to different metrics ####
@@ -1877,138 +1998,107 @@ pathwayPlots <- function(pathway){
   
   reactions <- rxToPW$rID[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathway]]
   
-  rxInfo_subset <- reactionInfo[reactionInfo$reaction %in% reactions,]
-  rxInfo_subset <- rxInfo_subset[(rxInfo_subset$Qvalue < 0.1 | is.na(rxInfo_subset$Qvalue)) & c(1:nrow(rxInfo_subset)) %in% grep('rmCond', rxInfo_subset$modification, invert = T),]
+  rxInfo_subset <- reactionInfo %>% filter(reaction %in% reactions) %>% filter(modelType %in% c("rMM", "irreversible", "regulator", "coopertivity", "2+ regulators"))
   
-  # overwrite reaction text size based upon number of reactions
-  barplot_theme <- barplot_theme + theme(axis.text.y = element_text(size = min(8 + 80/nrow(rxInfo_subset), 24), color = "black", hjust = 1))
-  # when nrow = 100, font ~ 20, when nrow = 20, font ~ 40
+  noReg <- rxInfo_subset %>% filter(modelType == "rMM" | (modelType == "irreversible" & (!is.na(Qvalue) & Qvalue < 0.1)))
+  oneReg <- rxInfo_subset %>% filter(modelType == "regulator") %>% group_by(reaction) %>% filter(ML == max(ML))
   
-  Corr <- data.table(rxn_fits[rxn_fits$rxn %in% rxInfo_subset$rMech,])
-  FFD <- data.table(fraction_flux_deviation[fraction_flux_deviation$rxn %in% rxInfo_subset$rMech,])
+  multiReg <- rxInfo_subset %>% filter(modelType %in% c("coopertivity", "2+ regulators")) %>% left_join(oneReg %>% dplyr::select(reaction, ncond, one_reg_ML = ML), by = c("ncond", "reaction"))
+  multiReg <- multiReg %>% filter(ML > one_reg_ML) %>% group_by(reaction) %>% filter(ML == max(ML)) %>% dplyr::select(-one_reg_ML)
+  
+  rxInfo_plotted <- rbind(noReg, oneReg, multiReg) 
+  
+  rxInfo_plotted <- rxInfo_plotted %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, parSpearman), by = "rMech") %>%
+    left_join(fraction_flux_deviation %>% dplyr::select(rMech = rxn, dotProduct, angle, get("Interval Overlap")), by = "rMech") %>%
+    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "coopertivity"), "coop/2+reg", modelType))
+  
+  # Determine how many rxnForms that improve fit are masked (because there is a stronger fit)
+  maskedReg <- rxInfo_subset %>% filter(!(rMech %in% rxInfo_plotted$rMech) & modelType != "irreversible") %>% mutate(modelType = ifelse(modelType %in% c("2+ regulators", "coopertivity"), "coop/2+reg", modelType)) %>%
+    group_by(reaction, modelType, ncond) %>% dplyr::summarize(N = n())
+  
+  barplot_theme <- barplot_theme + theme(axis.text.x = element_text(size = min(8 + 80/(nrow(rxInfo_subset)+nrow(maskedReg)), 24), color = "black", vjust = 0.5, hjust = 1, angle = 90))
   
   pathwayPlot_list <- list()
   
-  for(plotType in c("SpCorr", "DotProduct", "Angle", "Capture")){
+  for(plotType in c("SpCorr", "DotProduct")){
     
     #### Define plotting variables ####
-    
     if(plotType == "SpCorr"){
-      plotDat <- Corr[,list(rxnMech = rxn, "Parametric Spearman" = parSpearman),]
-      sortVar = "Parametric Spearman"
+      plotDat <- rxInfo_plotted %>% dplyr::select(reaction, FullName, modelType, ncond, metric = parSpearman)
       good_dir = "+"
     }
     if(plotType == "DotProduct"){
-      plotDat <- FFD[,list(rxnMech = rxn, "Dot Product" = dotProduct),]
-      sortVar = "Dot Product"
-      good_dir = "+"
-    }
-    if(plotType == "Angle"){
-      plotDat <- FFD[,list(rxnMech = rxn, Angle = angle),]
-      sortVar = "Angle"
-      good_dir = "-"
-    }
-    if(plotType == "Capture"){
-      plotDat <- FFD[,c('rxn', 'Interval Overlap'), with = F]
-      setnames(plotDat, "rxn", "rxnMech")
-      sortVar = "Interval Overlap"
+      plotDat <- rxInfo_plotted %>% dplyr::select(reaction, FullName, modelType, ncond, metric = dotProduct)
       good_dir = "+"
     }
     
-    
+    plotDat <- plotDat %>% filter(!is.na(metric))
     #### Order reactions first by lowest/highest value for a rxn and then within a reaction ####
     
-    plotDat$reaction <- rxInfo_subset$reaction[chmatch(plotDat$rxn, rxInfo_subset$rMech)]
-    plotDat$display <- rxInfo_subset$FullName[chmatch(plotDat$rxn, rxInfo_subset$rMech)]
+    nullRegulation <- maskedReg %>% ungroup() %>% mutate(FullName = paste(reaction, "also improved by", modelType)) %>% left_join(plotDat %>% filter(modelType == "rMM") %>% dplyr::select(reaction, ncond, metric), by = c("reaction", "ncond")) %>%
+      ungroup() %>% dplyr::mutate(modelType = paste("null", modelType))
+    
+    plotDat <- rbind(plotDat, nullRegulation %>% dplyr::select(-c(N)))
+    
+    classAesthetics <- data.frame(modelType = c("irreversible", "rMM", "alternative_simple_kinetics", "null regulator", "regulator", "null coop/2+reg",
+                                                "coop/2+reg", "hypo met regulator", "hypo met coopertivity"),
+                                  fill = c("cornflowerblue", "dodgerblue3", "blueviolet", "white", "firebrick1", "white", "limegreen", "darkgoldenrod1", "darkgoldenrod3"),
+                                  color = c("black", "black", "black", "firebrick1", "black", "limegreen", "black", "black", "black"))
+    
+    plotDat <- plotDat %>% left_join(classAesthetics, by = "modelType") %>%
+      mutate(modelType = factor(modelType, levels = classAesthetics$modelType))
     
     if(good_dir == "+"){
       
-      rxSort <- plotDat[,max(get(sortVar)), by = reaction] 
-      
-      rxSort[,order := rank(V1),]
-      setkey(rxSort, order)
-      
-      plotDat$reaction <- factor(plotDat$reaction, levels = rxSort$reaction)
-      
-      plotDat <- plotDat[order(plotDat$reaction, plotDat[,get(sortVar),]),]
-      
+      rMM_order <- plotDat %>% filter(modelType == "rMM") %>% group_by(reaction) %>% dplyr::summarize(max_metric = max(metric)) %>% arrange(max_metric)
+      plotDat <- plotDat %>% mutate(reaction = factor(reaction, levels = rMM_order$reaction)) %>% ungroup() %>% arrange(reaction, ncond, modelType)
       
     }else{
       
-      rxSort <- plotDat[,min(get(sortVar)), by = reaction] 
+      rMM_order <- plotDat %>% filter(modelType == "rMM") %>% group_by(reaction) %>% dplyr::summarize(min_metric = min(metric)) %>% arrange(desc(min_metric))
       
-      rxSort[,order := rank(V1),]
-      setkey(rxSort, order)
-      
-      plotDat$reaction <- factor(plotDat$reaction, levels = rxSort$reaction)
-      
-      plotDat <- plotDat[order(plotDat$reaction, plotDat[,get(sortVar),], decreasing = T),]
-      
+      plotDat <- plotDat %>% mutate(reaction = factor(reaction, levels = rMM_order$reaction)) %>% ungroup() %>% arrange(reaction, modelType)
       
     }
     
-    plotDat$rxnMech <- factor(plotDat$rxnMech, levels = unique(plotDat$rxnMech))
-    plotDat$display <- factor(plotDat$display, levels = unique(plotDat$display))
-    plotDat_melt <- melt(plotDat, id.vars = c("rxnMech", "reaction", "display"))
+    plotDat <- plotDat %>% ungroup() %>% mutate(FullName = ifelse(modelType == "coop/2+reg", gsub('\\+', '+\n', FullName), FullName)) %>%
+      mutate(FullName = factor(FullName, levels = unique(FullName)))
     
-    #### Define plotting method ####
+    nullRegulation <- nullRegulation %>% mutate(reaction = factor(reaction, levels = levels(plotDat$reaction)))
     
-    if(plotType %in% c("SpCorr", "DotProduct", "Angle", "Capture")){
+    if(plotType == "SpCorr"){
       
-      plotDat_melt$rxnType <- "reversible Michaelis-Menten"
-      plotDat_melt$rxnType[intersect(grep('act', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = T))] <- "+ Activator (literature)"
-      plotDat_melt$rxnType[intersect(grep('inh', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = T))] <- "+ Inhibitor (literature)"
-      plotDat_melt$rxnType[intersect(grep('act', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = F))] <- "+ Activator (proposed)"
-      plotDat_melt$rxnType[intersect(grep('inh', plotDat_melt$rxnMech), grep('Hypothetical metabolite', plotDat_melt$display, invert = F))] <- "+ Inhibitor (proposed)"
-      
-      rxn_colors <- c("limegreen", "firebrick1", "dodgerblue3", "coral", "deepskyblue")
-      names(rxn_colors) <- c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)")
-      
-      #rxn_colors <- data.frame(levels = c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)"),
-      #                         colors = c("limegreen", "firebrick1", "dodgerblue3", "coral", "deepskyblue"))
-      
-      plotDat_melt$rxnType <- factor(plotDat_melt$rxnType, levels = c("reversible Michaelis-Menten", "+ Activator (literature)", "+ Inhibitor (literature)", "+ Activator (proposed)", "+ Inhibitor (proposed)"))
-      
-      if(plotType == "SpCorr"){
-      
-      compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType)) 
-      compPlot <- compPlot + geom_bar(stat = "identity", position = "dodge", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-        scale_y_continuous(expression("Spearman correlation between "~ V^FBA ~ "&" ~ V^PAR), expand = c(0,0)) + 
-        scale_fill_manual("Prediction Method", values = rxn_colors) + coord_flip() + expand_limits(y = 1)
-      
-      }
-      
-      if(plotType == "DotProduct"){
+      compPlot <- ggplot(data = plotDat, aes(x = FullName, y = metric)) +
+        geom_bar(aes(color = color, fill = fill), stat = "identity", position = "dodge", width = 0.75) + 
+        barplot_theme + scale_x_discrete(name = "Reactions") +
+        scale_y_continuous(expression("Spearman correlation between "~ V^FBA ~ "&" ~ V^PAR), expand = c(0,0)) + expand_limits(y = 1) +
+        geom_text(data = nullRegulation, aes(x = FullName, y = metric/2, label = N)) +
+        scale_color_identity() + scale_fill_identity() +
+        geom_hline(yintercept = -Inf, size = 2) +
+        geom_vline(xintercept = -Inf, size = 2) + scale_size_identity() +
+        facet_grid(~ reaction + ncond, scale = "free_x", space = "free_x")
         
-        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType))
-        compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Unit dot product", expand = c(0,0), limits = c(0,1)) + scale_fill_manual("Prediction Method", values = rxn_colors) +
-          ggtitle(expression("Unit dot product:" ~ sum(frac(V^FBA, symbol("|")~V^FBA~symbol("|"))~"*"~frac(V^PAR, symbol("|")~V^PAR~symbol("|"))))) + coord_flip()
-        
-      }
-      
-      if(plotType == "Angle"){
-        
-        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = 90 - value, fill = rxnType))
-        compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Angle", expand = c(0,0), limits = c(0,90), breaks = seq(0,90, by = 10), labels = rev(seq(0,90, by = 10))) + scale_fill_manual("Prediction Method", values = rxn_colors) +
-          ggtitle(expression("Angle between "~ V^FBA ~ "&" ~ V^PAR)) + coord_flip()
-        
-      }
-      
-      if(plotType == "Capture"){
-        
-        compPlot <- ggplot(data = plotDat_melt, aes(x = display, y = value, fill = rxnType))
-        compPlot <- compPlot + geom_bar(stat = "identity", width = 0.75) + barplot_theme + scale_x_discrete(name = "Reactions", expand = c(0,0)) +
-          scale_y_continuous(name = "Confidence Interval Overlap", expand = c(0,0), limits = c(0,1)) + scale_fill_manual("Prediction Method", values = rxn_colors) + coord_flip()
-        
-      }
     }
+    
+    if(plotType == "DotProduct"){
+      
+      compPlot <- ggplot(data = plotDat, aes(x = FullName, y = metric,)) +
+        geom_bar(aes(color = color, fill = fill), stat = "identity", position = "dodge", width = 0.75) + 
+        barplot_theme + scale_x_discrete(name = "Reactions") +
+        scale_y_continuous(name = "Unit dot product", expand = c(0,0)) +
+        coord_cartesian(ylim = c(round(min(plotDat$metric) - 0.1, 1),1)) +
+        scale_color_identity() + scale_fill_identity() +
+        geom_hline(yintercept = round(min(plotDat$metric) - 0.1, 1), size = 2) +
+        geom_vline(xintercept = -Inf, size = 2) + scale_size_identity() +
+        facet_grid(~ reaction + ncond, scale = "free_x", space = "free_x") +
+        geom_text(data = nullRegulation, aes(x = FullName, y = (metric + round(min(plotDat$metric) - 0.1, 1))/2, label = N))
+        
+    }  
+    
     pathwayPlot_list[[plotType]] <- compPlot
   }
   return(pathwayPlot_list)
 }
-
 
 
 customPlots <- function(run_rxn, flux_fit, chemostatInfo){

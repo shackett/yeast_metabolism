@@ -241,7 +241,7 @@ chain_convergence <- sapply(all_rx, function(arxn){
 })
 
 
-### Pull out relevent reaction information - such as reaction ID, number of parameters and maximum likelihood ###
+#### Pull out relevent reaction information - such as reaction ID, number of parameters and maximum likelihood ####
 
 load('flux_cache/metaboliteTables.RData')
 npc <- ncol(metSVD$v)
@@ -261,246 +261,7 @@ reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parS
 
 reaction_signif <- modelComparison(reactionInfo, rxnList_form)
 
-modelComparison <- function(reactionInfo, rxnList_form){
-  
-  require(dplyr)
-  require(qvalue)
-  
-  # Evaluate nested comparisons between simpler and more complicated models
-  # alternative parametrization of simple kinetics (with the same # of parameters)
-  # 1 regulators vs. rMM
-  # 1 regulator w/ coopertivity vs. 1 regulator & rMM
-  # 2 regulators vs. each single regulator
-  
-  # rMech | rID | modelType | tID | regulationType | ML | npar
-  # rMech is a unique ID with multiple columns if multiple regulators exist
-  
-  regulator_info <- lapply(rxnList_form, function(x){
-    x$rxnFormData %>% dplyr::select(SubstrateID, Hill, Subtype, form = EqType) %>% filter(!(Subtype %in% c("substrate", "product"))) %>%
-      mutate(rMech = x$listEntry, reaction = x$rxnID, isoenzyme_specific = ifelse(all(is.na(x$rxnFormData$enzymeInvolved)), F, T))
-  })
-  regulator_info <- do.call("rbind", regulator_info)
-  
-  reaction_info_comparison <- reactionInfo %>% tbl_df() %>% dplyr::select(rMech, reaction, ML, ncond, npar)
-  
-  # for each reaction, the type of reaction form (e.g. rMM, irreversible kinetics) will determine how reaction forms are compared
-  
-  reaction_info_comparison$modelType <- sapply(rxnList_form, function(x){
-    # At some point this should be converted to a directed graph representation, to allow more sophisticated models to be posed
-    # this should be done when reaction forms are originally generated
-    
-    if(setequal(x$rxnFormData$Subtype, c("substrate", "product"))){
-      # simple kinetics
-      if(x$rxnFormData$EqType[1] == "rm" & all(is.na(x$rxnFormData$enzymeInvolved))){
-        "rMM" 
-      }else{
-        "alternative_simple_kinetics" 
-      }
-    }else if(length(setdiff(c("substrate", "product"), x$rxnFormData$Subtype)) != 0){
-      # irreversible kinetics
-      "irreversible"
-    }else{
-      regulators <- x$rxnFormData[!(x$rxnFormData$Subtype %in% c("substrate", "product")),]
-      if(any(regulators$Hill == 0)){
-        "coopertivity" 
-      }else if(nrow(regulators) == 1){
-        "regulator"
-      }else{
-        "2+ regulators"
-      }
-    }
-  })
-  
-  regulator_info <- regulator_info %>% left_join(reaction_info_comparison %>% dplyr::select(rMech, modelType, ncond), by = "rMech")
-  
-  # for each reaction, point to its reference kinetic form(s)
-  
-  reaction_info_comparison$parentReaction <- sapply(1:nrow(reaction_info_comparison), function(i){
-    if(reaction_info_comparison$modelType[i] == "rMM"){
-      NA
-    }else{
-      base_model <- reaction_info_comparison %>% filter(reaction == reaction_info_comparison$reaction[i],
-                                                        modelType == "rMM",
-                                                        ncond == reaction_info_comparison$ncond[i])
-      rMM_form <- base_model$rMech
-      
-      if(reaction_info_comparison$modelType[i] %in% c("alternative_simple_kinetics", "irreversible", "regulator")){
-        rMM_form
-      }else{
-        
-        # nested regulation
-        evaluated_reg <- regulator_info %>% filter(rMech == reaction_info_comparison$rMech[i]) %>% dplyr::select(-rMech, -reaction)
-        # all regulation of this reaction
-        rxn_reg <- regulator_info %>% filter(reaction ==  reaction_info_comparison$reaction[i], ncond == reaction_info_comparison$ncond[i],
-                                             !isoenzyme_specific)
-        
-        if(reaction_info_comparison$modelType[i] == "coopertivity"){
-          if(nrow(evaluated_reg) > 1){
-            warning("multiple reaction allostery not currently supported") 
-          }else{
-            rxn_reg <- rxn_reg %>% filter(modelType == "regulator")
-            reg_parent <- inner_join(evaluated_reg %>% mutate(Hill = 1), rxn_reg, by = c("SubstrateID", "Subtype", "form", "Hill"))$rMech
-          }
-        }
-        if(reaction_info_comparison$modelType[i] == "2+ regulators"){
-          if(nrow(evaluated_reg) > 2){
-            warning("3+ reactions not supported") 
-          }else{
-            parent_reg <- inner_join(evaluated_reg, rxn_reg %>% filter(modelType == "regulator"), by = c("SubstrateID", "Hill", "Subtype", "form"))$rMech
-            if(length(parent_reg) != 2){
-              warning("non-standard formatting - parental reactions not found")
-            }else{
-              reg_parent <- paste(parent_reg, collapse = ",") 
-            }
-          }
-        }
-        paste(c(rMM_form, reg_parent), collapse = ",")
-      }
-    }
-  })
-  
-  # add some additional modelTypes
-  # treat a freely inferred metabolite (w and w/o hill seperately from real metabolites)
-  reaction_info_comparison <- reaction_info_comparison %>% mutate(modelType = ifelse(grepl('t_metX', rMech), paste("hypo met", modelType), modelType))
-  
-  # Compare full and reduced models using AICc and LRT
-  model_comparison_list <- list()
-  
-  for(i in 1:nrow(reaction_info_comparison)){
-    
-    if(is.na(reaction_info_comparison$parentReaction[i])){
-      # RMM 
-      
-    }else{
-      
-      daughter_rxn <- reaction_info_comparison %>% dplyr::slice(i)
-      
-      parent_rxn_names <- strsplit(reaction_info_comparison$parentReaction[i], split = ",")[[1]]
-      parent_rxns <-  reaction_info_comparison %>% filter(rMech %in% parent_rxn_names)
-      
-      # determine the relative probability of eaach null versus full model based on AIC
-      
-      daughter_rxn <- daughter_rxn %>% mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1))
-      parent_rxns <- parent_rxns %>% mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1),
-                                            changeAIC = ifelse(AICc < daughter_rxn$AICc,
-                                                               1 - 1/(exp((daughter_rxn$AICc - AICc)/2) + 1),
-                                                               1 - exp((AICc - daughter_rxn$AICc)/2)/(exp((AICc - daughter_rxn$AICc)/2) + 1))
-      )
-      
-      parent_rxns <- parent_rxns %>% mutate(likDiff = daughter_rxn$ML - ML)
-      
-      # comparing models using LRT
-      
-      parent_rxns <- rbind(
-        parent_rxns %>% filter(npar == daughter_rxn$npar) %>% mutate(changeP = 1/(exp(likDiff) + 1)), # Alternative parameterization with same degrees of freedom
-        parent_rxns %>% filter(npar < daughter_rxn$npar) %>% mutate(changeP = 1 - pchisq(2*likDiff, daughter_rxn$npar - npar)), # Alternative model is more complex
-        parent_rxns %>% filter(npar > daughter_rxn$npar) %>% mutate(changeP = 1 - pchisq(-2*likDiff, npar - daughter_rxn$npar)) # Alternative model is less complex
-      )
-      
-      model_comparison_list[[i]] <- parent_rxns %>% dplyr::mutate(daughter_rMech = as.character(daughter_rxn$rMech), daughterModel = as.character(daughter_rxn$modelType)) %>%
-        dplyr::select(reaction, daughter_rMech, daughterModel, parent_rMech = rMech, parentModel = modelType, changeAIC, changeP)
-    }
-  }
-  
-  # Multiple hypothesis correction
-  # p-values are analyzed seperately for each daughterModel X parentModel
-  
-  model_comparison_list <- do.call("rbind", model_comparison_list)
-  
-  #tmp -> model_comparison_list
-  
-  # when looking at the effect of 2 regulators, look at the smallest improvement relative to simpler models (this is conservative)
-  model_comparison_list <- rbind(
-    model_comparison_list %>% filter(!(daughterModel == "2+ regulators" & parentModel == "regulator")),
-    model_comparison_list %>% filter(daughterModel == "2+ regulators", parentModel == "regulator") %>% group_by(reaction, daughter_rMech, daughterModel) %>%
-      dplyr::summarize(changeAIC = max(changeAIC), changeP = max(changeP)) %>% mutate(parentModel = "regulator", parent_rMech = "combined_regulators")
-  )
-  
-  # qvalue doesn't play nicely with dplyr, so breaking the whole list into pieces and later reforming it
-  # when looking at "hypothetical metabolites" (governed by principle components), use AICc for model comparison because the large number of fitted parameters
-  # results in an misposed LRT
-  comparison_groups <- model_comparison_list %>% group_by(daughterModel, parentModel) %>% dplyr::summarize(N = n()) %>%
-    dplyr::mutate(metricUsed = ifelse(daughterModel %in% c("hypo met regulator", "hypo met coopertivity"), "changeAIC", "changeP"))
-  comparison_groups$pi0 <- NA; comparison_groups$Nsig <- NA
-  comparison_list <- list()
-  
-  for(i in 1:nrow(comparison_groups)){
-    
-    comparison_subset <- model_comparison_list %>% filter(daughterModel == comparison_groups$daughterModel[i], parentModel == comparison_groups$parentModel[i])
-    qvalue_object <- qvalue(comparison_subset[,comparison_groups$metricUsed[i]] %>% unlist(), pi0.method = "bootstrap")
-    comparison_groups$pi0[i] <- qvalue_object$pi0
-    comparison_subset$Qvalue <- qvalue_object$q
-    
-    comparison_groups$Nsig[i] <- sum(qvalue_object$q < 0.1)
-    
-    comparison_list[[i]] <- comparison_subset
-    
-  }
-  
-  all_models <- do.call("rbind", comparison_list)
-  
-  # Each reaction is assigned a consensus measure of significance - based on the least significant comparison between reaction forms
-  all_models <- all_models %>% group_by(reaction, daughter_rMech, daughterModel) %>% dplyr::summarize(Qvalue = max(Qvalue)) %>%
-    dplyr::select(reaction, rMech = daughter_rMech, modelType = daughterModel, Qvalue)
-  
-  # add back the baseline rMM reaction forms
-  all_models <- rbind(all_models, reaction_info_comparison %>% filter(modelType == "rMM") %>% dplyr::select(reaction, rMech, modelType) %>% dplyr::mutate(Qvalue = NA)) %>% ungroup()
-  
-  signifCO <- data.frame(q_cutoff = c(0.1, 0.001, 0.00001), code = c("*", "**", "***"))
-  
-  all_models$signifCode <- sapply(all_models$Qvalue, function(x){
-    if(is.na(x) | x > signifCO$q_cutoff[1]){
-      ""
-    }else{
-      rev(signifCO$code[x < signifCO$q_cutoff])[1]
-    }
-  })
-  
-  # clean-up reaction naming
-  
-  all_models <- all_models %>% mutate(Name = NA) %>% mutate(Name = ifelse(modelType == "rMM", "Reversible michaelis-menten (default)", Name),
-                                                            Name = ifelse(modelType == "alternative_simple_kinetics", "Convenience kinetics", Name),
-                                                            Name = ifelse(modelType == "irreversible", "Irreversible michaelis-menten", Name))
-  
-  for(i in c(1:nrow(all_models))[is.na(all_models$Name)]){
-    
-    rxn_reg <- regulator_info %>% filter(rMech == all_models$rMech[i]) %>%
-      left_join(data.frame(SubstrateID = names(rxnList_form[[all_models$rMech[i]]]$metNames), Name = unname(rxnList_form[[all_models$rMech[i]]]$metNames)), by = "SubstrateID")
-    
-    subnames <- apply(rxn_reg, 1, function(x){
-      paste(x['Subtype'], ifelse(x['Subtype'] %in% c("cc", "mm"), "activation", "inhibition"), ifelse(x['Hill'] == 0, "(variable hill)", ""), "by", x['Name'])
-    })
-    
-    all_models$Name[i] <- paste(subnames, collapse = " + ")
-  }
-  
-  all_models <- rbind( 
-    all_models %>% filter(!grepl('rmCond', rMech)),
-    all_models %>% filter(grepl('rmCond', rMech)) %>% mutate(Name = sub('$', ' (zero flux / overflow conditions removed)', Name))
-  )
-  
-  manualRegulators <- read.delim('./companionFiles/manual_ComplexRegulation.txt')
-  
-  all_models <- rbind(
-    all_models %>% filter(!(rMech %in% manualRegulators$TechnicalName)),
-    all_models %>% filter(rMech %in% manualRegulators$TechnicalName) %>% dplyr::select(-Name) %>% left_join(manualRegulators %>% dplyr::select(rMech = TechnicalName, Name = DisplayName) %>% unique(), by = "rMech")
-  )
-  
-  all_models <- all_models %>% dplyr::mutate(Name = paste(Name, signifCode),
-                                             Name = gsub('^ ', '', Name),
-                                             Name = gsub('  ', ' ', Name))
-  
-  all_models$FullName <- sapply(all_models$rMech, function(a_mech){
-    rxnList_form[[a_mech]]$reaction
-  })
-  all_models <- all_models %>% mutate(FullName = paste(FullName, Name, sep = " - "))
-  
-  # all_models %>% filter(is.na(Qvalue) | Qvalue < 0.1) %>% arrange(reaction) %>% View()
-  return(all_models)
-  
-}
-
-reactionInfo <- reactionInfo %>% dplyr::select(-form, -modification) %>%
+reactionInfo <- reactionInfo %>% dplyr::select(-form) %>%
   left_join(reaction_signif %>% dplyr::select(-signifCode), by = c("reaction", "rMech"))
 
 ### Base reaction specific information ###
@@ -553,13 +314,16 @@ rxToPW <- rbind(rxToPW[!(rxToPW$pathway %in% minorPW),], unique(otherPWreactions
 
 rxToPW <- rbind(rxToPW, data.frame(unique(rxToPW[,1:3]), pathway = "ALL REACTIONS"))
 
-  
-
 pathwaySet <- sort(table(rxToPW$pathway), decreasing = T)
 pathwaySet <- data.frame(pathway = names(pathwaySet), members = unname(pathwaySet), display = paste(names(pathwaySet), ' (', unname(pathwaySet), ')', sep = ""))
 
 
 #### Generate reaction plots and summaries ####
+
+# For a subset of reactions
+
+all_reactionInfo <- reactionInfo
+reactionInfo <- all_reactionInfo %>% filter(modelType %in% c("rMM", "irreversible", "hypo met regulator") | Qvalue < 0.1)
 
 load("companionFiles/PTcomparison_list.Rdata") # by-gene comparisons of protein and transcript abundance
 
@@ -574,18 +338,18 @@ TRdata <- NULL # Save summary transcriptional resposiveness
 t_start = proc.time()[3]
 
 # flag a few reactions where additional plots are created
-custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0292-act-mm", "r_0962-rm-t_0290-act-mm", "r_0816-rm", "r_0816-rm-t_0461-inh-uncomp", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond",
+custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0290-act-mm", "r_0816-rm", "r_0816-rm-t_0461-inh-uncomp", "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond",
                          "r_0514-im-forward", "r_0514-rm", "r_0916-im-forward", "r_0916-rm", "r_0208-im-forward", "r_0208-rm")
 
-custom_plotted_rxns <- c(custom_plotted_rxns, reactionInfo$rMech[reactionInfo$modification %in% c("", "rmCond")])
+#custom_plotted_rxns <- c(custom_plotted_rxns, reactionInfo$rMech[reactionInfo$modification %in% c("", "rmCond")])
 custom_plotted_rxns <- unique(custom_plotted_rxns)
 
 if(!(all(custom_plotted_rxns %in% reactionInfo$rMech))){stop("Some reaction mechanisms that you want to plot were not located")}
                                                         
 #arxn <- c("r_0214-rm")
 #for(arxn in rxn_subset){
-for(arxn in custom_plotted_rxns){
-#for(arxn in reactionInfo$rMech){
+#for(arxn in custom_plotted_rxns){
+for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -690,6 +454,8 @@ for(arxn in custom_plotted_rxns){
   
 }; cat("\nDone!")
 
+save(list = ls(), file = "tmp.Rdata")
+
 #for(a_name in names(shiny_flux_data)){
 #  a_rxn_file <- shiny_flux_data[[a_name]][[2]]
 #  for(a_plot in names(a_rxn_file)){
@@ -699,15 +465,23 @@ for(arxn in custom_plotted_rxns){
 #  }
 # significant or default reaction forms
 
+rxn_plot_list <- list()
+for(rxn in unique(reactionInfo$reaction)){
+  rxn_plot_list[[rxn]] <- modelComparisonPlots(rxn, reactionInfo, all_reactionInfo)
+}
+
 pathway_plot_list <- list()
 for(pw in pathwaySet$display){
   # iterate through pathways and plot pathway-level figures
   pathway_plot_list[[pw]] <- pathwayPlots(pw)
   }
 
+
 #### Save lists which will be processed by Shiny app ####
 
-save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, file = "shinyapp/shinyData.Rdata")
+load("shinyapp/shinyData.Rdata")
+
+#save(pathwaySet, rxToPW, pathway_plot_list, reactionInfo, all_reactionInfo, file = "shinyapp/shinyData.Rdata")
 
 # generate a minute version of shinyData that will load quickly when the App is being modified
 #reactionInfo <- reactionInfo[1:20,]
@@ -717,7 +491,7 @@ save(pathwaySet, rxToPW, reactionInfo, pathway_plot_list, file = "shinyapp/shiny
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, TRdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, all_reactionInfo, MLdata, TRdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
 save(ELdata, file = "flux_cache/elasticityData.Rdata")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
