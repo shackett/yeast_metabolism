@@ -479,9 +479,7 @@ for(pw in pathwaySet$display){
 
 #### Save lists which will be processed by Shiny app ####
 
-load("shinyapp/shinyData.Rdata")
-
-#save(pathwaySet, rxToPW, pathway_plot_list, reactionInfo, all_reactionInfo, file = "shinyapp/shinyData.Rdata")
+save(pathwaySet, rxToPW, pathway_plot_list, rxn_plot_list, reactionInfo, file = "shinyapp/shinyData.Rdata")
 
 # generate a minute version of shinyData that will load quickly when the App is being modified
 #reactionInfo <- reactionInfo[1:20,]
@@ -542,7 +540,7 @@ validRxnA <- unlist(validRxnA) %>% unname()
 ###
 
 validRxnB <- rxn_fits %>% tbl_df() %>% dplyr::select(rxn, parSpearman) %>% filter(parSpearman > 0.3) %>% left_join(reactionInfo %>% tbl_df() %>% dplyr::select(rxn = rMech, reaction, modification, Qvalue)) %>%
-  filter(!grepl('t_metX', rxn)) %>% filter(is.na(Qvalue) | Qvalue < 1) %>% dplyr::select(reaction) %>% unlist() %>% unname() %>% unique()
+  filter(!grepl('t_metX', rxn)) %>% filter(is.na(Qvalue) | Qvalue < 0.1) %>% dplyr::select(reaction) %>% unlist() %>% unname() %>% unique()
 
 valid_rxns <- union(validRxnA, validRxnB)
 rmCond_rxns <- unique(reactionInfo$reaction[grep('rmCond', reactionInfo$modification)]) # reactions which carry zero flux under some conditions - consider only non-zero reactions
@@ -553,18 +551,36 @@ optimal_rxn_form <- sapply(valid_rxns, function(x){
   if(x %in% rmCond_rxns){
     rx_forms <- rx_forms[grep('rmCond', rx_forms$modification),]
     }
-  rx_forms <- rx_forms %>% dplyr::filter(form != "im")
+  rx_forms <- rx_forms %>% dplyr::filter(modelType %in% c("rMM", "regulator", "coopertivity", "2+ regulators"))
   
-  rx_forms <- rx_forms[grep('t_metX', rx_forms$modification, invert = T),]
-  rx_best_mod <- rx_forms$rMech[!is.na(rx_forms$Qvalue)][which.min(rx_forms$Qvalue[!is.na(rx_forms$Qvalue)])]
-  if(length(rx_best_mod) == 0){
-    rx_forms$rMech[rx_forms$modification == ""]
-  }else if(rx_forms$Qvalue[rx_forms$rMech == rx_best_mod] < 0.05){
-    rx_best_mod
+  # determine whether any regulator is significantly better than rMM
+  bestReg <- rx_forms %>% filter(modelType == "regulator", Qvalue < 0.05) %>% filter(ML == max(ML)) %>%
+    mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1))
+  bestMulti <- rx_forms %>% filter(modelType %in% c("2+ regulators", "coopertivity")) %>% filter(Qvalue < 0.05) %>% filter(ML == max(ML)) %>%
+    mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1))
+  
+  # is the multiple regulation model substantially better than the single regulation model
+  if(nrow(bestReg) == 1 & nrow(bestMulti) == 1){
+    if(1 - 1/(exp((bestMulti$AICc - bestReg$AICc)/2) + 1) < 0.1){
+      bestMulti$rMech
+    }else{
+      bestReg$rMech
+    }
+  }else if(nrow(bestReg) == 1){
+    bestReg$rMech
   }else{
-    rx_forms$rMech[rx_forms$modification %in% c("rmCond", "")]
+    rx_forms$rMech[rx_forms$modelType == "rMM"]
   }
 })
+  
+# when multiple regulatory candidates have similar fits but one is a far better candidate based upon the literature, choose the literature-supported one
+reactionInfo %>% filter(reaction == "r_0962")
+optimal_rxn_form[grep('r_0962-rm', optimal_rxn_form)] <- "r_0962-rm-t_0290-act-mm" # pyruvate kinase activation by F16bisP over citrate inhibition
+reactionInfo %>% filter(reaction == "r_0215") 
+optimal_rxn_form[grep('r_0215-rm', optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra" # aspartate kinase regulation by ultrasensitive inhbition by threonine
+
+
+
 
 ### load manually annotated abbreviation of reaction name and pathway
 
