@@ -580,6 +580,14 @@ optimal_rxn_form[grep('r_0962-rm', optimal_rxn_form)] <- "r_0962-rm-t_0290-act-m
 reactionInfo %>% filter(reaction == "r_0215") 
 optimal_rxn_form[grep('r_0215-rm', optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra" # aspartate kinase regulation by ultrasensitive inhbition by threonine
 
+# remove reactions where major substrates are missing and a high-influence regulator is suggested likely mimicking this missing substrate
+flawed_rxns <- c("r_0990", "r_0888", "r_0534", "r_0988", "r_0032", "r_0510")
+# add several reactions that fail to capture some large aspect of the flux variability
+flawed_rxns <- c(flawed_rxns, "r_0451", "r_0548", "r_0961")
+
+# remove flawed reactions
+optimal_rxn_form <- reactionInfo %>% filter(rMech %in% optimal_rxn_form) %>% filter(!(reaction %in% flawed_rxns)) %>% dplyr::select(rMech) %>% unlist() %>% unname()
+
 
 ### load manually annotated abbreviation of reaction name and pathway
 
@@ -594,11 +602,11 @@ if(!all(valid_rxns %in% fitReactionNames$reaction)){
 
 bestModel <- reactionInfo[reactionInfo$rMech %in% optimal_rxn_form,] %>% dplyr::select(reaction, rMech, modelType)
 
-complexReg <- bestModel %>% filter(!(modelType %in% c("rMM", "regulator"))) %>% select(reaction) %>% unlist() %>% unname()
+complexReg <- bestModel %>% filter(!(modelType %in% c("rMM", "regulator"))) %>% dplyr::select(reaction) %>% unlist() %>% unname()
 addedReg <- reactionInfo %>% filter(modelType == "regulator" & reaction %in% complexReg) %>% filter(!(reaction %in% rmCond_rxns & !grepl('rmCond$', rMech))) %>% group_by(reaction) %>%
   filter(ML == max(ML)) %>% dplyr::select(reaction, rMech, modelType)
 
-allReg <- bestModel %>% filter(modelType != "rMM")%>% select(reaction) %>% unlist() %>% unname()
+allReg <- bestModel %>% filter(modelType != "rMM")%>% dplyr::select(reaction) %>% unlist() %>% unname()
 addRMM <- reactionInfo %>% filter(modelType == "rMM" & reaction %in% allReg) %>% filter(!(reaction %in% rmCond_rxns & !grepl('rmCond$', rMech))) %>%
   dplyr::select(reaction, rMech, modelType)
 
@@ -615,7 +623,7 @@ select_spearman_MMandReg <- all_rxn_fits %>% mutate(modelType = factor(modelType
 
 select_spearman_MMandReg <- select_spearman_MMandReg %>% mutate(rMech = factor(rMech, levels = select_spearman_MMandReg$rMech))
 
-barplot_theme_nox <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), 
+barplot_theme_nox <- theme(text = element_text(size = 25), title = element_text(size = 25), 
                        panel.background = element_rect(fill = "gray92"), legend.position = "top", 
                        axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black", size = 1),
                        axis.text = element_text(color = "black"), axis.text.x = element_blank(),
@@ -655,7 +663,7 @@ barplot_theme_withx <- barplot_theme_nox + theme(axis.text.x = element_text(angl
 
 ggplot(regulation_cum_improvement, aes(x = reaction, y = spearman, fill = modelType)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
   ggtitle('Correlation between measured and predicted flux') +
-  barplot_theme_withx + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
+  barplot_theme_withx + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.2,0.4, 0.6, 0.8,1), limits = c(0,1)) +
   scale_x_discrete(name = "Reactions", expand = c(0,0), breaks = regulation_cum_improvement$reaction, labels = regulation_cum_improvement$abbrev) +
   scale_fill_manual("", values = c("skyblue2", "gold1", "orangered1"), breaks = c("rMM", "cum_regulator", "cum_complex"),
                     label = c("Reversible Michaelis-Menten", "Metabolite Regulator", "Complex Regulation"))
@@ -731,20 +739,15 @@ MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))
 #rxn_fits[rxn_fits$rxn %in% check_rxns,]
 #fraction_flux_deviation[fraction_flux_deviation$rxn %in% check_rxns,]
 
-adequate_fit_optimal_rxn_form <- union(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
+#adequate_fit_optimal_rxn_form <- union(intersect(optimal_rxn_form, fraction_flux_deviation$rxn[fraction_flux_deviation$"Interval Overlap" > 0.5]), intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6]))
+
+# Save reactions where the optimal reaction form has a spearman correlation of > 0.6
+
+adequate_fit_optimal_rxn_form <- intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6])
 
 # when multiple regulatory candidates have similar fits but one is a far better candidate based upon the literature, choose the literature-supported one
 
-adequate_rxn_form_data <- data.frame(rxnForm = adequate_fit_optimal_rxn_form) %>% mutate(reaction = substr(rxnForm, 1, 6)) %>% left_join(fitReactionNames)
-
-# remove reactions where major substrates are missing and a high-influence regulator is suggested likely mimicking this missing substrate
-flawed_rxns <- c("r_0990", "r_0888", "r_0534", "r_0988", "r_0032")
-# add several reactions that fail to capture some large aspect of the flux variability
-flawed_rxns <- c(flawed_rxns, "r_0451", "r_0548", "r_0961")
-
-
-adequate_fit_optimal_rxn_form <- adequate_fit_optimal_rxn_form[!(adequate_rxn_form_data$reaction %in% flawed_rxns)]
-adequate_rxn_form_data <- adequate_rxn_form_data %>% filter(!(reaction %in% flawed_rxns))
+adequate_rxn_form_data <- data.frame(rxnForm = adequate_fit_optimal_rxn_form) %>% mutate(reaction = substr(rxnForm, 1, 6)) %>% left_join(fitReactionNames, by = "reaction")
 
 # check for cases where variable hill coefficient regulation may have been missing
 # check arginosuccinate lyase |- Arginine (r_0207)
@@ -795,7 +798,7 @@ ML_rxn_tall <- ML_rxn_tall %>% mutate(reversibility = ifelse(reversibility == "T
 TypeColors <- c("chartreuse3", "chartreuse", "deepskyblue", "orangered1")
   names(TypeColors) <- levels(ML_rxn_tall$Type)
 
-barplot_facet_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 25, face = "bold"), 
+barplot_facet_theme <- theme(text = element_text(size = 20), title = element_text(size = 25), 
                        panel.background = element_rect(fill = "gray92"), legend.position = "top", 
                        axis.ticks = element_line(color = "black", size = 1),
                        axis.text = element_text(color = "black", size = 20),
@@ -838,13 +841,13 @@ summary(lm(ML_rxn_summary_1, formula = rxn_metabolite ~ reversibility))
 color_key$Figure_BW + 
   geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == "T"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
   geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == "T"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
-ggsave("Figures/MLcolorKey_REV_1.pdf", height = 9.1, width = 10.7)
+ggsave("Figures/MLcolorKey_REV.pdf", height = 9.1, width = 10.7)
 
 # Irreversible
 color_key$Figure_BW + 
   geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == "F"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
   geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == "F"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
-  ggsave("Figures/MLcolorKey_FOR_1.pdf", height = 9.1, width = 10.7)
+  ggsave("Figures/MLcolorKey_FOR.pdf", height = 9.1, width = 10.7)
 
 ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints_1 %>% filter(regulator != 0)
 
@@ -852,7 +855,7 @@ color_key$Figure_Color +
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE") +
   geom_text(data = ML_rxn_ternaryPoints_labels, aes(x = x + 0.05, y = y + 0.05, label = abbrev), color = "WHITE")
-ggsave("Figures/MLcolorKey_1.pdf", height = 9.1, width = 10.7)
+ggsave("Figures/MLcolorKey.pdf", height = 9.1, width = 10.7)
 
 control_layout <- ML_rxn_summary_1 %>% left_join(reactionInfo %>% dplyr::select(rxnForm = rMech, Name)) %>%
   dplyr::select(reaction, reaction.name, abbrev, rxnForm, form = Name, rxn_metabolite, enzyme, regulator, color)
