@@ -1540,6 +1540,20 @@ likViolin <- function(par_likelihood, markovPars){
 
 hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
+  ##### Looking at a hypothetical "omtimal" regulator #####
+  # For each reaction evaluate a hypothetical activator and inhibitor which best explains flux
+  # hypothetical regulators variation is governed by PCs
+  # U is inferred based on draws from gaussian densities
+  # Dt(V) is the principle components of the metabolomics matrix
+  
+  # Return:
+  # Plots:
+  # - Trace of hypothetical regulators relative abundance across conditions
+  # - Metabolites which look most like this trend
+  # - Distribution of hill coefficients (if this is a variable)
+  # Summary:
+  # - Correlation of each metabolite to median RA of hypothetical metabolite  
+  
   #### Generate informative plots showing the metabolic trends which inhibitors or activators of a reaction may follow ####
   
   require(reshape2)
@@ -1612,6 +1626,13 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   ### What measured metabolites most resemble these trends ###
   
   specCorrQuantiles <- t(apply(cor(t(tab_boer[,colnames(tab_boer) %in% colnames(reconstructedDraws)]), t(reconstructedDraws)), 1, function(x){quantile(x, probs = c(0.025, 0.5, 0.975))}))
+  
+  # saving all correlations
+  specCorrQuantiles_all <- cbind(rMech = run_rxn$rxnSummary$listEntry, tab_boer[,colnames(tab_boer) %in% c("SpeciesName", "SpeciesType")], specCorrQuantiles)
+  rownames(specCorrQuantiles_all) <- NULL
+  hypoMetPlots$specCorrQuantiles_all <- specCorrQuantiles_all
+  
+  # only looking at top hits
   specCorrQuantiles <- specCorrQuantiles[order(specCorrQuantiles[,2], decreasing = T),][1:4,]
   
   specCorrQuantiles_m <- melt(t(specCorrQuantiles)); colnames(specCorrQuantiles_m) <- c("Quantile", "variable", "Correlation")

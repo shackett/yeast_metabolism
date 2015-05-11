@@ -334,6 +334,7 @@ fraction_flux_deviation <- NULL
 MLdata <- NULL # Save summary of metabolic leverage
 ELdata <- list() # Save full distribution of elasticities
 TRdata <- NULL # Save summary transcriptional resposiveness
+Hypo_met_candidates <- NULL
 
 t_start = proc.time()[3]
 
@@ -345,7 +346,7 @@ custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-r
 custom_plotted_rxns <- unique(custom_plotted_rxns)
 
 if(!(all(custom_plotted_rxns %in% reactionInfo$rMech))){stop("Some reaction mechanisms that you want to plot were not located")}
-                                                        
+
 #arxn <- c("r_0214-rm")
 #for(arxn in rxn_subset){
 #for(arxn in custom_plotted_rxns){
@@ -408,7 +409,11 @@ for(arxn in reactionInfo$rMech){
   shiny_flux_data[[arxn]]$plotChoices <- append(species_plots, shiny_flux_data[[arxn]]$plotChoices)
   
   if("t_metX" %in% run_rxn$kineticPars$modelName){
-    shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, hypoMetTrend(run_rxn, metSVD, tab_boer))
+    hypo_met_info <- hypoMetTrend(run_rxn, metSVD, tab_boer)
+    
+    Hypo_met_candidates <- rbind(Hypo_met_candidates, hypo_met_info[["specCorrQuantiles_all"]])
+    
+    shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, hypo_met_info[names(hypo_met_info) != "specCorrQuantiles_all"])
   }else if(any(run_rxn$kineticPars$SpeciesType == "hillCoefficient")){
     shiny_flux_data[[arxn]]$plotChoices$Hill <- hillPlot(run_rxn)
     }
@@ -454,8 +459,6 @@ for(arxn in reactionInfo$rMech){
   
 }; cat("\nDone!")
 
-save(list = ls(), file = "tmp.Rdata")
-
 #for(a_name in names(shiny_flux_data)){
 #  a_rxn_file <- shiny_flux_data[[a_name]][[2]]
 #  for(a_plot in names(a_rxn_file)){
@@ -463,13 +466,14 @@ save(list = ls(), file = "tmp.Rdata")
 #    ggsave(file = paste0("tmp/", a_name, "==", a_plot_name, ".pdf"), plot = a_rxn_file[names(a_rxn_file) == a_plot][[1]])
 #    }
 #  }
-# significant or default reaction forms
 
+# Summarize consistency of reaction forms for a single reaction
 rxn_plot_list <- list()
 for(rxn in unique(reactionInfo$reaction)){
   rxn_plot_list[[rxn]] <- modelComparisonPlots(rxn, reactionInfo, all_reactionInfo)
 }
 
+# Summarize consistency of reaction forms for all reactions in a pathway
 pathway_plot_list <- list()
 for(pw in pathwaySet$display){
   # iterate through pathways and plot pathway-level figures
@@ -745,8 +749,6 @@ MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))
 
 adequate_fit_optimal_rxn_form <- intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6])
 
-# when multiple regulatory candidates have similar fits but one is a far better candidate based upon the literature, choose the literature-supported one
-
 adequate_rxn_form_data <- data.frame(rxnForm = adequate_fit_optimal_rxn_form) %>% mutate(reaction = substr(rxnForm, 1, 6)) %>% left_join(fitReactionNames, by = "reaction")
 
 # check for cases where variable hill coefficient regulation may have been missing
@@ -798,7 +800,7 @@ ML_rxn_tall <- ML_rxn_tall %>% mutate(reversibility = ifelse(reversibility == "T
 TypeColors <- c("chartreuse3", "chartreuse", "deepskyblue", "orangered1")
   names(TypeColors) <- levels(ML_rxn_tall$Type)
 
-barplot_facet_theme <- theme(text = element_text(size = 20), title = element_text(size = 25), 
+barplot_facet_theme <- theme(text = element_text(size = 20, face = "plain"), title = element_text(size = 25), 
                        panel.background = element_rect(fill = "gray92"), legend.position = "top", 
                        axis.ticks = element_line(color = "black", size = 1),
                        axis.text = element_text(color = "black", size = 20),
@@ -1121,4 +1123,7 @@ ggplot() + facet_grid(~ pathway, scale = "free_x", space = "free_x") +
   scale_x_discrete(breaks = free_energy_table$reaction, labels = free_energy_table$abbrev)
 ggsave("Figures/reactionDisequilibrium.eps", width = 15, height = 8)
 ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 8)
+
+
+
 
