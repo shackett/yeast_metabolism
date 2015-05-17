@@ -1155,8 +1155,6 @@ yeastRegulation_unfold <- do.call("rbind", yeastRegulation_unfold)
 # If records from multiple sources exist (due to a reaction with multiple E.C. #s), take the best annotated reaction
 yeastRegulation_unfold <- yeastRegulation_unfold %>% group_by(tID, reaction, modtype) %>% arrange(nQual, nQuant) %>% dplyr::slice(1)
 
-# pSig
-
 tested_regulation <- all_reactionInfo %>% filter(modelType == "regulator") %>% tbl_df()
 rmCond_reactions <- unique(tested_regulation$reaction[tested_regulation$ncond != max(tested_regulation$ncond)])
 
@@ -1172,7 +1170,7 @@ tested_regulation <- tested_regulation %>%
 # if multiple models of activaton or inhibition are tested, just look at the best
 tested_regulation <- tested_regulation %>% group_by(reaction, tID, modtype) %>% filter(ML == max(ML))
 
-tested_regulation <- tested_regulation %>% dplyr::select(reaction, tID, modtype, Qvalue, FullName) %>%
+tested_regulation <- tested_regulation %>% dplyr::select(rMech, reaction, tID, modtype, Qvalue, FullName) %>%
   mutate(is_sig = ifelse(Qvalue < 0.05, T, F))
 
 tested_regulation <- tested_regulation %>% left_join(yeastRegulation_unfold, by = c("reaction", "tID", "modtype"))
@@ -1180,25 +1178,86 @@ tested_regulation <- tested_regulation %>% left_join(yeastRegulation_unfold, by 
 tested_regulation <- tested_regulation %>% mutate(yeastStatus = factor(yeastStatus, levels = c("supported in yeast", "noted in yeast", "foreign to yeast"))) %>%
   filter(reaction %in% substr(optimal_rxn_form, 1, 6))
 
+tested_regulation %>% group_by(yeastStatus, nQual) %>% dplyr::summarize(Sig = sum(is_sig), N = n()) %>% View()
 
-
-tested_regulation %>% group_by(is_sig, yeastStatus) %>% dplyr::summarize(counts = n())
-
-  
-  tested_regulation %>% ungroup() %>% arrange(yeastStatus) %>% View()
-
- tested_regulation %>% filter(is.na(yeastStatus)) %>% View()
+#tested_regulation %>% filter(is_sig) %>% group_by(reaction) %>% mutate(sig_weight = 1/n()) %>% group_by(yeastStatus) %>% dplyr::summarize(N = n(), weight = sum(sig_weight))
+#tested_regulation %>% group_by(is_sig, yeastStatus) %>% dplyr::summarize(counts = n())
+#tested_regulation %>% ungroup() %>% arrange(yeastStatus) %>% View()
+#tested_regulation %>% filter(is.na(yeastStatus)) %>% View()
 
 ##### Comparing unsupervised search for hypothetical metabolites to literature-guided search #####
 
+### Fit of hypothetical regulation ###
+
+load("flux_cache/paramCI.Rdata")
+relevant_rxns <- substr(optimal_rxn_form, 1, 6)
+
 Hypo_met_candidates <- Hypo_met_candidates %>% tbl_df() %>% mutate(modelType = ifelse(grepl('act', rMech), 'activator', 'inhibitor')) %>%
-  filter(!grepl('cc$', rMech))
+  filter(!grepl('-cc', rMech)) %>% left_join(reactionInfo %>% dplyr::select(rMech, reaction, ncond, npar, Qvalue), by = "rMech") %>%
+  filter(reaction %in% relevant_rxns) %>%
+  left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman_hypo = parSpearman), by = "rMech")
 
-# filter reactions where hypothetical regulation is n.s.
+# reduce to relevent set for rmCond reactions
 
-Hypo_met_candidates
+rmCond_reactions <- unique(Hypo_met_candidates$reaction[Hypo_met_candidates$ncond != max(Hypo_met_candidates$ncond)])
+
+Hypo_met_candidates <- rbind(
+  Hypo_met_candidates %>% filter(reaction %in% rmCond_reactions, ncond != max(ncond)),
+  Hypo_met_candidates %>% filter(!(reaction %in% rmCond_reactions))
+)
+
+# remove conditions with too few residual degrees of freedom (only CPS with removed conditions is currently caught)
+
+Hypo_met_candidates <- Hypo_met_candidates %>% filter(ncond - npar >= 5)
+
+### Look at just MM regulation 
+
+rMM_baseline <- reactionInfo %>% filter(modelType == "rMM", reaction %in% relevant_rxns)
+rMM_baseline <- rbind(
+  rMM_baseline %>% filter(reaction %in% rmCond_reactions, ncond != max(ncond)),
+  rMM_baseline %>% filter(!(reaction %in% rmCond_reactions))
+)
+rMM_baseline <- rMM_baseline %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman_rmm = parSpearman), by = "rMech")
+
+
+### Compare to real regulators ###
+
+# For each metabolite, we have its correlation to a hypothetical activator or inhibitor, and its role as a literature regulator
+
+evaluated_regulation <-  tested_regulation %>% mutate(modelType = ifelse(modtype == "inh", "inhibitor", "activator")) %>%
+  left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman_meas = parSpearman), by = "rMech") %>%
+  dplyr::select(rMech, reaction, tID, modelType, spearman_meas, is_sig, yeastStatus)
+
+Hypo_lit_compare <- Hypo_met_candidates %>% left_join(evaluated_regulation, 
+  by = c("reaction", "modelType", "SpeciesType" = "tID")
+)
+
+# rather than using the average correlation of a metabolite and hypothetical match, use the upper-bound of correlation in case the hypothetical metabolite's pattern is broad
+
+Hypo_lit_compare <- Hypo_lit_compare %>% dplyr::select(reaction, SpeciesType, SpeciesName, modelType, hypoQ = Qvalue, Corr = get("97.5%"), yeastStatus, is_sig) %>%
+  mutate(yeastStatus = as.character(yeastStatus)) %>%
+  mutate(yeastStatus = ifelse(is.na(yeastStatus), "uncharacterized", yeastStatus)) %>%
+  mutate(yeastStatus = factor(yeastStatus, levels = c("supported in yeast", "noted in yeast", "foreign to yeast", "uncharacterized")))
+
+# rank reactions by significance of hypothetical activator/inhibitor
+Hypo_lit_sig <- Hypo_lit_compare %>% group_by(reaction, modelType) %>% dplyr::summarize(hypoQ = unique(hypoQ)) %>% group_by(reaction) %>%
+  dplyr::summarize(mean_hypoQ = mean(hypoQ)) %>% ungroup() %>% arrange(mean_hypoQ)
+
+
+# x-axis is rank of metabolites association
+Hypo_lit_compare <- Hypo_lit_compare %>% mutate(reaction = factor(reaction, levels = Hypo_lit_sig$reaction)) %>%
+  group_by(reaction, modelType) %>% arrange(desc(Corr)) %>% mutate(fitRank = 1:n())
+
+
+ggplot(Hypo_lit_compare %>% mutate(fill = ifelse(!is.na(is_sig) & is_sig, "YELLOW", "WHITE")), aes(x = fitRank, y = reaction, color = yeastStatus, fill = fill)) + facet_grid(~ modelType) + geom_point(shape = 22) +
+  scale_color_brewer(palette = "Set1") + scale_fill_identity()
+
+ggplot(Hypo_lit_compare %>% filter(fitRank < 20) %>% mutate(fill = ifelse(!is.na(is_sig) & is_sig, "YELLOW", "WHITE")), aes(x = Corr, y = reaction, color = yeastStatus, fill = fill)) + facet_grid(~ modelType) + geom_point(size = 3, shape = 22) +
+  scale_color_brewer(palette = "Set1") + scale_fill_identity() + scale_size_identity()
 
 
 
 
+
+# We initially decided to search for regulation broadly
 
