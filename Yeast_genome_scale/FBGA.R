@@ -493,7 +493,7 @@ save(pathwaySet, rxToPW, pathway_plot_list, rxn_plot_list, reactionInfo, file = 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, all_reactionInfo, MLdata, TRdata, fraction_flux_deviation, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, all_reactionInfo, MLdata, TRdata, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
 save(ELdata, file = "flux_cache/elasticityData.Rdata")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
@@ -1123,6 +1123,81 @@ ggplot() + facet_grid(~ pathway, scale = "free_x", space = "free_x") +
   scale_x_discrete(breaks = free_energy_table$reaction, labels = free_energy_table$abbrev)
 ggsave("Figures/reactionDisequilibrium.eps", width = 15, height = 8)
 ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 8)
+
+##### Identify canonical yeast regulation, versus non-canonical but also tested regulation #####
+# focusing on regulation by single metabolites
+
+all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
+
+# categorize regulation into three classes:
+# supported in yeast (isYeast & nQual >= 5)
+# noted in yeast (isYeast & nQual >= 1)
+# foreign to yeast (tID-reactions pair not seen in yeast)
+
+yeastRegulation <- all_affinities %>% tbl_df() %>% filter(speciesType == "regulator") %>%
+  mutate(yeastStatus = ifelse(isYeast & nQual >= 5, "supported in yeast", NA),
+         yeastStatus = ifelse(is.na(yeastStatus) & isYeast & nQual >= 1, "noted in yeast", yeastStatus))
+
+non_yeastRegulation <- yeastRegulation %>% filter(!isYeast) %>% anti_join(yeastRegulation %>% filter(isYeast), by = c("tID", "reactions")) %>%
+  mutate(yeastStatus = "foreign to yeast")
+
+yeastRegulation <- rbind(yeastRegulation %>% filter(isYeast), non_yeastRegulation)
+
+# expand collapsed notation
+yeastRegulation_unfold <- apply(yeastRegulation, 1, function(x){
+  x <- unlist(x)
+  
+  cbind(expand.grid(tID = strsplit(x['tID'], split = '/')[[1]], reaction = strsplit(x['reactions'], split = '/')[[1]], stringsAsFactors = F),
+        t(x[c('yeastStatus', 'modtype', 'nQuant', 'nQual')]))
+})
+yeastRegulation_unfold <- do.call("rbind", yeastRegulation_unfold)
+
+# If records from multiple sources exist (due to a reaction with multiple E.C. #s), take the best annotated reaction
+yeastRegulation_unfold <- yeastRegulation_unfold %>% group_by(tID, reaction, modtype) %>% arrange(nQual, nQuant) %>% dplyr::slice(1)
+
+# pSig
+
+tested_regulation <- all_reactionInfo %>% filter(modelType == "regulator") %>% tbl_df()
+rmCond_reactions <- unique(tested_regulation$reaction[tested_regulation$ncond != max(tested_regulation$ncond)])
+
+tested_regulation <- rbind(tested_regulation %>% filter(!(reaction %in% rmCond_reactions)),
+      tested_regulation %>% filter(reaction %in% rmCond_reactions) %>% filter(ncond != max(ncond))
+)
+
+tested_regulation <- tested_regulation %>%
+  mutate(modtype = ifelse(grepl('-inh-', modification), 'inh', 'act'),
+         tID = regmatches(modification, regexpr('t_[0-9]{4}', modification))
+)
+
+# if multiple models of activaton or inhibition are tested, just look at the best
+tested_regulation <- tested_regulation %>% group_by(reaction, tID, modtype) %>% filter(ML == max(ML))
+
+tested_regulation <- tested_regulation %>% dplyr::select(reaction, tID, modtype, Qvalue, FullName) %>%
+  mutate(is_sig = ifelse(Qvalue < 0.05, T, F))
+
+tested_regulation <- tested_regulation %>% left_join(yeastRegulation_unfold, by = c("reaction", "tID", "modtype"))
+
+tested_regulation <- tested_regulation %>% mutate(yeastStatus = factor(yeastStatus, levels = c("supported in yeast", "noted in yeast", "foreign to yeast"))) %>%
+  filter(reaction %in% substr(optimal_rxn_form, 1, 6))
+
+
+
+tested_regulation %>% group_by(is_sig, yeastStatus) %>% dplyr::summarize(counts = n())
+
+  
+  tested_regulation %>% ungroup() %>% arrange(yeastStatus) %>% View()
+
+ tested_regulation %>% filter(is.na(yeastStatus)) %>% View()
+
+##### Comparing unsupervised search for hypothetical metabolites to literature-guided search #####
+
+Hypo_met_candidates <- Hypo_met_candidates %>% tbl_df() %>% mutate(modelType = ifelse(grepl('act', rMech), 'activator', 'inhibitor')) %>%
+  filter(!grepl('cc$', rMech))
+
+# filter reactions where hypothetical regulation is n.s.
+
+Hypo_met_candidates
+
 
 
 
