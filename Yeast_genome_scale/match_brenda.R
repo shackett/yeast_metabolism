@@ -3,7 +3,7 @@ options(stringsAsFactors=FALSE)
 
 
 if (file.exists('./flux_cache/brendamat.tsv')){
-  brendamat <- read.table('./flux_cache/brendamat.tsv',sep='\t')
+  brendamat <- read.delim('./flux_cache/brendamat.tsv')
 } else {
   
   # Import all lists from Brenda, put it together to a large matrix with ligandID - name
@@ -32,26 +32,32 @@ if (file.exists('./flux_cache/brendamat.tsv')){
   
   # match chebis
   
-  brendamat$chebi <- sapply(brendamat$name,MatchName2Chebi)
+  brendamat$chebi <- sapply(brendamat$name,MatchName2Chebi) # this could be sped-up
   
-  write.table(brendamat,'./flux_cache/brendamat.tsv',sep='\t')
+  write.table(brendamat,'./flux_cache/brendamat.tsv',sep='\t', quote = F)
 }
 
 
 ### Match brenda and tIDs
 
-pairRows <- MatchLists(listTID$CHEBI,brendamat$chebi)
-pairRows <- rbind(MatchLists(listTID$fuzCHEBI,sapply(brendamat$chebi,Chebi2fuzchebi)),pairRows)
+# match chebi-chebi
+# match fuzzy_chebi-fuzzy_chebi (a more degenerate match)
 
-pairRows <- unique(pairRows)
+brendamat <- brendamat %>% tbl_df() %>% filter(!is.na(chebi)) %>% rowwise() %>%
+  mutate(fuzchebi = Chebi2fuzchebi(chebi))
 
-matchTIDbrenda <- data.frame(cbind(listTID$SpeciesType[pairRows[,1]],brendamat$ligandID[pairRows[,2]]))
+# join BRENDA compound IDs with model CHEBI IDs
+chebi_match <- listTID %>% inner_join(brendamat, by = c("CHEBI" = "chebi"))
+fuz_chebi_match <- listTID %>% inner_join(brendamat, by = c("fuzCHEBI" = "fuzchebi"))
 
-matchTIDbrenda <- unique(matchTIDbrenda)
-colnames(matchTIDbrenda) <- c('TID','ligandID')
+matchTIDbrenda <- rbind(
+  chebi_match %>% dplyr::select(SpeciesType, ligandID),
+  fuz_chebi_match %>% dplyr::select(SpeciesType, ligandID)
+) %>% unique() %>% dplyr::rename(TID = SpeciesType)
 
-namesMatch <- cbind(sapply(matchTIDbrenda$TID,function(x){paste(listTID$SpeciesName[ listTID$SpeciesType %in% x],collapse='; ')}),
-                    sapply(matchTIDbrenda$ligandID,function(x){paste(brendamat$name[ brendamat$ligandID %in% x],collapse='; ')}))
+# Sanity check : name associated with TID is similar to BRENDA association
+#namesMatch <- cbind(sapply(matchTIDbrenda$TID,function(x){paste(listTID$SpeciesName[ listTID$SpeciesType %in% x],collapse='; ')}),
+#                    sapply(matchTIDbrenda$ligandID,function(x){paste(brendamat$name[ brendamat$ligandID %in% x],collapse='; ')}))
 
 
 ### Make a activator/inhibitor summary table
@@ -81,7 +87,6 @@ modTable <- data.frame(rxn=character(),
 
 all_activators <- read.delim('companionFiles/all_activators.tsv',sep="\t",header = TRUE)
 all_ki <- read.delim('companionFiles/all_ki.tsv',sep="\t",header = TRUE)
-
 
 all_brenda <- data.frame(EC = character(),
                          name = character(),
@@ -124,8 +129,11 @@ rm(all_activators,all_ki)
 
 if(!file.exists("flux_cache/metaboliteAffinities.tsv")){
   
-  modifiers_summary <- all_brenda[,list(log10mean = mean(log10(k), na.rm = T), sdOflog10 = sd(log10(k), na.rm = T), nQuant = length(k[!is.na(k)]), nQual = length(k)), by = c("EC", "tID", "modtype", "isYeast")]
-  modifiers_summary <- modifiers_summary[!(modifiers_summary$nQual == 1 & modifiers_summary$nQuant == 0),]
+  modifiers_summary <- all_brenda[,list(log10mean = mean(log10(k), na.rm = T),
+                                        sdOflog10 = sd(log10(k), na.rm = T),
+                                        nQuant = length(k[!is.na(k)]),
+                                        nQual = length(k)), by = c("EC", "tID", "modtype", "isYeast")]
+  # modifiers_summary <- modifiers_summary[!(modifiers_summary$nQual == 1 & modifiers_summary$nQuant == 0),]
   
   #ggplot(melt(table(modifiers_summary$nQuant)), aes(x = Var1, y = log2(value))) + geom_point()
   
@@ -153,53 +161,31 @@ if(!file.exists("flux_cache/metaboliteAffinities.tsv")){
   
   all_affinities <- all_affinities[all_affinities$reactions != "",]
   
-  write.table(all_affinities, "flux_cache/metaboliteAffinities.tsv", sep = "\t")
+  write.table(all_affinities, "flux_cache/metaboliteAffinities.tsv", row.names = F, sep = "\t", quote = F)
+  
 }else{
   all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
 }
 
-###########translate get all genes for all reactions to EC numbers
-# load Map between reactions to EC numbers
-# (from match_compounds)
+#### Specify specific regulatory interactions ####
+# only look at modifiers measured in yeast or with 2+ qualitative measurements in other organisms
 
-#modTable <- all_affinities[all_affinities$speciesType == "regulator",]
+all_brenda <- all_affinities %>% filter(isYeast | nQual > 1)
 
-all_brenda_red <- all_brenda[,names(all_brenda) %in% c('EC', 'ligandID', 'modtype', 'k'),with = F]
-all_brenda_red <- unique(all_brenda_red[!is.na(all_brenda_red$ligandID),]) # reduce BRENDA data to unique EC-ligandID-modtype
+# split up degenerate species and reactions
+all_brenda <- lapply(1:nrow(all_brenda), function(x){
+  cbind(
+    all_brenda %>% dplyr::slice(x) %>% dplyr::select(EC, modtype),
+    expand.grid(tID = strsplit(all_brenda$tID[x], split = '/')[[1]],
+                rxn = strsplit(all_brenda$reactions[x], split = '/')[[1]])
+  )
+})
 
-rID_EC <- NULL
-for(x in c(1:nrow(rxnParYeast))[!is.na(rxnParYeast$EC)]){
-  rID_EC <- rbind(rID_EC, data.frame(rxn = rxnParYeast$ReactionID[x], EC = unlist(strsplit(rxnParYeast[x,'EC'],',')[[1]])))
-}
+all_brenda <- do.call("rbind", all_brenda)
 
-modTable <- merge.data.frame(all_brenda_red, rID_EC)
+all_brenda <- all_brenda %>% group_by(tID) %>% left_join(listTID %>% dplyr::select(tID = SpeciesType, chebi = CHEBI, name = SpeciesName), by = "tID") %>%
+  mutate(hill = 1, subtype = NA, origin = "Brenda")
 
-for (ligID in unique(modTable$ligandID[!is.na(modTable$ligandID)])){
-  tIDs <- paste(matchTIDbrenda$TID[ matchTIDbrenda$ligandID == ligID],collapse='/')
-  if (tIDs != ''){
-    modTable$tID[ modTable$ligandID == ligID] <- tIDs
-  }
-}
+all_brenda <- all_brenda %>% dplyr::select(EC, rxn, tID, chebi, name, hill, modtype, subtype, origin) %>% unique()
 
-modTable <- data.table(modTable)
-modTable[,validNum := ifelse(length(k) >= 2 | length(k[!is.na(k)]) >= 1, TRUE, FALSE), by = c("modtype", "rxn", "tID")]
-modTable <- modTable[validNum == TRUE,,] # only look at modifiers with 2+ qualitative measurements or 1+ quantitative ones
-
-# Split the entries with more then 1 tID, such that each entry only has 1 tID
-
-for(idx in grep('/',modTable$tID)){
-  splittID <- strsplit(modTable$tID[idx],'/')[[1]]
-  modTable$tID[idx] <- splittID[1]
-  tModLines <- modTable[rep(idx,length(splittID)-1),]
-  tModLines$tID <- splittID[-1]
-  modTable <- rbind(modTable,tModLines)
-}
-
-modTable$origin <- 'Brenda'
-modTable$hill <- 1
-modTable$subtype = NA
-modTable$chebi = NA; modTable$chebi[!is.na(modTable$tID)] <- listTID$CHEBI[chmatch(modTable$tID[!is.na(modTable$tID)], listTID$SpeciesType)]
-modTable$name = Chebi2ModelName(modTable$chebi)
-modTable <- modTable[!is.na(modTable$tID), list(EC, rxn, tID, chebi, name, hill, modtype, subtype, origin),]
-
-modTable <- as.data.frame(modTable) #coerce back to a data.frame for compatability issues
+modTable <- as.data.frame(all_brenda) #coerce back to a data.frame for compatability issues

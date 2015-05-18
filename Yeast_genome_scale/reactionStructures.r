@@ -867,6 +867,24 @@ rct_s2p$Subtype[ rct_s2p$Stoi > 0] <- 'product'
 
 #write.table(rct_s2p[,c("ReactionID","Reversible","Type","SubstrateID","BindingSite","Stoi","Hill")],file='./Python/testinp.tsv',row.names=F,col.names=F,sep='\t')
 
+isModMeas <- function(modTable){
+  
+  ### check if the modulators were measured in either the relative or absolute abundance ###
+  
+  relMeas <- tab_boer$SpeciesType[is.na(tab_boer$concConv)]
+  absMeas <- tab_boer$SpeciesType[!is.na(tab_boer$concConv)]
+  
+  rfil <- !is.na(modTable$tID)
+  for (tIDs in unique(modTable$tID[rfil])){
+    tfil <- rfil & modTable$tID == tIDs
+    tIDs <- splilistTID(tIDs,'/')[[1]]
+    if (any(tIDs %in% absMeas)){ meas <- 'abs'
+    } else if (any(tIDs %in% relMeas)){ meas <- 'rel'
+    } else {meas <- 'not'}
+    modTable$measured[tfil] <- meas
+  }
+  return(modTable)
+}
 
 #### Add modifiers ####
 
@@ -891,38 +909,19 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
   
   source('./match_brenda.R')
   
-  ### check if the modulators were measured in either the relative or absolute abundance ###
-  isModMeas <- function(modTable){
-    
-    relMeas <- tab_boer$SpeciesType[is.na(tab_boer$concConv)]
-    absMeas <- tab_boer$SpeciesType[!is.na(tab_boer$concConv)]
-    
-    rfil <- !is.na(modTable$tID)
-    for (tIDs in unique(modTable$tID[rfil])){
-      tfil <- rfil & modTable$tID == tIDs
-      tIDs <- splilistTID(tIDs,'/')[[1]]
-      if (any(tIDs %in% absMeas)){ meas <- 'abs'
-      } else if (any(tIDs %in% relMeas)){ meas <- 'rel'
-      } else {meas <- 'not'}
-      modTable$measured[tfil] <- meas
-    }
-    return(modTable)
-  }
-  
-  
   ### Determine  the chemical similarity of BRENDA compunds as well others compunds to identify possible competitive inhibitors ###
   # make a cosimilarity matrix between all compounds in the model
   
   ## make a distmatAPt of all compounds: ##
   # use atom pair tanimoto similarity (APt)
-
+  
   if(file.exists("flux_cache/distmatAPt.rda")){
     load("flux_cache/distmatAPt.rda")
-    }else{
-      dummy <- cmp.cluster(db=apset, cutoff=0, save.distances="flux_cache/distmatAPt.rda")
-      load("flux_cache/distmatAPt.rda")
-      rm(dummy)
-      }
+  }else{
+    dummy <- cmp.cluster(db=apset, cutoff=0, save.distances="flux_cache/distmatAPt.rda")
+    load("flux_cache/distmatAPt.rda")
+    rm(dummy)
+  }
   
   
   distmatAPt <- 1-distmat
@@ -955,7 +954,7 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
       chebis <- as.character(listTID$CHEBI[ listTID$SpeciesType %in% tIDs & distfil ])
       
       if (length(chebis) != 0 & length(rxnChebis) != 0){
-        c
+        
         tmp <- abs(apply(expand.grid(chebis,rxnChebis), 1, function(x){distmatAPt[x[1],x[2]]}))
         sim <- max(tmp,na.rm=T)
         matchChebi <- rxnChebis[floor((which.max(tmp)-1) / length(chebis))+1]
@@ -1020,8 +1019,6 @@ if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metabol
   #save(list = ls(), file = "tmp.Rdata")
   
   modTable <- rbind(modTable,tmpTable)
-  
-  
   
   # check if measured
   
@@ -1536,6 +1533,27 @@ for (x in names(rxnForms)){
 }
 
 ## Write all the rate laws with all Brenda modifications and all possible inhibitor modes
+
+# all BRENDA regulators (tID), measured or not for all reactions in reconstruction (rxn)
+allo_table <- modTable %>% dplyr::select(rxn, name, tID, modtype, subtype, measured, origin, hill) %>%
+  filter(origin == "Brenda")
+
+## Supplement with gold standard regulation and manually added regulation if not already present
+
+gs_regulation <- read.table('companionFiles/gold_standard_regulation.txt', sep = "\t", header = T)
+
+gs_regulation <- gs_regulation %>% isModMeas() %>% mutate(modtype = ifelse(type == "inhibitor", "inh", "act"),
+                                                          origin = "gold standard", hill = 1, subtype = NA) %>%
+  dplyr::select(rxn = reaction, name = regulator, tID, modtype, subtype, measured, origin, hill)
+
+gs_regulation %>% dplyr::select(rxn, tID, modtype) %>% anti_join(allo_table) %>% left_join(gs_regulation)
+
+
+gs_regulation %>% filter(reaction 
+
+
+
+
 rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T,T)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
@@ -1564,12 +1582,12 @@ for (x in names(rxnForms)){
 listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX", SpeciesName = "Hypothetical metabolite X", CHEBI = "", KEGG = "", CHEBIname = "", fuzCHEBI = ""))
 
 ## Add additional regulators of interest from manual_modTable
-manualRegulators <- read.table('companionFiles/manual_modTable.txt', sep = "\t", header = T)
-rxnForms <- Mod2reactionEq(manualRegulators,'rm',F)
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-rm(rxnForms)
+#manualRegulators <- read.table('companionFiles/manual_modTable.txt', sep = "\t", header = T)
+#rxnForms <- Mod2reactionEq(manualRegulators,'rm',F)
+#for (x in names(rxnForms)){
+#  rxnf[[x]] <- rxnForms[[x]]
+#}
+#rm(rxnForms)
 
 ## Supervised verification of multiple regulators or isoenzyme specific kinetics/regulation
 manualRegulators <- read.table('companionFiles/manual_ComplexRegulation.txt', sep = "\t", header = T)
@@ -1586,6 +1604,7 @@ if(file.exists("flux_cache/paramCI.Rdata")){
   library(dplyr)
   library(tidyr)
   
+  # pull out single/highly-suggestive single regulators
   significant_regulation <- reactionInfo %>% filter(!is.na(Qvalue) & Qvalue < 0.1) %>%
     filter(rMech %in% Brenda_rxn_forms) %>% dplyr::select(rxn = reaction, modification) %>%
     separate(modification, into = c("tID", "modtype", "subtype"), sep = "-")  %>%
@@ -1605,9 +1624,9 @@ save(rxnf,file='./flux_cache/rxnf_formulametab.rdata')
 
 # output latex reaction forms
 
-outtab <- character(length(rxnf))
-for (i in 1:length(rxnf)){
-  outtab[i] <- paste(names(rxnf)[i],' ---- $',rxnf[[i]]$rxnFormTex,'$\\newline',sep='')
-}
-write.table(outtab,file='./latexformula.txt',sep='\t',row.names=F,col.names=F)
+#outtab <- character(length(rxnf))
+#for (i in 1:length(rxnf)){
+#  outtab[i] <- paste(names(rxnf)[i],' ---- $',rxnf[[i]]$rxnFormTex,'$\\newline',sep='')
+#}
+#write.table(outtab,file='./latexformula.txt',sep='\t',row.names=F,col.names=F)
 
