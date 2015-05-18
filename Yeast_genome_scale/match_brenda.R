@@ -168,9 +168,13 @@ if(!file.exists("flux_cache/metaboliteAffinities.tsv")){
 }
 
 #### Specify specific regulatory interactions ####
-# only look at modifiers measured in yeast or with 2+ qualitative measurements in other organisms
+# look are regulators that either:
+# reported in yeast
+# activator reported 1+ times (there are far fewer activators than inhibitors)
+# inhibitor reported 2+ times
 
-all_brenda <- all_affinities %>% filter(isYeast | nQual > 1)
+all_brenda <- all_affinities %>% filter(isYeast | modtype == "act" | nQual > 1,
+                                        speciesType == "regulator")
 
 # split up degenerate species and reactions
 all_brenda <- lapply(1:nrow(all_brenda), function(x){

@@ -867,6 +867,17 @@ rct_s2p$Subtype[ rct_s2p$Stoi > 0] <- 'product'
 
 #write.table(rct_s2p[,c("ReactionID","Reversible","Type","SubstrateID","BindingSite","Stoi","Hill")],file='./Python/testinp.tsv',row.names=F,col.names=F,sep='\t')
 
+  splilistTID <- function(input,split){
+    unname(sapply(input,function(x){strsplit(as.character(x),split,fixed = TRUE)}))
+  }
+  
+  Chebi2ModelName <- function(chebis){
+    # only works for model Chebis
+    unname(sapply(chebis,function(x){
+      listTID$SpeciesName[listTID$CHEBI == x & !is.na(listTID$CHEBI)][1]
+    }))
+  }
+
 isModMeas <- function(modTable){
   
   ### check if the modulators were measured in either the relative or absolute abundance ###
@@ -891,17 +902,6 @@ isModMeas <- function(modTable){
 if (file.exists('./flux_cache/modTable.tsv') & file.exists('./flux_cache/metaboliteAffinities.tsv')){
   modTable <- read.delim('./flux_cache/modTable.tsv',header=T,sep='\t')
 } else {
-  
-  splilistTID <- function(input,split){
-    unname(sapply(input,function(x){strsplit(as.character(x),split,fixed = TRUE)}))
-  }
-  
-  Chebi2ModelName <- function(chebis){
-    # only works for model Chebis
-    unname(sapply(chebis,function(x){
-      listTID$SpeciesName[listTID$CHEBI == x & !is.na(listTID$CHEBI)][1]
-    }))
-  }
   
   # 1) match rID-EC-BRENDA annotated modifiers - inhibitors and activators
   # 2) generate a table with summary of kinetic parameters - Km and Ki
@@ -1221,7 +1221,7 @@ Mod2reactionEq <- function(modTable,formMode, allInhMods=F, allActMods=F){
     modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','subtype','hill')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
   } else {
     modTab <- modTable[!is.na(modTable$measured) & !duplicated(modTable[,c('rxn','tID','modtype','hill')]) & !(modTable$measured == 'not') & modTable$rxn %in% rct_s2p$ReactionID,]
-    modTab[modTab$modtype == 'inh','subtype'] <- 'uncompetitive'
+    modTab$subtype[modTab$modtype == 'inh'] <- 'uncompetitive'
     tmodTab <- modTab[modTab$modtype == 'inh' & !is.na(modTab$SimMatch),]
     tmodTab$subtype <- 'noncompetitive'
     modTab <- rbind(modTab,tmodTab)
@@ -1535,7 +1535,7 @@ for (x in names(rxnForms)){
 ## Write all the rate laws with all Brenda modifications and all possible inhibitor modes
 
 # all BRENDA regulators (tID), measured or not for all reactions in reconstruction (rxn)
-allo_table <- modTable %>% dplyr::select(rxn, name, tID, modtype, subtype, measured, origin, hill) %>%
+allo_table <- modTable %>% dplyr::select(rxn, name, tID, modtype, subtype, measured, origin, hill, SimMatch) %>%
   filter(origin == "Brenda")
 
 ## Supplement with gold standard regulation and manually added regulation if not already present
@@ -1546,22 +1546,19 @@ gs_regulation <- gs_regulation %>% isModMeas() %>% mutate(modtype = ifelse(type 
                                                           origin = "gold standard", hill = 1, subtype = NA) %>%
   dplyr::select(rxn = reaction, name = regulator, tID, modtype, subtype, measured, origin, hill)
 
-gs_regulation %>% dplyr::select(rxn, tID, modtype) %>% anti_join(allo_table) %>% left_join(gs_regulation)
+gs_missing <- gs_regulation %>% dplyr::select(rxn, tID, modtype) %>% anti_join(allo_table, by = c("rxn", "tID", "modtype")) %>% left_join(gs_regulation, by = c("rxn", "tID", "modtype")) %>%
+  mutate(SimMatch = NA)
 
+allo_table <- rbind(allo_table, gs_missing)
 
-gs_regulation %>% filter(reaction 
-
-
-
-
-rxnForms <- Mod2reactionEq(modTable[ modTable$origin == 'Brenda', ],'rm',T,T)
+rxnForms <- Mod2reactionEq(allo_table,'rm',T,T)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 Brenda_rxn_forms <- names(rxnForms) # save 
 
 ## for allosteric regulators, also look at a varaible hill coefficient
-alloModTable <- modTable[ modTable$origin == 'Brenda', ]
+alloModTable <- allo_table
 alloModTable$hill <- 0
 rxnForms <- Mod2reactionEq(alloModTable,'rm',F,T)
 for (x in names(rxnForms)){
@@ -1598,11 +1595,16 @@ for (x in names(rxnForms)){
 rm(rxnForms)
 
 ## Look at pairwise interactions involving regulators that improve fit x all BRENDA
-if(file.exists("flux_cache/paramCI.Rdata")){
+
+if(add_pairwise_regulation & file.exists("flux_cache/paramCI.Rdata")){
+
+  # pull down already evaluated regulation
   load("flux_cache/paramCI.Rdata")
 
   library(dplyr)
   library(tidyr)
+  
+  reactionInfo %>% filter(!is.na(Qvalue) & Qvalue < 0.1) %>% filter(modelType == "regulator") %>% filter(!(rMech %in% Brenda_rxn_forms))
   
   # pull out single/highly-suggestive single regulators
   significant_regulation <- reactionInfo %>% filter(!is.na(Qvalue) & Qvalue < 0.1) %>%
@@ -1610,7 +1612,7 @@ if(file.exists("flux_cache/paramCI.Rdata")){
     separate(modification, into = c("tID", "modtype", "subtype"), sep = "-")  %>%
     mutate(subtype = gsub('comp', 'competitive', subtype))
   
-  rxnForms <- Mod2reactionEq_pairwise(significant_regulation, modTable[ modTable$origin == 'Brenda', ],'rm',allInhMods=T, allActMods=T)
+  rxnForms <- Mod2reactionEq_pairwise(significant_regulation, allo_table,'rm',allInhMods=T, allActMods=T)
   
   for (x in names(rxnForms)){
     rxnf[[x]] <- rxnForms[[x]]

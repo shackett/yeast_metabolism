@@ -34,6 +34,8 @@ n_c <- nrow(chemostatInfo)
 ### Additional reactions with BRENDA activators and inhibitors
 ### To search for novel allosteric modifiers in an unsupervised manner - allow for reaction with extensions an abundance profile that is not specified a priori
 
+add_pairwise_regulation <- F
+
 if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
   source("reactionStructures.R")
 }else{
