@@ -13,6 +13,7 @@ library(coda) # for assessing mcmc convergence
 library(dplyr)
 source("FBA_lib.R")
 library(scales) # for quick % conversion
+library(tidyr)
 
 options(stringsAsFactors = FALSE)
 
@@ -34,7 +35,7 @@ n_c <- nrow(chemostatInfo)
 ### Additional reactions with BRENDA activators and inhibitors
 ### To search for novel allosteric modifiers in an unsupervised manner - allow for reaction with extensions an abundance profile that is not specified a priori
 
-add_pairwise_regulation <- F
+add_pairwise_regulation <- T
 
 if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
   source("reactionStructures.R")
@@ -515,7 +516,7 @@ if(sum(!(reactionInfo$rMech %in% rxn_fits$rxn)) != 0){
   reactionInfo <- reactionInfo %>% dplyr::filter(rMech %in% rxn_fits$rxn)
   }
 
-
+#reactionInfo %>% filter(modelType %in% "hypo met regulator") %>% filter(grepl('act', rMech)) %>% View()
 
 ### Determine which reactions to follow-up on based upon either
 ## A) Contain all substrates
@@ -581,10 +582,10 @@ optimal_rxn_form <- sapply(valid_rxns, function(x){
 })
   
 # when multiple regulatory candidates have similar fits but one is a far better candidate based upon the literature, choose the literature-supported one
-reactionInfo %>% filter(reaction == "r_0962")
-optimal_rxn_form[grep('r_0962-rm', optimal_rxn_form)] <- "r_0962-rm-t_0290-act-mm" # pyruvate kinase activation by F16bisP over citrate inhibition
-reactionInfo %>% filter(reaction == "r_0215") 
-optimal_rxn_form[grep('r_0215-rm', optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra" # aspartate kinase regulation by ultrasensitive inhbition by threonine
+#reactionInfo %>% filter(reaction == "r_0962")
+#optimal_rxn_form[grep('r_0962-rm', optimal_rxn_form)] <- "r_0962-rm-t_0290-act-mm" # pyruvate kinase activation by F16bisP over citrate inhibition
+#reactionInfo %>% filter(reaction == "r_0215") 
+#optimal_rxn_form[grep('r_0215-rm', optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra" # aspartate kinase regulation by ultrasensitive inhbition by threonine
 
 # remove reactions where major substrates are missing and a high-influence regulator is suggested likely mimicking this missing substrate
 flawed_rxns <- c("r_0990", "r_0888", "r_0534", "r_0988", "r_0032", "r_0510")
@@ -752,6 +753,262 @@ MLdata <- data.table(MLdata %>% filter(conditions == "NATURAL"))
 adequate_fit_optimal_rxn_form <- intersect(optimal_rxn_form, rxn_fits$rxn[rxn_fits$parSpearman > 0.6])
 
 adequate_rxn_form_data <- data.frame(rxnForm = adequate_fit_optimal_rxn_form) %>% mutate(reaction = substr(rxnForm, 1, 6)) %>% left_join(fitReactionNames, by = "reaction")
+
+# classify mode of regulation, based on location of metabolite regulator(s) relative to reaction
+
+mode_of_regulation <- function(adequate_rxn_form_data){
+  
+  require(dplyr)
+  require(tidyr)
+  require(igraph)
+  
+    ### For each reaction with 1+ significant regulators ###
+  # use reaction stoichiometry and flux carried to assign regulation at feed-back, feed-forward or cross-pathway
+  # return classify, number of steps, 
+  
+  regulated_rxns <- reactionInfo %>% filter(rMech %in% adequate_fit_optimal_rxn_form) %>% filter(modelType %in% c("regulator", "coopertivity")) %>%
+    dplyr::select(reaction) %>% unlist() %>% unname()
+  
+  all_regulation <- reactionInfo %>% group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup() %>%
+    filter(reaction %in% regulated_rxns, modelType %in% c("regulator", "coopertivity"), Qvalue < 0.05)
+    
+  # update for double regulation
+    
+  all_regulation <- all_regulation %>% mutate(specie = substr(modification, 1, 6)) %>%
+    dplyr::select(FullName, reaction, specie, ncond, npar, ML) %>%
+    group_by(reaction, specie) %>% filter(ML == min(ML)) %>% ungroup()
+    
+    
+  ### Form a bipartite graph using reaction stoichiometry and measured flux ###
+  
+  load("flux_cache/yeast_stoi_directed.Rdata") # S: metabolism stoichiometry
+  load("flux_cache/reconstructionWithCustom.Rdata") # metabolic reconstruction files
+  carried_flux <- read.table("flux_cache/fluxCarriedSimple.tsv", header = T, sep = "\t")
+  
+  # reactions which carry flux and direction
+  Used_reactions <- data.frame(reaction = rownames(carried_flux), F = rowSums(carried_flux > 0), R = rowSums(carried_flux < 0)) %>% gather("Dir", "N", -reaction) %>% tbl_df() %>% 
+    filter(N != 0) %>% mutate(name = paste(reaction, Dir, sep = "_")) %>%
+    filter(grepl('r_[0-9]{4}', reaction))
+  
+  S_carried <- S[,colnames(S) %in% Used_reactions$name]
+  colnames(S_carried) <- sub('_[FR]$', '', colnames(S_carried))
+  S_carried <- S_carried[rowSums(S_carried != 0) != 0,] # metabolites which are utilized
+  
+  
+  # common species and cofactors should only be included when they have a biosynthetic (not-energetic) role 
+  # remove protons, water, NAD(P)(H) and ammonium
+  S_carried <- S_carried[!(rownames(S_carried) %in% corrFile$SpeciesID[grep('^H\\+|^H2O|^NAD|^ammonium|carbon dioxide|bicarbonate', corrFile$SpeciesName)]),] 
+  
+  rxnFile_fluxcarried <- rxnFile %>% filter(ReactionID %in% colnames(S_carried)) %>% tbl_df()
+  
+  s_ATP <- corrFile$SpeciesID[grep('^ATP ', corrFile$SpeciesName)]
+  s_ADP <- corrFile$SpeciesID[grep('^ADP ', corrFile$SpeciesName)]
+  s_AMP <- corrFile$SpeciesID[grep('^AMP ', corrFile$SpeciesName)]
+  s_Pi <- corrFile$SpeciesID[grep('^phosphate ', corrFile$SpeciesName)]  
+  s_PPi <- corrFile$SpeciesID[grep('^diphosphate ', corrFile$SpeciesName)]  
+  
+  # Cofactor use is limited to reactions where either the adenylate group is donated or the primary role is interconverting nucleotides
+  
+  # Reactions including ATP + ADP|AMP
+  ATP_cofactors <- rxnFile_fluxcarried %>% group_by(ReactionID) %>% filter(any(s_ATP %in% Metabolite) &
+                                                            (any(s_ADP %in% Metabolite)|any(s_AMP %in% Metabolite))) %>%
+    dplyr::select(ReactionID) %>% unlist() %>% unname() %>% unique()
+  
+  # Rescue reaction with more 3+ N[MDT]P
+  ATP_convert <- rxnFile_fluxcarried %>% group_by(ReactionID) %>% dplyr::summarize(N_Nuc = length(grep('[ACGTU][MDT]P ', MetName))) %>% filter(N_Nuc >= 3) %>%
+    dplyr::select(ReactionID) %>% unlist() %>% unname()
+  
+  ATP_cofactors <- setdiff(ATP_cofactors, ATP_convert)
+  
+  # For reactions in ATP_cofactors, zero out ATP, ADP, AMP, Pi, PPi
+  
+  S_carried[rownames(S_carried) %in% c(s_ATP, s_ADP, s_AMP, s_Pi, s_PPi), colnames(S_carried) %in% ATP_cofactors] <- 0
+  
+  # remove phosphate as a substrate from reactions, will allow it to serve as a feedback inhibitor w/o
+  # forming a complete path
+  # pyrophosphate should behave as it is directed into phosphate
+  
+  S_carried[rownames(S_carried) %in% s_Pi,][S_carried[rownames(S_carried) %in% s_Pi,] < 0] <- 0
+  
+  # Also deal with transamination reactions - look for reactions where Gln -> Glu or Glu -> aKG
+  # rescue nitrogen fixing reactions GS and GD based on inclusion of ammonium
+  
+  s_Glu <- corrFile$SpeciesID[grep('^L-glutamate ', corrFile$SpeciesName)]
+  s_Gln <- corrFile$SpeciesID[grep('^L-glutamine ', corrFile$SpeciesName)]  
+  s_aKG <- corrFile$SpeciesID[grep('^2-oxoglutarate', corrFile$SpeciesName)]  
+  s_amm <- corrFile$SpeciesID[grep('^ammonium', corrFile$SpeciesName)]  
+  
+  transamination_reactions <- rxnFile_fluxcarried %>% group_by(ReactionID) %>%
+    filter(any(s_Glu %in% Metabolite) &
+             (any(s_Gln %in% Metabolite)|any(s_aKG %in% Metabolite)) &
+             !any(s_amm %in% Metabolite)) %>% 
+    dplyr::select(ReactionID) %>% unlist() %>% unname() %>% unique()
+  
+  S_carried[rownames(S_carried) %in% c(s_Glu, s_Gln, s_aKG), transamination_reactions] <- 0
+  
+  # Look at annoation of pathways, to help detect some distant interactions
+  
+  rxn_pathways <- read.delim("./flux_cache/reactionPathways.tsv") %>%
+    filter(reactionID %in% colnames(S_carried))
+  
+  rxn_pathways <- lapply(1:nrow(rxn_pathways), function(i){
+    pathway <- strsplit(rxn_pathways$pathway[i], split = '__')[[1]]
+    if(length(pathway) != 0){
+      data.frame(reactionID = rxn_pathways$reactionID[i], pathway)
+    }
+  })
+  
+  rxn_pathways <- do.call("rbind", rxn_pathways)
+  
+  # Counts by pathway
+  pathway_summary <- rxn_pathways %>% group_by(pathway) %>% dplyr::summarize(N = n()) %>% arrange(desc(N)) %>%
+    filter(N > 5 & N < 30)
+  # Total reactions
+  N_reaction_nodes <- length(unique(colnames(S_carried)))
+  
+  rxn_pathways <- rxn_pathways %>% filter(pathway %in% pathway_summary$pathway)
+  
+  
+  ### convert stoichiometric matrix to a directed bipartite graph ###
+  
+  S_graph <- melt(t(S_carried), varnames = c("source", "sink"))
+  S_graph <- S_graph[S_graph$value != 0,] # reactions - metabolite links
+  S_graph$source <- as.character(S_graph$source); S_graph$sink <- as.character(S_graph$sink) # class coercion
+  
+  S_graph[S_graph$value < 0,] <- S_graph[S_graph$value < 0,][,c(2,1,3)] # for consumed metabolites, invert direction
+  S_graph <- S_graph[,-3]
+  
+  S_igraph <- graph.data.frame(S_graph)
+  V(S_igraph)$type <- ifelse(substr(V(S_igraph)$name, 1, 1) == "r", "reaction", "metabolite")
+  
+  sort(betweenness(S_igraph), decreasing = T)[1:4] # check which species have the highest betweeness to see if they should be dealt with
+  #rxnFile_fluxcarried %>% group_by(ReactionID) %>% filter("s_0066" %in% Metabolite) %>% View()
+
+  # Look at length of shortest path from all regulated reactions to all measured metabolites
+  
+  # Calculate paths from reaction to regulator and from regulator to reaction to define feedbacks and feedforward
+  
+  all_reg_paths <- lapply(1:nrow(all_regulation), function(i){
+    
+    met_sID <- corrFile$SpeciesID[corrFile$SpeciesType == all_regulation$specie[i]]
+    met_sID <- met_sID[met_sID %in% V(S_igraph)$name]
+    
+    if(length(met_sID) == 0){
+      print("external met")
+      return(list())
+      
+    }
+    if(all_regulation$reaction[i] %in% V(S_igraph)$name == F){
+      print("excluded reaction - shouldnt happen")
+      return(list())
+      
+    }
+    
+    regulation_path <- list()
+    
+    # distance rID to sID
+    feedbacks <- get.all.shortest.paths(S_igraph,
+                                        which(V(S_igraph)$name == all_regulation$reaction[i]),
+                                        which(V(S_igraph)$name %in% met_sID))$res
+    if(length(feedbacks) != 0){
+      feedbacks <- melt(feedbacks)
+      colnames(feedbacks) <- c("node", "path")
+      feedbacks$pairnum <- i
+      feedbacks$type <- "feedback"
+      regulation_path <- rbind(regulation_path, feedbacks)
+    }
+    
+    # distance sID to rID
+    feedforward <- get.all.shortest.paths(S_igraph,
+                                          which(V(S_igraph)$name %in% met_sID),
+                                          which(V(S_igraph)$name == all_regulation$reaction[i]))$res
+    if(length(feedforward) != 0){
+      feedforward <- melt(feedforward)
+      colnames(feedforward) <- c("node", "path")
+      feedforward$pairnum <- i
+      feedforward$type <- "feedforward"
+      regulation_path <- rbind(regulation_path, feedforward)
+    }
+   
+    return(regulation_path)
+    
+  })
+  
+  all_reg_paths <- do.call("rbind", all_reg_paths) %>% tbl_df()
+  
+  vertex_info <- data.frame(node = 1:length(V(S_igraph)$name), name = V(S_igraph)$name, spec_type = V(S_igraph)$type, in_degree = unname(igraph::degree(S_igraph, mode = "in")),
+                            out_degree = unname(igraph::degree(S_igraph, mode = "out")),
+                            betweenness = unname(betweenness(S_igraph)))
+  
+  # Do not classify distant regulation as feedback/feedfoward, if there are many bifurcations
+  vertex_info[,c('in_degree', 'out_degree')][vertex_info[,c('in_degree', 'out_degree')] == 0] <- 1
+  
+  pathway_class_call <- all_reg_paths %>% left_join(vertex_info, by = "node") %>% filter(spec_type == "reaction") %>%
+    dplyr::select(path, pairnum, type, reactionID = name) %>% left_join(rxn_pathways, by = "reactionID")
+  
+  pathway_class_call <- pathway_class_call %>% group_by(path, pairnum, type, pathway) %>% dplyr::summarize(Npathway = n()) %>%
+    left_join(pathway_class_call %>% group_by(path, pairnum, type) %>% dplyr::summarize(N = length(unique(reactionID))), by = c("path", "pairnum", "type"))
+  
+  # For each pathway, look for overrepresentation of a single pathway term
+  pathway_class_call <- pathway_class_call %>% filter(!is.na(pathway)) 
+  
+  pathway_class_call <- pathway_class_call %>% mutate(pathway_match = ifelse((Npathway >= 0.5*N & N >= 5) | (Npathway == N & N >= 3), T, F))
+  pathway_class_call <- pathway_class_call %>% group_by(path, pairnum, type) %>% dplyr::summarize(pathway_match = ifelse(any(pathway_match), T, F))
+  
+  # Also call paths where the reaction is very close to the regulator in the pruned network #
+  
+  regulator_betweenness <- all_reg_paths %>% left_join(vertex_info, by = "node") %>% filter(spec_type == "metabolite") %>%
+    group_by(path, pairnum, type) %>% dplyr::summarize(met_betweenness = ifelse(type[1] == "feedback", last(betweenness), first(betweenness)))
+  
+  reg_class_call <- all_reg_paths %>% left_join(vertex_info, by = "node") %>% filter(spec_type == "reaction") %>%
+    group_by(path, pairnum, type) %>% dplyr::summarize(N_steps = n(),
+                                                       split_prod = ifelse(type[1] == "feedback", prod(1/in_degree),  prod(1/out_degree))) %>%
+    left_join(regulator_betweenness, by = c("path", "pairnum", "type")) %>%
+    left_join(pathway_class_call, by = c("path", "pairnum", "type")) %>%
+    group_by(pairnum) %>% filter(N_steps == min(N_steps), split_prod == max(split_prod)) %>% dplyr::slice(1) %>%
+    mutate(type = ifelse(split_prod < 0.2 & !pathway_match, "cross-pathway", type))
+    
+  # By regulation mechanism, regulation type call:
+  all_regulation_type <- all_regulation %>% mutate(pairnum = 1:n()) %>% left_join(reg_class_call %>% dplyr::select(pairnum, type), by = "pairnum") %>%
+    mutate(type = ifelse(is.na(type), 'cross-pathway', type))
+  
+  # By reaction, regulation type call:
+  
+  reaction_regulation_type <- all_regulation_type %>% mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1)) %>%
+    group_by(reaction) %>% mutate(AICc_min = min(AICc)) %>%
+    mutate(relLik = exp((AICc_min - AICc)/2)) %>%
+    group_by(reaction, type) %>% dplyr::summarize(relLik = sum(relLik)) %>%
+    group_by(reaction) %>% mutate(relLik = relLik / sum(relLik))
+  
+  # reaction_regulation_type %>% group_by(type) %>% dplyr::summarize(type_contribution = sum(relLik))
+  
+  ### output ###
+  output <- list()
+  
+  output[["all_regulation_type"]] <- all_regulation_type
+  output[["reaction_regulation_type"]] <- reaction_regulation_type
+  
+  return(output)
+  
+  #reaction_regulation_type %>% spread("type", "relLik", fill = 0) %>% View()
+  
+  # look at distance between regulator and metabolites
+  #reg_dist <- reg_class_call %>% group_by(type, N_steps) %>% dplyr::summarize(N = n())
+  #max_reg_dist_density <- reg_dist %>% group_by(N_steps) %>% summarize(Nmax = sum(N))
+  
+  #S_dist <- data.frame(type = "overall", N_steps = 1:length(path.length.hist(S_igraph)$res), N = path.length.hist(S_igraph)$res) %>%
+  #  dplyr::mutate(N_norm = N * max(max_reg_dist_density$Nmax)/max(N))
+  
+  #ggplot(reg_dist, aes(x = N_steps, y = N, fill = type)) + geom_bar(stat = "identity") +
+  #  geom_line(data = S_dist, aes(x = N_steps, y = N_norm))
+  
+  # look at centrality of regulators
+  
+  #ggplot(reg_class_call, aes(x = met_betweenness, fill = type)) + geom_bar()
+  #qplot(betweenness(S_igraph))
+  
+}
+  
 
 # check for cases where variable hill coefficient regulation may have been missing
 # check arginosuccinate lyase |- Arginine (r_0207)
@@ -1130,11 +1387,18 @@ ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 8)
 # focusing on regulation by single metabolites
 
 all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
+relevant_rxns <- substr(optimal_rxn_form, 1, 6)
 
 # categorize regulation into three classes:
 # supported in yeast (isYeast & nQual >= 5)
 # noted in yeast (isYeast & nQual >= 1)
 # foreign to yeast (tID-reactions pair not seen in yeast)
+
+all_affinities %>% tbl_df() %>% filter(speciesType == "regulator")
+
+
+
+
 
 yeastRegulation <- all_affinities %>% tbl_df() %>% filter(speciesType == "regulator") %>%
   mutate(yeastStatus = ifelse(isYeast & nQual >= 5, "supported in yeast", NA),
@@ -1157,17 +1421,13 @@ yeastRegulation_unfold <- do.call("rbind", yeastRegulation_unfold)
 # If records from multiple sources exist (due to a reaction with multiple E.C. #s), take the best annotated reaction
 yeastRegulation_unfold <- yeastRegulation_unfold %>% group_by(tID, reaction, modtype) %>% arrange(nQual, nQuant) %>% dplyr::slice(1)
 
-tested_regulation <- all_reactionInfo %>% filter(modelType == "regulator") %>% tbl_df()
-rmCond_reactions <- unique(tested_regulation$reaction[tested_regulation$ncond != max(tested_regulation$ncond)])
+# remove rmCond reactions, only look at non-pathological reactions (fit reasonably using some tested model)
 
-tested_regulation <- rbind(tested_regulation %>% filter(!(reaction %in% rmCond_reactions)),
-      tested_regulation %>% filter(reaction %in% rmCond_reactions) %>% filter(ncond != max(ncond))
-)
-
-tested_regulation <- tested_regulation %>%
+tested_regulation <- all_reactionInfo %>% filter(modelType == "regulator") %>% tbl_df() %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup() %>%
+  filter(reaction %in% relevant_rxns) %>%
   mutate(modtype = ifelse(grepl('-inh-', modification), 'inh', 'act'),
-         tID = regmatches(modification, regexpr('t_[0-9]{4}', modification))
-)
+         tID = regmatches(modification, regexpr('t_[0-9]{4}', modification)))
 
 # if multiple models of activaton or inhibition are tested, just look at the best
 tested_regulation <- tested_regulation %>% group_by(reaction, tID, modtype) %>% filter(ML == max(ML))
@@ -1177,9 +1437,8 @@ tested_regulation <- tested_regulation %>% dplyr::select(rMech, reaction, tID, m
 
 tested_regulation <- tested_regulation %>% left_join(yeastRegulation_unfold, by = c("reaction", "tID", "modtype"))
 
-tested_regulation <- tested_regulation %>% mutate(yeastStatus = factor(yeastStatus, levels = c("supported in yeast", "noted in yeast", "foreign to yeast"))) %>%
-  filter(reaction %in% substr(optimal_rxn_form, 1, 6))
-
+tested_regulation <- tested_regulation %>% mutate(yeastStatus = factor(yeastStatus, levels = c("supported in yeast", "noted in yeast", "foreign to yeast")))
+  
 tested_regulation %>% group_by(yeastStatus, nQual) %>% dplyr::summarize(Sig = sum(is_sig), N = n()) %>% View()
 
 #tested_regulation %>% filter(is_sig) %>% group_by(reaction) %>% mutate(sig_weight = 1/n()) %>% group_by(yeastStatus) %>% dplyr::summarize(N = n(), weight = sum(sig_weight))
@@ -1192,7 +1451,64 @@ tested_regulation %>% group_by(yeastStatus, nQual) %>% dplyr::summarize(Sig = su
 ### Fit of hypothetical regulation ###
 
 load("flux_cache/paramCI.Rdata")
-relevant_rxns <- substr(optimal_rxn_form, 1, 6)
+
+# remove reactions where the search for hypothetical regualtion is nearly underdetermined
+relevant_rxns <- setdiff(relevant_rxns, reactionInfo %>% filter(ncond - npar < 5, modelType == "hypo met regulator") %>%
+                           dplyr::select(reaction) %>% unlist() %>% unname() %>% unique())
+
+
+
+### Compare hypothetical regulator to significant regulators to rMM ###
+
+Hypo_met_compare <- reactionInfo %>% tbl_df() %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman = parSpearman), by = "rMech") %>%
+  filter(reaction %in% relevant_rxns, modelType %in% c("rMM", "regulator", "hypo met regulator"))
+
+rmCond_reactions <- unique(Hypo_met_compare$reaction[Hypo_met_compare$ncond != max(Hypo_met_compare$ncond)])
+
+Hypo_met_compare <- rbind(
+  Hypo_met_compare %>% filter(reaction %in% rmCond_reactions, ncond != max(ncond)),
+  Hypo_met_compare %>% filter(!(reaction %in% rmCond_reactions))
+)
+
+# sort reactions by the significance of hypothetical regulators
+Hypo_met_ranking <- Hypo_met_compare %>% filter(modelType == "hypo met regulator") %>% left_join(
+  Hypo_met_compare %>% filter(modelType == "rMM") %>% dplyr::select(reaction, rmm_ML = ML), by = "reaction"
+)
+
+# look at the hypothetical regulator (activation or inhibition) that is strongest
+Hypo_met_ranking <- Hypo_met_ranking %>% group_by(reaction) %>% filter(Qvalue == min(Qvalue), (ML - rmm_ML) == max(ML - rmm_ML)) %>%
+  ungroup() %>% mutate(Qvalue = round(Qvalue, 4), ML_diff = ML - rmm_ML) %>% dplyr::arrange(desc(Qvalue), ML_diff)
+
+Hypo_y_rMM <- Hypo_met_compare %>% filter(modelType == "rMM" | rMech %in% Hypo_met_ranking$rMech) %>%
+  mutate(reaction = factor(reaction, levels = Hypo_met_ranking$reaction),
+         modelType = factor(modelType, levels = c("rMM", "hypo met regulator")))
+
+Hypo_y_rMM <- Hypo_y_rMM %>% mutate(spearman = ifelse(spearman < 0, 0, spearman)) %>% dplyr::group_by(reaction) %>%
+  mutate(spearman = ifelse(modelType == "hypo met regulator", spearman - spearman[modelType == "rMM"], spearman))
+
+# pull out regulation by ascertained metabolites as well
+
+measured_spear <- Hypo_met_compare %>% filter(modelType == "regulator", Qvalue < 0.05) %>% dplyr::select(rMech, reaction, spearman) %>%
+  mutate(reaction = factor(reaction, levels = Hypo_met_ranking$reaction))
+
+# Is the hypothetical regulator much more likely than any ascertained metabolite
+
+Hypo_met_compare <- Hypo_met_compare %>% filter(modelType %in% c("regulator", "hypo met regulator")) %>%
+  filter(Qvalue < 0.05) %>%
+  dplyr::select(rMech, reaction, ncond, npar, ML, modelType) %>%
+  mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1)) %>%
+  group_by(reaction, modelType) %>% dplyr::summarize(AICc = min(AICc)) %>%
+  spread(modelType, AICc)
+
+
+# This method is underpowered particularly for reactions when the 
+# literature can help us discriminate between quantitatively similar metabolites
+
+ggplot(Hypo_y_rMM, aes(x = reaction, y = spearman)) + geom_bar(aes(fill = modelType), width = 0.75, stat = "identity", position = "stack") +
+  geom_point(data = measured_spear) + coord_flip(ylim = c(0,1)) + scale_y_continuous("Spearman Correlation")
+
+
+
 
 Hypo_met_candidates <- Hypo_met_candidates %>% tbl_df() %>% mutate(modelType = ifelse(grepl('act', rMech), 'activator', 'inhibitor')) %>%
   filter(!grepl('-cc', rMech)) %>% left_join(reactionInfo %>% dplyr::select(rMech, reaction, ncond, npar, Qvalue), by = "rMech") %>%
