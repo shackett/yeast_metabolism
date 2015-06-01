@@ -72,7 +72,7 @@ rmCondList <- data.frame() # reactions which will be duplicated with some condit
 
 
 # valid reactions have well-constrained, non-zero fluxes and measured enzymes (a reaction possessing a minimal complement of metabolites is enforced in reactionStructures.R -> rxnf"
-valid_rxns <- grep('r_[0-9]{4}', rownames(flux_summary$total_flux_cast), value = T) # valid flux
+valid_rxns <- grep('r_unit[0-9]{4}', rownames(flux_summary$total_flux_cast), value = T) # valid flux
 valid_rxns <- valid_rxns[valid_rxns %in% rxn_enzyme_measured$reaction[rxn_enzyme_measured$measured]] # valid proteins
 valid_rxns <- valid_rxns[valid_rxns %in% unique(substr(names(rxnf), 1, 6))] # valid metabolites
 
@@ -515,6 +515,213 @@ reversibleRx <- read.table("companionFiles/reversibleRx.tsv", header = T)
 if(sum(!(reactionInfo$rMech %in% rxn_fits$rxn)) != 0){
   reactionInfo <- reactionInfo %>% dplyr::filter(rMech %in% rxn_fits$rxn)
   }
+
+group_regulation <- function(reactionInfo, rxnList_form){
+  
+  # core functions
+  require(dplyr)
+  require(igraph)
+  # color scheme
+  require(colorRamps)
+  require(wesanderson)
+  
+  # for each reaction with significant regulation (or combinatorial regulation) attempt to group
+  # regulators into sets with a similar role
+  
+  all_reg <- reactionInfo %>% tbl_df() %>% filter(modelType %in% c("regulator", "2+ regulators", "coopertivity")) %>% filter(Qvalue < 0.05) %>%
+    dplyr::select(reaction, rMech, ncond, Qvalue)
+  
+  # for each reaction consider a metabolite as an activator and inhibitor seperately
+  
+  regulator_trends <- lapply(all_reg$rMech, function(x){
+    
+    regs <- rxnList_form[[x]]$rxnFormData %>% filter(Type %in% c("inh", "act")) %>% dplyr::select(SubstrateID, Type)
+    regs <- regs %>% left_join(data.frame(SubstrateID = names(rxnList_form[[x]]$metNames), commonName = unname(rxnList_form[[x]]$metNames)), by = "SubstrateID")
+      
+    rxnList_form[[x]]$rxnMet[,colnames(rxnList_form[[x]]$rxnMet) %in% regs$SubstrateID, drop = F] %>%
+      mutate(condition = rownames(.)) %>% gather("SubstrateID", "RA", -condition, convert = T) %>%
+      left_join(regs, by = "SubstrateID") %>% mutate(rMech = x)
+    
+  })
+  regulator_trends <- do.call("rbind", regulator_trends)
+  
+  regulator_trends <- regulator_trends %>% left_join(all_reg, by = "rMech")
+  
+  reg_ID <- regulator_trends %>% dplyr::select(SubstrateID, Type, commonName) %>% unique() %>%
+    mutate(tID_type = paste(SubstrateID, Type, sep = "-"),
+           common_type = paste(commonName, ifelse(Type == "act", "+", "-")))
+  
+  # prepare outputs
+  # plot showing the seperation of regulators into sets with a similar role
+  reaction_graphs <- list()
+  
+  
+  for(a_rxn in unique(all_reg$reaction)){
+    # r_0466
+    # r_0042
+    # r_0962
+    
+    reaction_regulators <- regulator_trends %>% filter(reaction %in% a_rxn) %>% tbl_df()
+    
+    for(a_cond_subset in unique(reaction_regulators$ncond)){
+      
+      # If both a reduced set of conditions and the full set are considered 
+      
+      relevant_regulators <- reaction_regulators %>% filter(ncond == a_cond_subset)
+      
+      # look at correlation of regulators
+      
+      regulator_info <- relevant_regulators %>% dplyr::select(SubstrateID, Type) %>% unique() %>% mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
+      
+      # flip inhibitors, so that anticorrelated activators and inhibitors are grouped
+      reg_RA <- relevant_regulators %>% left_join(regulator_info, by = c("SubstrateID", "Type")) %>%
+        dplyr::select(tID_type, Type, condition, RA) %>%
+        unique() %>% mutate(RA = ifelse(Type == "inh", -1*RA, RA)) %>%
+        spread("condition", "RA") %>% as.data.frame(.)
+      rownames(reg_RA) <- reg_RA$tID_type
+      reg_RA <- reg_RA[,!(colnames(reg_RA) %in% c('tID_type', 'Type'))]
+      
+      reg_corr <- as.matrix(reg_RA) %>% t() %>% cor(.)
+      
+      # look at interaction of pairwise regulators
+      
+      regulator_overlap <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type) %>% unique() %>%
+        group_by(rMech) %>% filter(n() != 1) %>% mutate(overlap = T) %>% spread("rMech", "overlap", fill = F) %>%
+        as.data.frame()
+      
+      rownames(regulator_overlap) <- paste(regulator_overlap$SubstrateID, regulator_overlap$Type, sep = "-")
+      regulator_overlap <- regulator_overlap[,-c(1:2)]
+      
+      regulator_overlap <- as.matrix(regulator_overlap*1) %*% as.matrix(t(regulator_overlap*1))
+      regulator_overlap <- regulator_overlap > 0
+      
+      # two types of edges between metabolites
+      # - joint regulation
+      # - equivalent regulation
+      
+      interaction_edges <- regulator_overlap
+      interaction_edges[upper.tri(interaction_edges, diag = T)] <- NA
+      interaction_edges <- interaction_edges %>% as.data.frame() %>% mutate(tID_type_1 = rownames(.)) %>%
+        gather("tID_type_2", "interact", -tID_type_1, convert = T) %>% filter(interact & !is.na(interact))
+      
+      corr_edges <- reg_corr
+      corr_edges[upper.tri(reg_corr, diag = T)] <- NA
+      corr_edges <- corr_edges %>% as.data.frame() %>% mutate(tID_type_1 = rownames(.)) %>%
+        gather("tID_type_2", "interact", -tID_type_1, convert = T) %>% filter(!is.na(interact))
+      
+      edge_weights <- rbind(corr_edges %>% mutate(interact = interact - 0.3, type = "corr"),
+                            interaction_edges %>% mutate(interact = -1 * interact, type = "pairwise")) %>%
+        group_by(tID_type_1, tID_type_2) %>% dplyr::summarize(weight = sum(interact))
+      
+      edge_color_key <- data.frame(weight = seq(min(range(edge_weights$weight)), max(range(edge_weights$weight)), length.out = 1000),
+                                   color = green2red(1000))
+      
+      edge_weights <- edge_weights %>% rowwise() %>% mutate(color = edge_color_key$color[which.min(abs(edge_color_key$weight - weight))])
+      
+      ### We want to seperate the fully-connected graph into subgraphs with high weight
+      
+      all_species <- rownames(reg_corr)
+      nclus <- length(all_species)
+      clus_assignments <- data.frame(ID = all_species, cluster = 1:nclus)
+      
+      has_converged = F
+      iter <- 0
+      old_score <- -Inf
+        
+      while(!has_converged){
+        
+        iter <- iter + 1
+        
+        for(i in 1:nclus){
+          current_assignments <- clus_assignments %>% slice(-i)
+          cluster_score <- rbind(current_assignments, data.frame(ID = all_species[i], cluster = 1:nclus)) %>%
+            group_by(cluster) %>% summarize(score = sum(edge_weights$weight[edge_weights$tID_type_1 %in% ID & edge_weights$tID_type_2 %in% ID]) + 0)
+          clus_assignments$cluster[i] <- cluster_score$cluster[which.max(cluster_score$score)]
+        }
+        
+        current_score = clus_assignments %>% group_by(cluster) %>% summarize(score = sum(edge_weights$weight[edge_weights$tID_type_1 %in% ID & edge_weights$tID_type_2 %in% ID]) + 0) %>%
+          dplyr::select(score) %>% unlist() %>% unname() %>% sum()
+        
+        if(old_score >= current_score){
+          has_converged <- T
+        }else{
+          old_score <- current_score
+        }
+      }
+      
+      inter_cluster_interactions <- interaction_edges %>% rowwise() %>% mutate(C1 = clus_assignments$cluster[clus_assignments$ID == tID_type_1],
+                                                                               C2 = clus_assignments$cluster[clus_assignments$ID == tID_type_2]) %>%
+        dplyr::select(C1, C2) %>% ungroup() %>% group_by(C1, C2) %>%
+        dplyr::summarize(count = n()) %>%
+        spread(C1, count, fill = 0) %>% as.data.frame()
+      rownames(inter_cluster_interactions) <- inter_cluster_interactions[,1]
+      inter_cluster_interactions <- inter_cluster_interactions[,-1]
+      
+      inter_cluster_interactions[lower.tri(inter_cluster_interactions)] <- inter_cluster_interactions[lower.tri(inter_cluster_interactions)] + t(inter_cluster_interactions)[lower.tri(inter_cluster_interactions)]
+      inter_cluster_interactions[upper.tri(inter_cluster_interactions)] <- NA
+      
+      possible_interactions <- clus_assignments %>% group_by(cluster) %>% summarize(N = n()) %>%
+        as.data.frame()
+      rownames(possible_interactions) <- possible_interactions$cluster
+      possible_interactions <- possible_interactions[,-1, drop = F]
+      possible_interactions <- as.matrix(possible_interactions)
+        
+      possible_pairs <- possible_interactions %*% t(possible_interactions)
+      diag(possible_pairs) <- possible_interactions * (possible_interactions-1)
+      possible_pairs[upper.tri(possible_pairs)] <- NA
+      
+      interaction_freq <- inter_cluster_interactions/possible_pairs %>% as.data.frame()
+      interaction_freq$C1 <- rownames(interaction_freq)
+      interaction_freq <- interaction_freq %>% gather(C2, freq, -C1) %>% filter(!is.na(freq), C1 != C2) %>%
+        mutate(logic_connection = ifelse(freq > 0.1, "AND", "OR"))
+      
+      
+      ### Optional printing of graph layout ###
+      pruned_subnetworks <- edge_weights %>% ungroup() %>% group_by(tID_type_1) %>% filter(tID_type_2 %in% 
+      clus_assignments$ID[clus_assignments$cluster == clus_assignments$cluster[clus_assignments$ID == tID_type_1[1]]])
+      
+      pruned_subnetworks <- pruned_subnetworks %>% full_join(
+        interaction_edges %>% mutate(width = 3) %>% dplyr::select(-interact),
+        by = c("tID_type_1", "tID_type_2")) %>%
+        mutate(width = ifelse(is.na(width), 0.6, width),
+               weight = ifelse(is.na(weight), 0, weight),
+               color = ifelse(is.na(color), "grey50", color))
+      
+      
+      reg_connection_graph <- graph.data.frame(pruned_subnetworks, directed = F)
+      
+      reg_significance <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type, Qvalue) %>% unique() %>%
+        group_by(rMech) %>% filter(n() == 1) %>% group_by(SubstrateID, Type) %>%
+        dplyr::summarize(Qvalue = min(Qvalue)) %>%
+        mutate(nlog10q = -1*log10(Qvalue)) %>% 
+        ungroup() %>% mutate(size = nlog10q / min(nlog10q)) %>%
+        mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
+      
+      vertex_match <- data.frame(tID_type = V(reg_connection_graph)$name) %>% left_join(reg_ID, by = "tID_type") %>%
+        left_join(reg_significance, by = "tID_type") %>%
+        mutate(size = ifelse(is.na(size), 0.5, size))
+     
+      V(reg_connection_graph)$label <- vertex_match$common_type
+      V(reg_connection_graph)$size <- vertex_match$size*10
+      
+      plot(reg_connection_graph)
+      
+      tkplot(reg_connection_graph)
+      
+      l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight)
+      plot.igraph(reg_connection_graph, layout = l, size = 2)
+      
+      
+      
+    }
+    
+    
+  }
+  
+  
+  }
+
+
 
 #reactionInfo %>% filter(modelType %in% "hypo met regulator") %>% filter(grepl('act', rMech)) %>% View()
 
@@ -1394,32 +1601,23 @@ relevant_rxns <- substr(optimal_rxn_form, 1, 6)
 # noted in yeast (isYeast & nQual >= 1)
 # foreign to yeast (tID-reactions pair not seen in yeast)
 
-all_affinities %>% tbl_df() %>% filter(speciesType == "regulator")
+all_regulation <- all_affinities %>% tbl_df() %>% filter(speciesType == "regulator")
 
-
-
-
-
-yeastRegulation <- all_affinities %>% tbl_df() %>% filter(speciesType == "regulator") %>%
-  mutate(yeastStatus = ifelse(isYeast & nQual >= 5, "supported in yeast", NA),
-         yeastStatus = ifelse(is.na(yeastStatus) & isYeast & nQual >= 1, "noted in yeast", yeastStatus))
-
-non_yeastRegulation <- yeastRegulation %>% filter(!isYeast) %>% anti_join(yeastRegulation %>% filter(isYeast), by = c("tID", "reactions")) %>%
-  mutate(yeastStatus = "foreign to yeast")
-
-yeastRegulation <- rbind(yeastRegulation %>% filter(isYeast), non_yeastRegulation)
-
-# expand collapsed notation
-yeastRegulation_unfold <- apply(yeastRegulation, 1, function(x){
+all_regulation_unfold <- apply(all_regulation, 1, function(x){
   x <- unlist(x)
-  
   cbind(expand.grid(tID = strsplit(x['tID'], split = '/')[[1]], reaction = strsplit(x['reactions'], split = '/')[[1]], stringsAsFactors = F),
-        t(x[c('yeastStatus', 'modtype', 'nQuant', 'nQual')]))
+        t(x[c('EC', 'isYeast', 'modtype', 'nQual')]))
 })
-yeastRegulation_unfold <- do.call("rbind", yeastRegulation_unfold)
+all_regulation <- do.call("rbind", all_regulation_unfold) %>% tbl_df() %>%
+  mutate(nQual = as.numeric(nQual),
+         isYeast = gsub(' ', '', isYeast), isYeast = as.logical(isYeast),
+         isYeast = ifelse(isYeast, "sce", "other"))
+
+all_regulation <- all_regulation %>% group_by(EC, reaction, tID, isYeast, modtype) %>% dplyr::summarize(nQual = sum(nQual)) %>%
+  spread(key = isYeast, value = nQual, fill = 0)
 
 # If records from multiple sources exist (due to a reaction with multiple E.C. #s), take the best annotated reaction
-yeastRegulation_unfold <- yeastRegulation_unfold %>% group_by(tID, reaction, modtype) %>% arrange(nQual, nQuant) %>% dplyr::slice(1)
+all_regulation <- all_regulation %>% group_by(reaction, tID, modtype) %>% dplyr::summarize(other = max(other), sce = max(sce))
 
 # remove rmCond reactions, only look at non-pathological reactions (fit reasonably using some tested model)
 
@@ -1435,11 +1633,37 @@ tested_regulation <- tested_regulation %>% group_by(reaction, tID, modtype) %>% 
 tested_regulation <- tested_regulation %>% dplyr::select(rMech, reaction, tID, modtype, Qvalue, FullName) %>%
   mutate(is_sig = ifelse(Qvalue < 0.05, T, F))
 
-tested_regulation <- tested_regulation %>% left_join(yeastRegulation_unfold, by = c("reaction", "tID", "modtype"))
+tested_regulation <- tested_regulation %>% left_join(all_regulation, by = c("reaction", "tID", "modtype")) %>%
+  mutate(other = ifelse(is.na(other), 0, other),
+         sce = ifelse(is.na(sce), 1, sce))
 
-tested_regulation <- tested_regulation %>% mutate(yeastStatus = factor(yeastStatus, levels = c("supported in yeast", "noted in yeast", "foreign to yeast")))
-  
-tested_regulation %>% group_by(yeastStatus, nQual) %>% dplyr::summarize(Sig = sum(is_sig), N = n()) %>% View()
+# look at gold standard validated regulation #
+GS_regulation <- read.delim("companionFiles/gold_standard_regulation.txt") %>%
+  tbl_df() %>% mutate(modtype = ifelse(type == "inhibitor", "inh", type),
+                      modtype = ifelse(type == "activator", "act", modtype)) %>%
+  mutate(is_GS = T) %>% dplyr::select(tID, reaction, modtype, is_GS)
+
+tested_regulation <- tested_regulation %>% left_join(GS_regulation, by = c("tID", "reaction", "modtype")) %>%
+  mutate(is_GS = ifelse(is.na(is_GS), F, is_GS))
+
+#
+set.seed(1234)
+chisq.test(table(SIG = tested_regulation$is_sig, GS = tested_regulation$is_GS),
+           simulate.p.value = T, B = 1e7)
+
+### Hypothesis testing
+
+tested_regulation %>% rank
+
+tested_regulation_sig <- tested_regulation %>% group_by(is_sig, modtype) %>% dplyr::summarize(other = mean(other, na.rm = T), sce = mean(sce[sce != 0], na.rm = T))
+
+library(splines)
+
+anova(glm(is_sig ~ modtype + ns(other_thresh, df = 3) + ns(sce, df = 3), data = tested_regulation, family = binomial(logit)))
+
+plot(lm(is_sig ~ modtype*smooth.spline(other) ))
+
+
 
 #tested_regulation %>% filter(is_sig) %>% group_by(reaction) %>% mutate(sig_weight = 1/n()) %>% group_by(yeastStatus) %>% dplyr::summarize(N = n(), weight = sum(sig_weight))
 #tested_regulation %>% group_by(is_sig, yeastStatus) %>% dplyr::summarize(counts = n())
@@ -1456,19 +1680,26 @@ load("flux_cache/paramCI.Rdata")
 relevant_rxns <- setdiff(relevant_rxns, reactionInfo %>% filter(ncond - npar < 5, modelType == "hypo met regulator") %>%
                            dplyr::select(reaction) %>% unlist() %>% unname() %>% unique())
 
-
-
 ### Compare hypothetical regulator to significant regulators to rMM ###
 
 Hypo_met_compare <- reactionInfo %>% tbl_df() %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman = parSpearman), by = "rMech") %>%
-  filter(reaction %in% relevant_rxns, modelType %in% c("rMM", "regulator", "hypo met regulator"))
+  filter(reaction %in% relevant_rxns, modelType %in% c("rMM", "regulator", "hypo met regulator")) %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup()
+  
 
-rmCond_reactions <- unique(Hypo_met_compare$reaction[Hypo_met_compare$ncond != max(Hypo_met_compare$ncond)])
+# Is the hypothetical regulator much more likely than any ascertained metabolite
 
-Hypo_met_compare <- rbind(
-  Hypo_met_compare %>% filter(reaction %in% rmCond_reactions, ncond != max(ncond)),
-  Hypo_met_compare %>% filter(!(reaction %in% rmCond_reactions))
-)
+hypo_met_AICc <- Hypo_met_compare %>% filter(modelType %in% c("regulator", "hypo met regulator")) %>%
+  filter(Qvalue < 0.05) %>%
+  dplyr::select(rMech, reaction, ncond, npar, ML, modelType) %>%
+  mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1)) %>%
+  group_by(reaction, modelType) %>% dplyr::summarize(AICc = min(AICc)) %>%
+  spread(modelType, AICc)
+
+meaningful_hypo_met <- hypo_met_AICc %>% mutate(rel_lik = exp((`hypo met regulator` - regulator)/2)) %>%
+  mutate(hypo_met_role = ifelse(!is.na(`hypo met regulator`) & (rel_lik < 0.1 | is.na(regulator)), "improves regulator", "n.s.")) %>%
+  mutate(hypo_met_role = ifelse(hypo_met_role == "n.s." & !is.na(`hypo met regulator`), "improves rMM", hypo_met_role))
+  
 
 # sort reactions by the significance of hypothetical regulators
 Hypo_met_ranking <- Hypo_met_compare %>% filter(modelType == "hypo met regulator") %>% left_join(
@@ -1477,11 +1708,17 @@ Hypo_met_ranking <- Hypo_met_compare %>% filter(modelType == "hypo met regulator
 
 # look at the hypothetical regulator (activation or inhibition) that is strongest
 Hypo_met_ranking <- Hypo_met_ranking %>% group_by(reaction) %>% filter(Qvalue == min(Qvalue), (ML - rmm_ML) == max(ML - rmm_ML)) %>%
-  ungroup() %>% mutate(Qvalue = round(Qvalue, 4), ML_diff = ML - rmm_ML) %>% dplyr::arrange(desc(Qvalue), ML_diff)
+  ungroup() %>% mutate(Qvalue = round(Qvalue, 4), ML_diff = ML - rmm_ML) %>% dplyr::arrange(desc(Qvalue), ML_diff) %>%
+  left_join(meaningful_hypo_met %>% dplyr::select(reaction, hypo_met_role), by = "reaction") %>% rowwise() %>%
+  mutate(hypo_met_role = ifelse(is.na(hypo_met_role), "n.s.", hypo_met_role))
 
-Hypo_y_rMM <- Hypo_met_compare %>% filter(modelType == "rMM" | rMech %in% Hypo_met_ranking$rMech) %>%
+
+Hypo_y_rMM <- Hypo_met_compare %>% filter(modelType == "rMM" | rMech %in% Hypo_met_ranking$rMech) %>% rowwise() %>%
+  mutate(printType = ifelse(modelType == "hypo met regulator",
+                            Hypo_met_ranking$hypo_met_role[Hypo_met_ranking$rMech %in% rMech],
+                            modelType)) %>%
   mutate(reaction = factor(reaction, levels = Hypo_met_ranking$reaction),
-         modelType = factor(modelType, levels = c("rMM", "hypo met regulator")))
+         printType = factor(printType, levels = c("rMM", "n.s.", "improves rMM", "improves regulator"))) %>% ungroup()
 
 Hypo_y_rMM <- Hypo_y_rMM %>% mutate(spearman = ifelse(spearman < 0, 0, spearman)) %>% dplyr::group_by(reaction) %>%
   mutate(spearman = ifelse(modelType == "hypo met regulator", spearman - spearman[modelType == "rMM"], spearman))
@@ -1491,91 +1728,57 @@ Hypo_y_rMM <- Hypo_y_rMM %>% mutate(spearman = ifelse(spearman < 0, 0, spearman)
 measured_spear <- Hypo_met_compare %>% filter(modelType == "regulator", Qvalue < 0.05) %>% dplyr::select(rMech, reaction, spearman) %>%
   mutate(reaction = factor(reaction, levels = Hypo_met_ranking$reaction))
 
-# Is the hypothetical regulator much more likely than any ascertained metabolite
-
-Hypo_met_compare <- Hypo_met_compare %>% filter(modelType %in% c("regulator", "hypo met regulator")) %>%
-  filter(Qvalue < 0.05) %>%
-  dplyr::select(rMech, reaction, ncond, npar, ML, modelType) %>%
-  mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1)) %>%
-  group_by(reaction, modelType) %>% dplyr::summarize(AICc = min(AICc)) %>%
-  spread(modelType, AICc)
-
-
 # This method is underpowered particularly for reactions when the 
 # literature can help us discriminate between quantitatively similar metabolites
 
-ggplot(Hypo_y_rMM, aes(x = reaction, y = spearman)) + geom_bar(aes(fill = modelType), width = 0.75, stat = "identity", position = "stack") +
-  geom_point(data = measured_spear) + coord_flip(ylim = c(0,1)) + scale_y_continuous("Spearman Correlation")
+barplot_theme <- theme(text = element_text(size = 22), title = element_text(size = 25), 
+                       panel.background = element_rect(fill = "gray92"), legend.position = "top", 
+                       axis.ticks = element_line(color = "black", size = 1),
+                       axis.text = element_text(color = "black"), axis.text.y = element_text(size = 12),
+                       panel.grid = element_blank(),
+                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
+)
 
+ggplot(Hypo_y_rMM, aes(x = reaction, y = spearman)) + geom_hline(size = 1, yintercept = c(0, 0.25, 0.5, 0.75, 1)) +
+  geom_bar(aes(fill = printType), color = "black", size = 0.25, width = 0.9, stat = "identity", position = "stack") +
+  geom_point(data = measured_spear) + coord_flip(ylim = c(0,1)) + scale_y_continuous("Spearman Correlation") +
+  scale_fill_manual(values = c("rMM" = "gray50","n.s." = "gold1","improves rMM" = "limegreen", "improves regulator" = "red")) +
+  scale_x_discrete(name = "Reactions", breaks = fitReactionNames$reaction, labels = fitReactionNames$abbrev) +
+  barplot_theme
 
-
+### Look at hypothetical 
 
 Hypo_met_candidates <- Hypo_met_candidates %>% tbl_df() %>% mutate(modelType = ifelse(grepl('act', rMech), 'activator', 'inhibitor')) %>%
-  filter(!grepl('-cc', rMech)) %>% left_join(reactionInfo %>% dplyr::select(rMech, reaction, ncond, npar, Qvalue), by = "rMech") %>%
-  filter(reaction %in% relevant_rxns) %>%
-  left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman_hypo = parSpearman), by = "rMech")
+  filter(!grepl('cc$', rMech)) %>% left_join(reactionInfo %>% dplyr::select(rMech, reaction, ncond, npar, Qvalue), by = "rMech") %>%
+  filter(reaction %in% Hypo_y_rMM$reaction[Hypo_y_rMM$printType == "improves regulator"]) %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup() %>%
+  mutate(reaction = factor(reaction, levels = levels(Hypo_y_rMM$reaction)[levels(Hypo_y_rMM$reaction) %in% reaction]))
 
-# reduce to relevent set for rmCond reactions
+n_label = 5
+x_cutoff = 0.8
 
-rmCond_reactions <- unique(Hypo_met_candidates$reaction[Hypo_met_candidates$ncond != max(Hypo_met_candidates$ncond)])
+all_hypo_met_candidates <- Hypo_met_candidates %>% dplyr::select(reaction, modelType, SpeciesName, `97.5%`) %>%
+  group_by(reaction, modelType, `97.5%`) %>% dplyr::slice(n()) %>% # filter species w/ identical correlation (same measurement)
+  group_by(reaction, modelType) %>% arrange(desc(`97.5%`)) %>% # arrange by correlation
+  mutate(rank = 1:n(),
+         label = ifelse(rank <= n_label, SpeciesName, '')) %>%
+  mutate(ypos = which(levels(reaction) %in% reaction[1])+runif(n(), -0.2, 0.2)) %>%
+  filter(`97.5%` > x_cutoff)
 
-Hypo_met_candidates <- rbind(
-  Hypo_met_candidates %>% filter(reaction %in% rmCond_reactions, ncond != max(ncond)),
-  Hypo_met_candidates %>% filter(!(reaction %in% rmCond_reactions))
-)
+y_axis_label = data.frame(reaction = levels(all_hypo_met_candidates$reaction),
+                          ypos = 1:length(levels(all_hypo_met_candidates$reaction))
+                          ) %>% left_join(fitReactionNames, by = "reaction")
 
-# remove conditions with too few residual degrees of freedom (only CPS with removed conditions is currently caught)
+barplot_theme_facet <- barplot_theme + theme(panel.margin = unit(2, "lines"),
+                                       panel.background = element_rect(fill = "gray96"),
+                                       strip.background = element_rect(fill = "darkslategray2"))
 
-Hypo_met_candidates <- Hypo_met_candidates %>% filter(ncond - npar >= 5)
-
-### Look at just MM regulation 
-
-rMM_baseline <- reactionInfo %>% filter(modelType == "rMM", reaction %in% relevant_rxns)
-rMM_baseline <- rbind(
-  rMM_baseline %>% filter(reaction %in% rmCond_reactions, ncond != max(ncond)),
-  rMM_baseline %>% filter(!(reaction %in% rmCond_reactions))
-)
-rMM_baseline <- rMM_baseline %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman_rmm = parSpearman), by = "rMech")
-
-
-### Compare to real regulators ###
-
-# For each metabolite, we have its correlation to a hypothetical activator or inhibitor, and its role as a literature regulator
-
-evaluated_regulation <-  tested_regulation %>% mutate(modelType = ifelse(modtype == "inh", "inhibitor", "activator")) %>%
-  left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman_meas = parSpearman), by = "rMech") %>%
-  dplyr::select(rMech, reaction, tID, modelType, spearman_meas, is_sig, yeastStatus)
-
-Hypo_lit_compare <- Hypo_met_candidates %>% left_join(evaluated_regulation, 
-  by = c("reaction", "modelType", "SpeciesType" = "tID")
-)
-
-# rather than using the average correlation of a metabolite and hypothetical match, use the upper-bound of correlation in case the hypothetical metabolite's pattern is broad
-
-Hypo_lit_compare <- Hypo_lit_compare %>% dplyr::select(reaction, SpeciesType, SpeciesName, modelType, hypoQ = Qvalue, Corr = get("97.5%"), yeastStatus, is_sig) %>%
-  mutate(yeastStatus = as.character(yeastStatus)) %>%
-  mutate(yeastStatus = ifelse(is.na(yeastStatus), "uncharacterized", yeastStatus)) %>%
-  mutate(yeastStatus = factor(yeastStatus, levels = c("supported in yeast", "noted in yeast", "foreign to yeast", "uncharacterized")))
-
-# rank reactions by significance of hypothetical activator/inhibitor
-Hypo_lit_sig <- Hypo_lit_compare %>% group_by(reaction, modelType) %>% dplyr::summarize(hypoQ = unique(hypoQ)) %>% group_by(reaction) %>%
-  dplyr::summarize(mean_hypoQ = mean(hypoQ)) %>% ungroup() %>% arrange(mean_hypoQ)
-
-
-# x-axis is rank of metabolites association
-Hypo_lit_compare <- Hypo_lit_compare %>% mutate(reaction = factor(reaction, levels = Hypo_lit_sig$reaction)) %>%
-  group_by(reaction, modelType) %>% arrange(desc(Corr)) %>% mutate(fitRank = 1:n())
-
-
-ggplot(Hypo_lit_compare %>% mutate(fill = ifelse(!is.na(is_sig) & is_sig, "YELLOW", "WHITE")), aes(x = fitRank, y = reaction, color = yeastStatus, fill = fill)) + facet_grid(~ modelType) + geom_point(shape = 22) +
-  scale_color_brewer(palette = "Set1") + scale_fill_identity()
-
-ggplot(Hypo_lit_compare %>% filter(fitRank < 20) %>% mutate(fill = ifelse(!is.na(is_sig) & is_sig, "YELLOW", "WHITE")), aes(x = Corr, y = reaction, color = yeastStatus, fill = fill)) + facet_grid(~ modelType) + geom_point(size = 3, shape = 22) +
-  scale_color_brewer(palette = "Set1") + scale_fill_identity() + scale_size_identity()
-
-
-
-
-
-# We initially decided to search for regulation broadly
+ggplot(all_hypo_met_candidates, aes(x = `97.5%`, y = ypos, label = label)) + facet_grid(~ modelType) +
+  geom_point(aes(color = ifelse(label != "", "RED", "BLACK"))) +
+  geom_text(size = 3, angle = 20, hjust = -0.1, vjust = 0, color = "black") +
+  coord_cartesian(xlim = c(0.8, 1), ylim = c(0.5, max(y_axis_label$ypos)+1.5)) +
+  scale_y_discrete(name = "Reactions", breaks = y_axis_label$ypos, labels = y_axis_label$abbrev) +
+  scale_x_continuous("Correlation of measured metabolites to optimal regulator") +
+  barplot_theme_facet +
+  scale_color_identity()
 
