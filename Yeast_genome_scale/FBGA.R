@@ -525,6 +525,10 @@ group_regulation <- function(reactionInfo, rxnList_form){
   require(colorRamps)
   require(wesanderson)
   
+  # two tuning parameters
+  corr_penalty <- 0.5 # subtract from correlation s.t. grouping is only favored when cor > 0.5
+  interact_penalty <- -2 # penalty for having an interaction within a group of consistent metabolites
+  
   # for each reaction with significant regulation (or combinatorial regulation) attempt to group
   # regulators into sets with a similar role
   
@@ -537,7 +541,7 @@ group_regulation <- function(reactionInfo, rxnList_form){
     
     regs <- rxnList_form[[x]]$rxnFormData %>% filter(Type %in% c("inh", "act")) %>% dplyr::select(SubstrateID, Type)
     regs <- regs %>% left_join(data.frame(SubstrateID = names(rxnList_form[[x]]$metNames), commonName = unname(rxnList_form[[x]]$metNames)), by = "SubstrateID")
-      
+    
     rxnList_form[[x]]$rxnMet[,colnames(rxnList_form[[x]]$rxnMet) %in% regs$SubstrateID, drop = F] %>%
       mutate(condition = rownames(.)) %>% gather("SubstrateID", "RA", -condition, convert = T) %>%
       left_join(regs, by = "SubstrateID") %>% mutate(rMech = x)
@@ -555,7 +559,6 @@ group_regulation <- function(reactionInfo, rxnList_form){
   # plot showing the seperation of regulators into sets with a similar role
   reaction_graphs <- list()
   
-  
   for(a_rxn in unique(all_reg$reaction)){
     # r_0466
     # r_0042
@@ -572,6 +575,10 @@ group_regulation <- function(reactionInfo, rxnList_form){
       # look at correlation of regulators
       
       regulator_info <- relevant_regulators %>% dplyr::select(SubstrateID, Type) %>% unique() %>% mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
+      
+      if(nrow(regulator_info) == 1){
+        next
+      }
       
       # flip inhibitors, so that anticorrelated activators and inhibitors are grouped
       reg_RA <- relevant_regulators %>% left_join(regulator_info, by = c("SubstrateID", "Type")) %>%
@@ -599,26 +606,35 @@ group_regulation <- function(reactionInfo, rxnList_form){
       # - joint regulation
       # - equivalent regulation
       
-      interaction_edges <- regulator_overlap
-      interaction_edges[upper.tri(interaction_edges, diag = T)] <- NA
-      interaction_edges <- interaction_edges %>% as.data.frame() %>% mutate(tID_type_1 = rownames(.)) %>%
-        gather("tID_type_2", "interact", -tID_type_1, convert = T) %>% filter(interact & !is.na(interact))
+      if(length(regulator_overlap) == 0){
+        # no pairwise interaction
+        interaction_edges <- NULL
+      }else{
+        interaction_edges <- regulator_overlap
+        interaction_edges[upper.tri(interaction_edges, diag = T)] <- NA
+        interaction_edges <- interaction_edges %>% as.data.frame() %>% mutate(tID_type_1 = rownames(.)) %>%
+          gather("tID_type_2", "interact", -tID_type_1, convert = T) %>% filter(interact & !is.na(interact)) %>%
+          mutate(interact = interact_penalty * interact, type = "pairwise")
+      }
       
       corr_edges <- reg_corr
       corr_edges[upper.tri(reg_corr, diag = T)] <- NA
       corr_edges <- corr_edges %>% as.data.frame() %>% mutate(tID_type_1 = rownames(.)) %>%
-        gather("tID_type_2", "interact", -tID_type_1, convert = T) %>% filter(!is.na(interact))
+        gather("tID_type_2", "interact", -tID_type_1, convert = T) %>% filter(!is.na(interact)) %>%
+        mutate(interact = interact - corr_penalty, type = "corr")
       
-      edge_weights <- rbind(corr_edges %>% mutate(interact = interact - 0.3, type = "corr"),
-                            interaction_edges %>% mutate(interact = -1 * interact, type = "pairwise")) %>%
+      edge_weights <- rbind(corr_edges, interaction_edges) %>%
         group_by(tID_type_1, tID_type_2) %>% dplyr::summarize(weight = sum(interact))
       
-      edge_color_key <- data.frame(weight = seq(min(range(edge_weights$weight)), max(range(edge_weights$weight)), length.out = 1000),
+      edge_color_key <- data.frame(weight = seq(-1 - corr_penalty, 1 - corr_penalty, length.out = 1000),
                                    color = green2red(1000))
       
       edge_weights <- edge_weights %>% rowwise() %>% mutate(color = edge_color_key$color[which.min(abs(edge_color_key$weight - weight))])
       
       ### We want to seperate the fully-connected graph into subgraphs with high weight
+      # Each metabolites is initially grouped into its own cluster
+      # One at a time, each metabolite is tested with every cluster and then
+      # assigned to the cluster with the greatest score (+ correlation, - interaction)
       
       all_species <- rownames(reg_corr)
       nclus <- length(all_species)
@@ -627,7 +643,7 @@ group_regulation <- function(reactionInfo, rxnList_form){
       has_converged = F
       iter <- 0
       old_score <- -Inf
-        
+      
       while(!has_converged){
         
         iter <- iter + 1
@@ -649,46 +665,76 @@ group_regulation <- function(reactionInfo, rxnList_form){
         }
       }
       
-      inter_cluster_interactions <- interaction_edges %>% rowwise() %>% mutate(C1 = clus_assignments$cluster[clus_assignments$ID == tID_type_1],
-                                                                               C2 = clus_assignments$cluster[clus_assignments$ID == tID_type_2]) %>%
-        dplyr::select(C1, C2) %>% ungroup() %>% group_by(C1, C2) %>%
-        dplyr::summarize(count = n()) %>%
-        spread(C1, count, fill = 0) %>% as.data.frame()
-      rownames(inter_cluster_interactions) <- inter_cluster_interactions[,1]
-      inter_cluster_interactions <- inter_cluster_interactions[,-1]
-      
-      inter_cluster_interactions[lower.tri(inter_cluster_interactions)] <- inter_cluster_interactions[lower.tri(inter_cluster_interactions)] + t(inter_cluster_interactions)[lower.tri(inter_cluster_interactions)]
-      inter_cluster_interactions[upper.tri(inter_cluster_interactions)] <- NA
-      
-      possible_interactions <- clus_assignments %>% group_by(cluster) %>% summarize(N = n()) %>%
-        as.data.frame()
-      rownames(possible_interactions) <- possible_interactions$cluster
-      possible_interactions <- possible_interactions[,-1, drop = F]
-      possible_interactions <- as.matrix(possible_interactions)
+      if(length(unique(clus_assignments$cluster)) > 1){
         
-      possible_pairs <- possible_interactions %*% t(possible_interactions)
-      diag(possible_pairs) <- possible_interactions * (possible_interactions-1)
-      possible_pairs[upper.tri(possible_pairs)] <- NA
-      
-      interaction_freq <- inter_cluster_interactions/possible_pairs %>% as.data.frame()
-      interaction_freq$C1 <- rownames(interaction_freq)
-      interaction_freq <- interaction_freq %>% gather(C2, freq, -C1) %>% filter(!is.na(freq), C1 != C2) %>%
-        mutate(logic_connection = ifelse(freq > 0.1, "AND", "OR"))
-      
-      
+        if(is.null(interaction_edges)){
+          
+          interaction_freq <- t(combn(unique(clus_assignments$cluster), 2)) %>% as.data.frame()
+          colnames(interaction_freq) <- c("C1", "C2")
+          interaction_freq <- interaction_freq %>% mutate(freq = 0, logic_connection = "OR")
+          
+        }else{
+        
+        # If multiple clusters exist, how are they related
+        
+        inter_cluster_interactions <- interaction_edges %>% rowwise() %>% mutate(C1 = clus_assignments$cluster[clus_assignments$ID == tID_type_1],
+                                                                                 C2 = clus_assignments$cluster[clus_assignments$ID == tID_type_2]) %>%
+          dplyr::select(C1, C2) %>% ungroup() %>% group_by(C1, C2) %>%
+          dplyr::summarize(count = n())
+        
+        inter_cluster_interactions <- rbind(inter_cluster_interactions,
+                                            expand.grid(C1 = unique(clus_assignments$cluster), C2 = unique(clus_assignments$cluster), count = 0) %>% apply(c(1,2), as.numeric) %>%
+                                              as.data.frame() %>% anti_join(inter_cluster_interactions, by = c("C1", "C2")))
+        
+        inter_cluster_interactions <- inter_cluster_interactions %>% spread(C1, count) %>% as.data.frame()
+        rownames(inter_cluster_interactions) <- inter_cluster_interactions[,1]
+        inter_cluster_interactions <- inter_cluster_interactions[,-1]
+        
+        inter_cluster_interactions[lower.tri(inter_cluster_interactions)] <- inter_cluster_interactions[lower.tri(inter_cluster_interactions)] + t(inter_cluster_interactions)[lower.tri(inter_cluster_interactions)]
+        inter_cluster_interactions[upper.tri(inter_cluster_interactions)] <- NA
+        
+        possible_interactions <- clus_assignments %>% group_by(cluster) %>% summarize(N = n()) %>%
+          as.data.frame()
+        rownames(possible_interactions) <- possible_interactions$cluster
+        possible_interactions <- possible_interactions[,-1, drop = F]
+        possible_interactions <- as.matrix(possible_interactions)
+        
+        possible_pairs <- possible_interactions %*% t(possible_interactions)
+        diag(possible_pairs) <- possible_interactions * (possible_interactions-1)
+        possible_pairs[upper.tri(possible_pairs)] <- NA
+        
+        interaction_freq <- inter_cluster_interactions/possible_pairs %>% as.data.frame()
+        interaction_freq$C1 <- rownames(interaction_freq)
+        interaction_freq <- interaction_freq %>% gather(C2, freq, -C1) %>% filter(!is.na(freq), C1 != C2) %>%
+          mutate(logic_connection = ifelse(freq > 0.1, "AND", "OR"))
+        }
+      }
       ### Optional printing of graph layout ###
-      pruned_subnetworks <- edge_weights %>% ungroup() %>% group_by(tID_type_1) %>% filter(tID_type_2 %in% 
-      clus_assignments$ID[clus_assignments$cluster == clus_assignments$cluster[clus_assignments$ID == tID_type_1[1]]])
       
-      pruned_subnetworks <- pruned_subnetworks %>% full_join(
-        interaction_edges %>% mutate(width = 3) %>% dplyr::select(-interact),
-        by = c("tID_type_1", "tID_type_2")) %>%
-        mutate(width = ifelse(is.na(width), 0.6, width),
-               weight = ifelse(is.na(weight), 0, weight),
-               color = ifelse(is.na(color), "grey50", color))
+      pruned_subnetworks <- edge_weights %>% ungroup() %>% group_by(tID_type_1) %>%
+        filter(tID_type_2 %in% clus_assignments$ID[clus_assignments$cluster == clus_assignments$cluster[clus_assignments$ID == tID_type_1[1]]])
       
+      if(is.null(interaction_edges)){
+        
+        pruned_subnetworks <- pruned_subnetworks %>% mutate(width = 1.2)
+        
+      }else{
+        
+        pruned_subnetworks <- pruned_subnetworks %>% full_join(
+          interaction_edges %>% mutate(width = 1) %>% dplyr::select(-interact),
+          by = c("tID_type_1", "tID_type_2")) %>%
+          mutate(lty = ifelse(is.na(color), 3, 1)) %>%
+          mutate(width = ifelse(is.na(width), 1.2, width),
+                 weight = ifelse(is.na(weight), 0, weight),
+                 color = ifelse(is.na(color), "grey50", color))
+        
+      }
+      
+      # Initialize undirected graph from edge list (adding edge attributes too)
       
       reg_connection_graph <- graph.data.frame(pruned_subnetworks, directed = F)
+      
+      # Setup vertex attributes
       
       reg_significance <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type, Qvalue) %>% unique() %>%
         group_by(rMech) %>% filter(n() == 1) %>% group_by(SubstrateID, Type) %>%
@@ -697,27 +743,25 @@ group_regulation <- function(reactionInfo, rxnList_form){
         ungroup() %>% mutate(size = nlog10q / min(nlog10q)) %>%
         mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
       
+      color_cluster <- data.frame(cluster = unique(clus_assignments$cluster))
+      color_cluster$color <- c(wes_palette("Moonrise3", 5), wes_palette("Zissou", 5))[1:nrow(color_cluster)]
+      
       vertex_match <- data.frame(tID_type = V(reg_connection_graph)$name) %>% left_join(reg_ID, by = "tID_type") %>%
         left_join(reg_significance, by = "tID_type") %>%
+        left_join(clus_assignments, by = c("tID_type" = "ID")) %>%
+        left_join(color_cluster, by = "cluster") %>%
         mutate(size = ifelse(is.na(size), 0.5, size))
-     
+      
       V(reg_connection_graph)$label <- vertex_match$common_type
       V(reg_connection_graph)$size <- vertex_match$size*10
+      V(reg_connection_graph)$color <- vertex_match$color
       
-      plot(reg_connection_graph)
-      
-      tkplot(reg_connection_graph)
-      
+      #tkplot(reg_connection_graph)
       l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight)
-      plot.igraph(reg_connection_graph, layout = l, size = 2)
-      
-      
+      reaction_graphs[[paste(a_rxn, a_cond_subset, sep = "-")]] <- plot.igraph(reg_connection_graph, layout = l)
       
     }
-    
-    
   }
-  
   
   }
 
