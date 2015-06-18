@@ -516,6 +516,234 @@ if(sum(!(reactionInfo$rMech %in% rxn_fits$rxn)) != 0){
   reactionInfo <- reactionInfo %>% dplyr::filter(rMech %in% rxn_fits$rxn)
   }
 
+#reactionInfo %>% filter(modelType %in% "hypo met regulator") %>% filter(grepl('act', rMech)) %>% View()
+
+### Determine which reactions to follow-up on based upon either
+## A) Contain all substrates
+## B) RM or regulation is well-fit despite missing substrates
+
+load("paramOptim.Rdata")
+
+RMMrxns <- reactionInfo$rMech[reactionInfo$modification == ""]
+measure_exception <- c("H+", "H2O")
+
+validRxnA <- sapply(RMMrxns, function(i){
+  x <- rxnList_form[[i]]
+  if(all(x$flux$standardQP >= 0)){
+    substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi < 0], names(x$originMet))]
+  }else if(all(x$flux$standardQP <= 0)){
+    substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi > 0], names(x$originMet))]
+  }else{
+    substrates <- x$originMet
+  }
+  
+  substrates <- substrates[names(substrates) %in% names(x$metNames)[!(x$metNames %in% measure_exception)]]
+  if(!any(substrates == "nm")){
+   x$rxnID
+  }
+})
+validRxnA <- unlist(validRxnA) %>% unname()
+
+###
+
+validRxnB <- rxn_fits %>% tbl_df() %>% dplyr::select(rxn, parSpearman) %>% filter(parSpearman > 0.3) %>% left_join(reactionInfo %>% tbl_df() %>% dplyr::select(rxn = rMech, reaction, modification, Qvalue)) %>%
+  filter(!grepl('t_metX', rxn)) %>% filter(is.na(Qvalue) | Qvalue < 0.1) %>% dplyr::select(reaction) %>% unlist() %>% unname() %>% unique()
+
+valid_rxns <- union(validRxnA, validRxnB)
+rmCond_rxns <- unique(reactionInfo$reaction[grep('rmCond', reactionInfo$modification)]) # reactions which carry zero flux under some conditions - consider only non-zero reactions
+
+# remove reactions where major substrates are missing and a high-influence regulator is suggested likely mimicking this missing substrate
+flawed_rxns <- c("r_0990", "r_0888", "r_0534", "r_0988", "r_0032", "r_0510")
+# add several reactions that fail to capture some large aspect of the flux variability
+#flawed_rxns <- c(flawed_rxns, "r_0451", "r_0548", "r_0961")
+
+valid_rxns <- setdiff(valid_rxns, flawed_rxns)
+  
+# remove flawed reactions
+optimal_rxn_form <- reactionInfo %>% filter(rMech %in% optimal_rxn_form) %>% filter(!(reaction %in% flawed_rxns)) %>% dplyr::select(rMech) %>% unlist() %>% unname()
+
+
+# group regulation into sets of metabolites with a similar role
+# compare regulators to literature support
+# significant versus gold-standard
+# does p(sig) increase with literature support
+# does AIC - AICmin
+# Model selection: Dir(# lit + 1) * p(M|X)
+
+# rank of best supported versus all testecd
+
+
+# based on quantitative consistency and literature choose the best candidate regulator within each cluster
+# choose the best regulatory form overall
+
+
+relevant_rxns <- valid_rxns
+
+rxn_regulation <- regulation_lit_support(valid_rxns, all_reactionInfo)
+
+
+regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
+  
+  # Load BRENDA regulation and gold-standard regulation and compare to supported
+  # reaction forms with a single regulator
+  
+  # Test
+  # How often does gold-standard regulation improve fit relative to other regulation
+  # Is p(signif) related to literature representation
+  # - output model fitting p(signif)
+  # - output tbl_df() with each regulator * reaction * inhibitor/activator
+  # -- summarize literature support
+  # -- fitted probability of significance given literature and GS
+  
+  require(dplyr)
+  require(glmnet)
+  
+  return_list <- list()
+  
+  all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
+  all_regulation <- all_affinities %>% tbl_df() %>% filter(speciesType == "regulator")
+  
+  all_regulation_unfold <- apply(all_regulation, 1, function(x){
+    x <- unlist(x)
+    cbind(expand.grid(tID = strsplit(x['tID'], split = '/')[[1]], reaction = strsplit(x['reactions'], split = '/')[[1]], stringsAsFactors = F),
+          t(x[c('EC', 'isYeast', 'modtype', 'nQual')]))
+  })
+  all_regulation <- do.call("rbind", all_regulation_unfold) %>% tbl_df() %>%
+    mutate(nQual = as.numeric(nQual),
+           isYeast = gsub(' ', '', isYeast), isYeast = as.logical(isYeast),
+           isYeast = ifelse(isYeast, "sce", "other"))
+  
+  all_regulation <- all_regulation %>% group_by(EC, reaction, tID, isYeast, modtype) %>% dplyr::summarize(nQual = sum(nQual)) %>%
+    spread(key = isYeast, value = nQual, fill = 0)
+  
+  # If records from multiple sources exist (due to a reaction with multiple E.C. #s), take the best annotated reaction
+  all_regulation <- all_regulation %>% group_by(reaction, tID, modtype) %>% dplyr::summarize(other = max(other), sce = max(sce))
+  
+  # remove rmCond reactions, only look at non-pathological reactions (fit reasonably using some tested model)
+  
+  tested_regulation <- all_reactionInfo %>% filter(modelType == "regulator") %>% tbl_df() %>%
+    group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup() %>%
+    filter(reaction %in% relevant_rxns) %>%
+    mutate(modtype = ifelse(grepl('-inh-', modification), 'inh', 'act'),
+           tID = regmatches(modification, regexpr('t_[0-9]{4}', modification)))
+  
+  # if multiple models of activaton or inhibition are tested, just look at the best
+  tested_regulation <- tested_regulation %>% group_by(reaction, tID, modtype) %>% filter(ML == max(ML))
+  
+  tested_regulation <- tested_regulation %>% dplyr::select(rMech, reaction, tID, modtype, Qvalue, FullName) %>%
+    mutate(is_sig = ifelse(Qvalue < 0.05, T, F))
+  
+  tested_regulation <- tested_regulation %>% left_join(all_regulation, by = c("reaction", "tID", "modtype")) %>%
+    mutate(other = ifelse(is.na(other), 0, other),
+           sce = ifelse(is.na(sce), 1, sce))
+  
+  # look at gold standard validated regulation #
+  GS_regulation <- read.delim("companionFiles/gold_standard_regulation.txt") %>%
+    tbl_df() %>% mutate(modtype = ifelse(type == "inhibitor", "inh", type),
+                        modtype = ifelse(type == "activator", "act", modtype)) %>%
+    mutate(is_GS = T) %>% dplyr::select(tID, reaction, modtype, is_GS)
+  
+  tested_regulation <- tested_regulation %>% left_join(GS_regulation, by = c("tID", "reaction", "modtype")) %>%
+    mutate(is_GS = ifelse(is.na(is_GS), F, is_GS))
+  
+  #
+  GS_contingency <- table(SIG = tested_regulation$is_sig, GS = tested_regulation$is_GS)
+  
+  # GS annotated regulation is more likely to be consistent
+  #(GS_contingency[2,2]/sum(GS_contingency[,2])) / (GS_contingency[2,1]/sum(GS_contingency[,1]))
+  #set.seed(1234)
+  #chisq.test(GS_contingency, simulate.p.value = T, B = 1e7)
+  
+  ### Hypothesis testing
+  
+  sig_association <- tested_regulation %>% dplyr::select(is_sig, sce, other, is_GS) %>% ungroup()
+  
+  sig_assoc_norm <- sig_association %>% group_by(reaction) %>% mutate(totalObs = sum(sce + other)) %>%
+    rowwise() %>% mutate(sce_frac = sce/totalObs, other_frac = other/totalObs)
+  
+  # standard models
+  #glm(is_sig ~ modtype + sce_frac + other_frac, family=binomial(logit), data=sig_assoc_norm)
+  #glm(is_sig ~ modtype + sce_frac + other_frac + totalObs, family=binomial(logit), data=sig_assoc_norm)
+  #glm(is_sig ~ modtype + sce + other + totalObs, family=binomial(logit), data=sig_assoc_norm)
+  #glm(is_sig ~ modtype*sce_frac + modtype*other_frac + modtype*totalObs, family=binomial(logit), data=sig_assoc_norm)
+  
+  # weighted models for significance
+  
+  #weightedReg_noGS = glm(is_sig ~ modtype + sce_frac + other_frac + totalObs,
+  #    weights = (other_frac + sce_frac)*totalObs, family=binomial(logit), data=sig_assoc_norm)
+  
+  weightedReg_withGS = glm(is_sig ~ modtype + sce_frac + other_frac + is_GS + totalObs,
+                           weights = (other_frac + sce_frac)*totalObs, family=binomial(logit), data=sig_assoc_norm)
+  
+  sig_assoc_norm <- sig_assoc_norm %>% ungroup() %>% mutate(prob_sig = unname(weightedReg_withGS$fitted))
+  
+  #ggplot(sig_assoc_norm, aes(x = is_sig, y = prob_sig)) + geom_boxplot(notch = T)
+  
+  return_list[['GS_contingency']] = GS_contingency
+  return_list[['fitted_model']] = weightedReg_withGS
+  return_list[['prob_reg']] = sig_assoc_norm
+  
+  return(return_list)
+  
+}
+  
+  
+  
+  # weighted shrunken fits for prediction
+  #library(glmnet)
+  
+  #lasso_fit_withGS <- glmnet(y = sig_assoc_norm$is_sig, x = model.matrix(~ modtype + sce_frac + other_frac + is_GS + totalObs, data = sig_assoc_norm),
+  #                    weights = (sig_assoc_norm$other_frac + sig_assoc_norm$sce_frac)*sig_assoc_norm$totalObs, alpha=1,family='binomial')
+  #
+  
+  #lasso_fit_withGS <- cv.glmnet(y = sig_assoc_norm$is_sig, x = model.matrix(~ modtype + sce_frac + other_frac + is_GS + totalObs, data = sig_assoc_norm),
+  #                    weights = (sig_assoc_norm$other_frac + sig_assoc_norm$sce_frac)*sig_assoc_norm$totalObs, alpha=1,family='binomial', nfolds = 100,
+  #                    type.measure = "mse")
+  
+  #lasso_fit_withGS$glmnet.fit$beta[,which(lasso_fit_withGS$lambda == lasso_fit_withGS$lambda.min)]
+  
+  
+  
+  
+  
+}
+
+
+
+optimal_rxn_form <- sapply(valid_rxns, function(x){
+  
+  rx_forms <- reactionInfo[reactionInfo$reaction == x,]
+  if(x %in% rmCond_rxns){
+    rx_forms <- rx_forms[grep('rmCond', rx_forms$modification),]
+    }
+  rx_forms <- rx_forms %>% dplyr::filter(modelType %in% c("rMM", "regulator", "coopertivity", "2+ regulators"))
+  
+  # determine whether any regulator is significantly better than rMM
+  bestReg <- rx_forms %>% filter(modelType == "regulator") %>% filter(ML == max(ML)) %>%
+    mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1))
+  bestMulti <- rx_forms %>% filter(modelType %in% c("2+ regulators", "coopertivity")) %>% filter(Qvalue < 0.05) %>% filter(ML == max(ML)) %>%
+    mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1))
+  
+  # is the multiple regulation model substantially better than the single regulation model
+  if(nrow(bestReg) == 1 & nrow(bestMulti) == 1){
+    if(1 - 1/(exp((bestMulti$AICc - bestReg$AICc)/2) + 1) < 0.1){
+      return(bestMulti$rMech)
+    }
+  }
+  if(nrow(bestReg) == 1){
+   if(bestReg$Qvalue < 0.05){
+     return(bestReg$rMech)
+   }
+  }
+  return(rx_forms$rMech[rx_forms$modelType == "rMM"])
+  
+})
+
+
+
+
+
+
 group_regulation <- function(reactionInfo, rxnList_form){
   
   # core functions
@@ -560,9 +788,6 @@ group_regulation <- function(reactionInfo, rxnList_form){
   reaction_graphs <- list()
   
   for(a_rxn in unique(all_reg$reaction)){
-    # r_0466
-    # r_0042
-    # r_0962
     
     reaction_regulators <- regulator_trends %>% filter(reaction %in% a_rxn) %>% tbl_df()
     
@@ -571,6 +796,13 @@ group_regulation <- function(reactionInfo, rxnList_form){
       # If both a reduced set of conditions and the full set are considered 
       
       relevant_regulators <- reaction_regulators %>% filter(ncond == a_cond_subset)
+      
+      # pull down name of reaction for plotting
+      
+      reaction_name <- ifelse(length(unique(reaction_regulators$ncond)) == 1,
+                              paste0(a_rxn, ": ", rxnList_form[[relevant_regulators$rMech[1]]]$reaction),
+                              paste0(a_rxn, ": ", rxnList_form[[relevant_regulators$rMech[1]]]$reaction, " (", a_cond_subset, " conditions)")
+      )
       
       # look at correlation of regulators
       
@@ -597,7 +829,7 @@ group_regulation <- function(reactionInfo, rxnList_form){
         as.data.frame()
       
       rownames(regulator_overlap) <- paste(regulator_overlap$SubstrateID, regulator_overlap$Type, sep = "-")
-      regulator_overlap <- regulator_overlap[,-c(1:2)]
+      regulator_overlap <- regulator_overlap[,-c(1:2), drop = F]
       
       regulator_overlap <- as.matrix(regulator_overlap*1) %*% as.matrix(t(regulator_overlap*1))
       regulator_overlap <- regulator_overlap > 0
@@ -743,6 +975,10 @@ group_regulation <- function(reactionInfo, rxnList_form){
         ungroup() %>% mutate(size = nlog10q / min(nlog10q)) %>%
         mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
       
+      # add nodes with no edges
+      reg_connection_graph <- reg_connection_graph + vertices(reg_significance$tID_type[!(reg_significance$tID_type %in% V(reg_connection_graph)$name)])
+      
+      # color nodes based on cluster
       color_cluster <- data.frame(cluster = unique(clus_assignments$cluster))
       color_cluster$color <- c(wes_palette("Moonrise3", 5), wes_palette("Zissou", 5))[1:nrow(color_cluster)]
       
@@ -758,93 +994,21 @@ group_regulation <- function(reactionInfo, rxnList_form){
       
       #tkplot(reg_connection_graph)
       l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight)
-      reaction_graphs[[paste(a_rxn, a_cond_subset, sep = "-")]] <- plot.igraph(reg_connection_graph, layout = l)
+      reg_connection_graph$layout <- l
+      reg_connection_graph$main = reaction_name
+      
+      reaction_graphs[[paste(a_rxn, a_cond_subset, sep = "-")]] <- reg_connection_graph
+      plot(reg_connection_graph)
       
     }
   }
   
+  
+  
   }
 
 
 
-#reactionInfo %>% filter(modelType %in% "hypo met regulator") %>% filter(grepl('act', rMech)) %>% View()
-
-### Determine which reactions to follow-up on based upon either
-## A) Contain all substrates
-## B) RM or regulation is well-fit despite missing substrates
-
-load("paramOptim.Rdata")
-
-RMMrxns <- reactionInfo$rMech[reactionInfo$modification == ""]
-measure_exception <- c("H+", "H2O")
-
-validRxnA <- sapply(RMMrxns, function(i){
-  x <- rxnList_form[[i]]
-  if(all(x$flux$standardQP >= 0)){
-    substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi < 0], names(x$originMet))]
-  }else if(all(x$flux$standardQP <= 0)){
-    substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi > 0], names(x$originMet))]
-  }else{
-    substrates <- x$originMet
-  }
-  
-  substrates <- substrates[names(substrates) %in% names(x$metNames)[!(x$metNames %in% measure_exception)]]
-  if(!any(substrates == "nm")){
-   x$rxnID
-  }
-})
-validRxnA <- unlist(validRxnA) %>% unname()
-
-###
-
-validRxnB <- rxn_fits %>% tbl_df() %>% dplyr::select(rxn, parSpearman) %>% filter(parSpearman > 0.3) %>% left_join(reactionInfo %>% tbl_df() %>% dplyr::select(rxn = rMech, reaction, modification, Qvalue)) %>%
-  filter(!grepl('t_metX', rxn)) %>% filter(is.na(Qvalue) | Qvalue < 0.1) %>% dplyr::select(reaction) %>% unlist() %>% unname() %>% unique()
-
-valid_rxns <- union(validRxnA, validRxnB)
-rmCond_rxns <- unique(reactionInfo$reaction[grep('rmCond', reactionInfo$modification)]) # reactions which carry zero flux under some conditions - consider only non-zero reactions
-
-optimal_rxn_form <- sapply(valid_rxns, function(x){
-  
-  rx_forms <- reactionInfo[reactionInfo$reaction == x,]
-  if(x %in% rmCond_rxns){
-    rx_forms <- rx_forms[grep('rmCond', rx_forms$modification),]
-    }
-  rx_forms <- rx_forms %>% dplyr::filter(modelType %in% c("rMM", "regulator", "coopertivity", "2+ regulators"))
-  
-  # determine whether any regulator is significantly better than rMM
-  bestReg <- rx_forms %>% filter(modelType == "regulator") %>% filter(ML == max(ML)) %>%
-    mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1))
-  bestMulti <- rx_forms %>% filter(modelType %in% c("2+ regulators", "coopertivity")) %>% filter(Qvalue < 0.05) %>% filter(ML == max(ML)) %>%
-    mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1))
-  
-  # is the multiple regulation model substantially better than the single regulation model
-  if(nrow(bestReg) == 1 & nrow(bestMulti) == 1){
-    if(1 - 1/(exp((bestMulti$AICc - bestReg$AICc)/2) + 1) < 0.1){
-      return(bestMulti$rMech)
-    }
-  }
-  if(nrow(bestReg) == 1){
-   if(bestReg$Qvalue < 0.05){
-     return(bestReg$rMech)
-   }
-  }
-  return(rx_forms$rMech[rx_forms$modelType == "rMM"])
-  
-})
-  
-# when multiple regulatory candidates have similar fits but one is a far better candidate based upon the literature, choose the literature-supported one
-#reactionInfo %>% filter(reaction == "r_0962")
-#optimal_rxn_form[grep('r_0962-rm', optimal_rxn_form)] <- "r_0962-rm-t_0290-act-mm" # pyruvate kinase activation by F16bisP over citrate inhibition
-#reactionInfo %>% filter(reaction == "r_0215") 
-#optimal_rxn_form[grep('r_0215-rm', optimal_rxn_form)] <- "r_0215-rm-t_0499-inh-uncomp_ultra" # aspartate kinase regulation by ultrasensitive inhbition by threonine
-
-# remove reactions where major substrates are missing and a high-influence regulator is suggested likely mimicking this missing substrate
-flawed_rxns <- c("r_0990", "r_0888", "r_0534", "r_0988", "r_0032", "r_0510")
-# add several reactions that fail to capture some large aspect of the flux variability
-flawed_rxns <- c(flawed_rxns, "r_0451", "r_0548", "r_0961")
-
-# remove flawed reactions
-optimal_rxn_form <- reactionInfo %>% filter(rMech %in% optimal_rxn_form) %>% filter(!(reaction %in% flawed_rxns)) %>% dplyr::select(rMech) %>% unlist() %>% unname()
 
 
 ### load manually annotated abbreviation of reaction name and pathway
