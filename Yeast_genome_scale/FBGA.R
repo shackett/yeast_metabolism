@@ -596,6 +596,14 @@ rMech_support <- filter_rMech_by_prior(valid_rxns, reactionInfo, literature_supp
 
 # For each rMech containing a regulator specify whether the regulation is feed-back, feed-forward or cross-pathway
 
+rMech_mode <- mode_of_regulation(rMech_support, rxnList_form)
+
+rMech_support <- rMech_support %>% left_join(rMech_mode, by = "rMech")
+
+rMech_support %>% group_by(type) %>% dplyr::summarize(AIC_prob = sum(AIC_prob))
+
+
+
 
 
 regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
@@ -782,8 +790,6 @@ filter_rMech_by_prior <- function(relevant_rxns, reactionInfo, literature_suppor
   
   }
 
-rxn_form <- rMech_support$rMech
-
 mode_of_regulation <- function(rMech_support, rxnList_form){
   
   ### For each reaction with 1+ significant regulators ###
@@ -793,10 +799,6 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   require(dplyr)
   require(tidyr)
   require(igraph)
-  
-  #rMech_support
-  
-  rMech_support$rMech
   
   # for each regualted rMech, point to its 
   
@@ -814,20 +816,6 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   
   unique_met_rxn_pairs <- regulators %>% dplyr::select(reaction, SubstrateID, commonName) %>% unique()
   
-  
-  regulated_rxns <- reactionInfo %>% filter(rMech %in% rxn_form) %>% filter(modelType %in% c("regulator", "coopertivity", "2+ regulators")) %>%
-    dplyr::select(reaction) %>% unlist() %>% unname()
-  
-  all_regulation <- reactionInfo %>% group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup() %>%
-    filter(reaction %in% regulated_rxns, modelType %in% c("regulator", "coopertivity"), Qvalue < 0.05)
-    
-  # update for double regulation
-    
-  all_regulation <- all_regulation %>% mutate(specie = substr(modification, 1, 6)) %>%
-    dplyr::select(FullName, reaction, specie, ncond, npar, ML) %>%
-    group_by(reaction, specie) %>% filter(ML == min(ML)) %>% ungroup()
-    
-    
   ### Form a bipartite graph using reaction stoichiometry and measured flux ###
   
   load("flux_cache/yeast_stoi_directed.Rdata") # S: metabolism stoichiometry
@@ -895,7 +883,8 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   
   S_carried[rownames(S_carried) %in% c(s_Glu, s_Gln, s_aKG), transamination_reactions] <- 0
   
-  # Look at annoation of pathways, to help detect some distant interactions
+  # Look at annotation of pathways, to help detect some distant interactions
+  # Some reactions are not included or have a blank annotation
   
   rxn_pathways <- read.delim("./flux_cache/reactionPathways.tsv") %>%
     filter(reactionID %in% colnames(S_carried))
@@ -911,8 +900,6 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   # Counts by pathway
   pathway_summary <- rxn_pathways %>% group_by(pathway) %>% dplyr::summarize(N = n()) %>% arrange(desc(N)) %>%
     filter(N > 5 & N < 30)
-  # Total reactions
-  N_reaction_nodes <- length(unique(colnames(S_carried)))
   
   rxn_pathways <- rxn_pathways %>% filter(pathway %in% pathway_summary$pathway)
   
@@ -929,16 +916,19 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   S_igraph <- graph.data.frame(S_graph)
   V(S_igraph)$type <- ifelse(substr(V(S_igraph)$name, 1, 1) == "r", "reaction", "metabolite")
   
-  sort(betweenness(S_igraph), decreasing = T)[1:4] # check which species have the highest betweeness to see if they should be dealt with
+  #sort(betweenness(S_igraph), decreasing = T)[1:4] # check which species have the highest betweeness to see if they should be dealt with
   #rxnFile_fluxcarried %>% group_by(ReactionID) %>% filter("s_0066" %in% Metabolite) %>% View()
 
   # Look at length of shortest path from all regulated reactions to all measured metabolites
   
   # Calculate paths from reaction to regulator and from regulator to reaction to define feedbacks and feedforward
   
-  all_reg_paths <- lapply(1:nrow(all_regulation), function(i){
+  all_reg_paths <- lapply(1:nrow(unique_met_rxn_pairs), function(i){
     
-    met_sID <- corrFile$SpeciesID[corrFile$SpeciesType == all_regulation$specie[i]]
+    # because tIDs map to metabolites in multiple compartments, while reactions are unique
+    # each compartment-specific sID is seperately linked to a reaction
+    
+    met_sID <- corrFile$SpeciesID[corrFile$SpeciesType == unique_met_rxn_pairs$SubstrateID[i]]
     met_sID <- met_sID[met_sID %in% V(S_igraph)$name]
     
     if(length(met_sID) == 0){
@@ -946,17 +936,16 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
       return(list())
       
     }
-    if(all_regulation$reaction[i] %in% V(S_igraph)$name == F){
+    if(unique_met_rxn_pairs$reaction[i] %in% V(S_igraph)$name == F){
       print("excluded reaction - shouldnt happen")
       return(list())
-      
     }
     
     regulation_path <- list()
     
     # distance rID to sID
     feedbacks <- get.all.shortest.paths(S_igraph,
-                                        which(V(S_igraph)$name == all_regulation$reaction[i]),
+                                        which(V(S_igraph)$name == unique_met_rxn_pairs$reaction[i]),
                                         which(V(S_igraph)$name %in% met_sID))$res
     if(length(feedbacks) != 0){
       feedbacks <- melt(feedbacks)
@@ -969,7 +958,7 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
     # distance sID to rID
     feedforward <- get.all.shortest.paths(S_igraph,
                                           which(V(S_igraph)$name %in% met_sID),
-                                          which(V(S_igraph)$name == all_regulation$reaction[i]))$res
+                                          which(V(S_igraph)$name == unique_met_rxn_pairs$reaction[i]))$res
     if(length(feedforward) != 0){
       feedforward <- melt(feedforward)
       colnames(feedforward) <- c("node", "path")
@@ -981,7 +970,6 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
     return(regulation_path)
     
   })
-  
   all_reg_paths <- do.call("rbind", all_reg_paths) %>% tbl_df()
   
   vertex_info <- data.frame(node = 1:length(V(S_igraph)$name), name = V(S_igraph)$name, spec_type = V(S_igraph)$type, in_degree = unname(igraph::degree(S_igraph, mode = "in")),
@@ -1003,6 +991,12 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   pathway_class_call <- pathway_class_call %>% mutate(pathway_match = ifelse((Npathway >= 0.5*N & N >= 5) | (Npathway == N & N >= 3), T, F))
   pathway_class_call <- pathway_class_call %>% group_by(path, pairnum, type) %>% dplyr::summarize(pathway_match = ifelse(any(pathway_match), T, F))
   
+  # add back reactions with no pathway annotation for any reactions
+  
+  pathway_class_call <- rbind(pathway_class_call,  
+                              all_reg_paths %>% dplyr::select(path, pairnum, type) %>% unique() %>% anti_join(pathway_class_call, by = c("path", "pairnum", "type")) %>% mutate(pathway_match = F)
+  )
+  
   # Also call paths where the reaction is very close to the regulator in the pruned network #
   
   regulator_betweenness <- all_reg_paths %>% left_join(vertex_info, by = "node") %>% filter(spec_type == "metabolite") %>%
@@ -1017,26 +1011,20 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
     mutate(type = ifelse(split_prod < 0.2 & !pathway_match, "cross-pathway", type))
     
   # By regulation mechanism, regulation type call:
-  all_regulation_type <- all_regulation %>% mutate(pairnum = 1:n()) %>% left_join(reg_class_call %>% dplyr::select(pairnum, type), by = "pairnum") %>%
+  all_regulation_type <- unique_met_rxn_pairs %>% mutate(pairnum = 1:n()) %>% left_join(reg_class_call %>% dplyr::select(pairnum, type, N_steps), by = "pairnum") %>%
     mutate(type = ifelse(is.na(type), 'cross-pathway', type))
   
-  # By reaction, regulation type call:
+  # For combinatorial regulation, collapse multiple entries into one-per-rMech
+  rMech_class <- regulators %>% left_join(all_regulation_type %>% dplyr::select(reaction, SubstrateID, type, N_steps), by = c("reaction", "SubstrateID")) %>%
+    group_by(rMech) %>% dplyr::summarize(type = paste(sort(unique(type)), collapse = "/"), N_steps = paste(sort(N_steps), collapse = ","))
   
-  reaction_regulation_type <- all_regulation_type %>% mutate(AICc = 2*npar - 2*ML + 2*npar*(npar + 1)/(ncond - npar - 1)) %>%
-    group_by(reaction) %>% mutate(AICc_min = min(AICc)) %>%
-    mutate(relLik = exp((AICc_min - AICc)/2)) %>%
-    group_by(reaction, type) %>% dplyr::summarize(relLik = sum(relLik)) %>%
-    group_by(reaction) %>% mutate(relLik = relLik / sum(relLik))
+  # add back unregulated reactions
   
-  # reaction_regulation_type %>% group_by(type) %>% dplyr::summarize(type_contribution = sum(relLik))
+  rMech_class <- rMech_class %>% mutate(N_steps = ifelse(N_steps == "", NA, N_steps)) %>% rbind(
+    rMech_support %>% ungroup() %>% dplyr::select(rMech) %>% anti_join(rMech_class, by = "rMech") %>% mutate(type = "unregulated", N_steps = NA)
+  )
   
-  ### output ###
-  output <- list()
-  
-  output[["all_regulation_type"]] <- all_regulation_type
-  output[["reaction_regulation_type"]] <- reaction_regulation_type
-  
-  return(output)
+  return(rMech_class)
   
   #reaction_regulation_type %>% spread("type", "relLik", fill = 0) %>% View()
   
