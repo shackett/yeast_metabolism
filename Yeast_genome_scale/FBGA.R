@@ -519,50 +519,111 @@ if(sum(!(reactionInfo$rMech %in% rxn_fits$rxn)) != 0){
 #reactionInfo %>% filter(modelType %in% "hypo met regulator") %>% filter(grepl('act', rMech)) %>% View()
 
 ### Determine which reactions to follow-up on based upon either
-## A) Contain all substrates
-## B) RM or regulation is well-fit despite missing substrates
+### Either all substrates are measured, or only relatively unimportant species are missing
 
 load("paramOptim.Rdata")
 
-RMMrxns <- reactionInfo$rMech[reactionInfo$modification == ""]
-measure_exception <- c("H+", "H2O")
+RMMrxns <- reactionInfo %>% filter(modelType == "rMM", ncond == max(ncond)) %>% dplyr::select(rMech) %>% unlist() %>% unname()
 
-validRxnA <- sapply(RMMrxns, function(i){
-  x <- rxnList_form[[i]]
-  if(all(x$flux$standardQP >= 0)){
-    substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi < 0], names(x$originMet))]
-  }else if(all(x$flux$standardQP <= 0)){
-    substrates <- x$originMet[chmatch(names(x$rxnStoi)[x$rxnStoi > 0], names(x$originMet))]
-  }else{
-    substrates <- x$originMet
+reaction_validity <- filter_reactions(reactionInfo, rxn_fits, rxnList_form)
+
+filter_reactions <- function(reactionInfo, rxn_fits, rxnList_form){
+  
+  # Some fits were tested despite missing substrates, for these reactions,
+  # we don't want a regulator substituting for missing substrates
+  
+  reaction_quality <- NULL
+  
+  for(a_reaction  in unique(reactionInfo$reaction)){
+    
+    rMM_form <- reactionInfo$rMech[reactionInfo$reaction == a_reaction & reactionInfo$modelType == "rMM" & reactionInfo$ncond == max(reactionInfo$ncond)]
+    
+    rMM_data <- rxnList_form[[rMM_form]]
+    # test to see whether any two metabolites use the same data
+    
+    metAbundances <- rMM_data$rxnMet[,colSums(is.na(rMM_data$rxnMet)) == 0, drop = F]
+    metAbundances <- metAbundances - matrix(apply(metAbundances, 2, mean), ncol = ncol(metAbundances), nrow = nrow(metAbundances), byrow = T)
+    
+    if(any(c(dist(t(metAbundances))) < 10^-12)){
+      reaction_quality <- rbind(reaction_quality, data.frame(reaction = a_reaction, missing = NA, include = F, reason = "shared measurement"))
+      next
+    }
+    
+    reversibility <- ifelse(reversibleRx$modelBound[reversibleRx$rx == a_reaction] == "reversible", "reversible", "irreversible")
+    
+    reaction_stoi <- data.frame(tID = names(rMM_data$rxnStoi), stoi = unname(rMM_data$rxnStoi))
+    if(all(rMM_data$flux$standardQP >= 0)){
+      reaction_stoi$role = ifelse(reaction_stoi$stoi < 0, "substrate", "product")
+    }else if(all(rMM_data$flux$standardQP <= 0)){
+      reaction_stoi$role = ifelse(reaction_stoi$stoi > 0, "substrate", "product")
+    }else{
+      reaction_stoi$role = "substrate"
+    }
+    
+    reaction_stoi <- reaction_stoi %>% left_join(data.frame(tID = names(rMM_data$originMet), measured = unname(rMM_data$originMet)), by = "tID")
+    reaction_stoi <- reaction_stoi %>% left_join(data.frame(tID = names(rMM_data$metNames), name = unname(rMM_data$metNames)), by = "tID")
+    
+    # freebie metabolites
+    measure_exception <- c("H+", "H2O", "ammonium")
+    reaction_stoi <- reaction_stoi %>% filter(!(name %in% measure_exception))
+    
+    # Major species measured
+    if(reversibility == "irreversible" & all(reaction_stoi$measured[reaction_stoi$role == "substrate"] != "nm")){
+      reaction_quality <- rbind(reaction_quality, data.frame(reaction = a_reaction, missing = sum(reaction_stoi$measured == "nm"), include = T, reason = "irreversible and measured substrates"))
+      next
+    }
+    if(reversibility == "reversible" & all(reaction_stoi$measured != "nm")){
+      reaction_quality <- rbind(reaction_quality, data.frame(reaction = a_reaction, missing = 0, include = T, reason = "reversible and all species measured"))
+      next
+    }
+    # No substrates are measured
+    if(all(reaction_stoi$measured[reaction_stoi$role == "substrate"] == "nm")){
+      reaction_quality <- rbind(reaction_quality, data.frame(reaction = a_reaction, missing = sum(reaction_stoi$measured[reaction_stoi$role == "substrate"] == "nm"), include = F, reason = "all substrates missing"))
+      next
+    }
+    
+    # Some relevant species missing - either the fit is still good but needs to be checked or the reaction should be discarded
+    
+    fit_rMechs <- reactionInfo %>% filter(reaction == a_reaction) %>% filter(modelType %in% c("rMM", "regulator", "coopertivity", "2+ regulators")) %>%
+      left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman = parSpearman), by = "rMech") %>% filter(is.na(Qvalue) | Qvalue < 0.05)
+    
+    if(any(fit_rMechs$spearman > 0.3)){
+      reaction_quality <- rbind(reaction_quality, data.frame(reaction = a_reaction, missing = sum(reaction_stoi$measured == "nm"), include = NA, reason = "some species missing: manually inspect"))
+    }else{
+      reaction_quality <- rbind(reaction_quality, data.frame(reaction = a_reaction, missing = sum(reaction_stoi$measured == "nm"), include = F, reason = "missing species and all rMech poorly fit"))
+    }
   }
   
-  substrates <- substrates[names(substrates) %in% names(x$metNames)[!(x$metNames %in% measure_exception)]]
-  if(!any(substrates == "nm")){
-   x$rxnID
-  }
-})
-validRxnA <- unlist(validRxnA) %>% unname()
-
-###
-
-validRxnB <- rxn_fits %>% tbl_df() %>% dplyr::select(rxn, parSpearman) %>% filter(parSpearman > 0.3) %>% left_join(reactionInfo %>% tbl_df() %>% dplyr::select(rxn = rMech, reaction, modification, Qvalue)) %>%
-  filter(!grepl('t_metX', rxn)) %>% filter(is.na(Qvalue) | Qvalue < 0.1) %>% dplyr::select(reaction) %>% unlist() %>% unname() %>% unique()
-
-valid_rxns <- union(validRxnA, validRxnB)
-rmCond_rxns <- unique(reactionInfo$reaction[grep('rmCond', reactionInfo$modification)]) # reactions which carry zero flux under some conditions - consider only non-zero reactions
-
-# remove reactions where major substrates are missing and a high-influence regulator is suggested likely mimicking this missing substrate
-flawed_rxns <- c("r_0990", "r_0888", "r_0534", "r_0988", "r_0032", "r_0510")
-# add several reactions that fail to capture some large aspect of the flux variability
-#flawed_rxns <- c(flawed_rxns, "r_0451", "r_0548", "r_0961")
-
-valid_rxns <- setdiff(valid_rxns, flawed_rxns)
+  reaction_quality %>% filter(!is.na(include) & !include)
   
-# remove flawed reactions
-#optimal_rxn_form <- reactionInfo %>% filter(rMech %in% optimal_rxn_form) %>% filter(!(reaction %in% flawed_rxns)) %>% dplyr::select(rMech) %>% unlist() %>% unname()
+  suspect_reactions <- reaction_quality %>% filter(is.na(include))
+  
+  suspect_rMechs <- reactionInfo %>% filter(reaction %in% suspect_reactions$reaction) %>% filter(modelType %in% c("rMM", "regulator", "coopertivity", "2+ regulators")) %>%
+    filter(is.na(Qvalue) | Qvalue < 0.05)
+  
+  # For each reaction where the best reaction form is Michaelis-Menten, either this form is sufficient
+  # despite missing a substrate or the missing substrate is likely not particularly important
+  
+  #ML_suspect_rMechs <- suspect_rMechs %>% group_by(reaction) %>% dplyr::summarize(bestModel = modelType[which.max(ML)])
+  #ML_suspect_rMechs <- ML_suspect_rMechs$reaction[ML_suspect_rMechs$bestModel == "rMM"]
+  
+  #suspect_reactions %>% filter(!(reaction %in% ML_suspect_rMechs))
+  
+  missing_major_substrates <- c("r_0534", # Hexokinase, no glucose
+                                "r_0799", # no dTDP
+                                "r_0800", # no GDP
+                                "r_0818", # no N-acetyl ornithine substrate
+                                "r_0988", # Saccharopine DH, no saccharopine
+                                "r_1055") # missing major substrate
+  
+  reaction_quality$include[reaction_quality$reaction %in% missing_major_substrates] <- FALSE
+  reaction_quality$include[is.na(reaction_quality$include)] <- TRUE
+  
+  return(reaction_quality)
+  
+}
 
-
+  
 # group regulation into sets of metabolites with a similar role
 # compare regulators to literature support
 # significant versus gold-standard
@@ -577,6 +638,8 @@ valid_rxns <- setdiff(valid_rxns, flawed_rxns)
 # choose the best regulatory form overall
 
 #### How literature support affect significance ####
+
+valid_rxns <- reaction_validity$reaction[reaction_validity$include]
 rxn_regulation <- regulation_lit_support(valid_rxns, all_reactionInfo)
 literature_support <- rxn_regulation[['prob_reg']]
 
@@ -598,13 +661,47 @@ rMech_support <- filter_rMech_by_prior(valid_rxns, reactionInfo, literature_supp
 
 rMech_mode <- mode_of_regulation(rMech_support, rxnList_form)
 
-rMech_support <- rMech_support %>% left_join(rMech_mode, by = "rMech")
+rMech_support <- rMech_support %>% left_join(rMech_mode, by = "rMech") %>%
+  left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman = parSpearman), by = "rMech")
 
-rMech_support %>% group_by(type) %>% dplyr::summarize(AIC_prob = sum(AIC_prob))
+#rMech_support %>% group_by(type) %>% dplyr::summarize(AIC_prob = sum(AIC_prob))
+
+#### Group reaction mechanisms into similarly behaving groups and filter low-confidence mechanisims ####
+
+
+  
+
+#### Look at the best supported reaction mechanisms for each reaction ####
+
+optimal_reaction_form <- rMech_support %>% group_by(reaction) %>% filter(ncond == min(ncond)) %>% filter(AIC_prob == max(AIC_prob))
+
+#rMech_support %>% group_by(reaction) %>% filter(ncond == min(ncond)) %>% filter(AIC_prob == max(AIC_prob)) %>% ungroup() %>% arrange(type) %>% filter(spearman > 0.6) %>% View()
+
+GS_regulation <- read.delim("companionFiles/gold_standard_regulation.txt") %>%
+    tbl_df() %>% mutate(modtype = ifelse(type == "inhibitor", "inh", type),
+                        modtype = ifelse(type == "activator", "act", modtype)) %>%
+  filter(reaction %in% valid_rxns)
+GS_regulation <- GS_regulation %>% left_join(literature_support %>% dplyr::select(reaction, tID, modtype, is_sig), by = c("reaction", "tID", "modtype"))
+
+GS_regulation <- GS_regulation %>% left_join(optimal_reaction_form %>% dplyr::select(reaction, rMech, reg_type = type, spearman), by = "reaction")
+
+GS_regulation_support <- GS_regulation %>% rowwise() %>% mutate(optimal = grepl(paste(tID, modtype, sep = "-"), rMech)) %>%
+  mutate(support = ifelse(optimal, "strongest support", ""),
+         support = ifelse(!is.na(is_sig) & is_sig & !optimal, "supported", support),
+         support = ifelse(spearman < 0.6, "no tested model is adequate", support),
+         support = ifelse(support == "" & reg_type == "unregulated", "no physiological regulation", support),
+         support = ifelse(is.na(is_sig), "not measured", support),
+         support = ifelse(support == "", "alternative regulation supported", support))
+
+# Summary of gold-standard regulation significance
+
+GS_regulation_support %>% dplyr::select(reaction_name, regulator, type, support, reference) %>% group_by(reaction_name) %>% arrange(reaction_name, regulator) %>% View()
 
 
 
 
+
+##
 
 regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
   
@@ -1045,14 +1142,9 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   
 }
 
+reg_groups <- group_regulation(rMech_support, rxnList_form)
 
-
-
-
-
-  
-
-group_regulation <- function(reactionInfo, rxnList_form, literature_support){
+group_regulation <- function(rMech_support, rxnList_form, literature_support){
   
   # core functions
   require(dplyr)
@@ -1068,8 +1160,7 @@ group_regulation <- function(reactionInfo, rxnList_form, literature_support){
   # for each reaction with significant regulation (or combinatorial regulation) attempt to group
   # regulators into sets with a similar role
   
-  all_reg <- reactionInfo %>% tbl_df() %>% filter(modelType %in% c("regulator", "2+ regulators", "coopertivity")) %>% filter(Qvalue < 0.05) %>%
-    dplyr::select(reaction, rMech, ncond, Qvalue)
+  all_reg <- rMech_support %>% filter(type != "unregulated") %>% dplyr::select(reaction, rMech, ncond, AIC_prob, spearman)
   
   # for each reaction consider a metabolite as an activator and inhibitor seperately
   
@@ -1099,10 +1190,9 @@ group_regulation <- function(reactionInfo, rxnList_form, literature_support){
     
     reaction_regulators <- regulator_trends %>% filter(reaction %in% a_rxn) %>% tbl_df()
     
-    for(a_cond_subset in unique(reaction_regulators$ncond)){
+    for(a_cond_subset in unique(sort(reaction_regulators$ncond))){ # allow full and reduced sets of conditions to be evalutated
       
-      # If both a reduced set of conditions and the full set are considered 
-      
+      # All metabolite trends for the relevent reaction
       relevant_regulators <- reaction_regulators %>% filter(ncond == a_cond_subset)
       
       # pull down name of reaction for plotting
@@ -1214,39 +1304,39 @@ group_regulation <- function(reactionInfo, rxnList_form, literature_support){
           interaction_freq <- interaction_freq %>% mutate(freq = 0, logic_connection = "OR")
           
         }else{
-        
-        # If multiple clusters exist, how are they related
-        
-        inter_cluster_interactions <- interaction_edges %>% rowwise() %>% mutate(C1 = clus_assignments$cluster[clus_assignments$ID == tID_type_1],
-                                                                                 C2 = clus_assignments$cluster[clus_assignments$ID == tID_type_2]) %>%
-          dplyr::select(C1, C2) %>% ungroup() %>% group_by(C1, C2) %>%
-          dplyr::summarize(count = n())
-        
-        inter_cluster_interactions <- rbind(inter_cluster_interactions,
-                                            expand.grid(C1 = unique(clus_assignments$cluster), C2 = unique(clus_assignments$cluster), count = 0) %>% apply(c(1,2), as.numeric) %>%
-                                              as.data.frame() %>% anti_join(inter_cluster_interactions, by = c("C1", "C2")))
-        
-        inter_cluster_interactions <- inter_cluster_interactions %>% spread(C1, count) %>% as.data.frame()
-        rownames(inter_cluster_interactions) <- inter_cluster_interactions[,1]
-        inter_cluster_interactions <- inter_cluster_interactions[,-1]
-        
-        inter_cluster_interactions[lower.tri(inter_cluster_interactions)] <- inter_cluster_interactions[lower.tri(inter_cluster_interactions)] + t(inter_cluster_interactions)[lower.tri(inter_cluster_interactions)]
-        inter_cluster_interactions[upper.tri(inter_cluster_interactions)] <- NA
-        
-        possible_interactions <- clus_assignments %>% group_by(cluster) %>% summarize(N = n()) %>%
-          as.data.frame()
-        rownames(possible_interactions) <- possible_interactions$cluster
-        possible_interactions <- possible_interactions[,-1, drop = F]
-        possible_interactions <- as.matrix(possible_interactions)
-        
-        possible_pairs <- possible_interactions %*% t(possible_interactions)
-        diag(possible_pairs) <- possible_interactions * (possible_interactions-1)
-        possible_pairs[upper.tri(possible_pairs)] <- NA
-        
-        interaction_freq <- inter_cluster_interactions/possible_pairs %>% as.data.frame()
-        interaction_freq$C1 <- rownames(interaction_freq)
-        interaction_freq <- interaction_freq %>% gather(C2, freq, -C1) %>% filter(!is.na(freq), C1 != C2) %>%
-          mutate(logic_connection = ifelse(freq > 0.1, "AND", "OR"))
+          
+          # If multiple clusters exist, how are they related
+          
+          inter_cluster_interactions <- interaction_edges %>% rowwise() %>% mutate(C1 = clus_assignments$cluster[clus_assignments$ID == tID_type_1],
+                                                                                   C2 = clus_assignments$cluster[clus_assignments$ID == tID_type_2]) %>%
+            dplyr::select(C1, C2) %>% ungroup() %>% group_by(C1, C2) %>%
+            dplyr::summarize(count = n())
+          
+          inter_cluster_interactions <- rbind(inter_cluster_interactions,
+                                              expand.grid(C1 = unique(clus_assignments$cluster), C2 = unique(clus_assignments$cluster), count = 0) %>% apply(c(1,2), as.numeric) %>%
+                                                as.data.frame() %>% anti_join(inter_cluster_interactions, by = c("C1", "C2")))
+          
+          inter_cluster_interactions <- inter_cluster_interactions %>% spread(C1, count) %>% as.data.frame()
+          rownames(inter_cluster_interactions) <- inter_cluster_interactions[,1]
+          inter_cluster_interactions <- inter_cluster_interactions[,-1]
+          
+          inter_cluster_interactions[lower.tri(inter_cluster_interactions)] <- inter_cluster_interactions[lower.tri(inter_cluster_interactions)] + t(inter_cluster_interactions)[lower.tri(inter_cluster_interactions)]
+          inter_cluster_interactions[upper.tri(inter_cluster_interactions)] <- NA
+          
+          possible_interactions <- clus_assignments %>% group_by(cluster) %>% summarize(N = n()) %>%
+            as.data.frame()
+          rownames(possible_interactions) <- possible_interactions$cluster
+          possible_interactions <- possible_interactions[,-1, drop = F]
+          possible_interactions <- as.matrix(possible_interactions)
+          
+          possible_pairs <- possible_interactions %*% t(possible_interactions)
+          diag(possible_pairs) <- possible_interactions * (possible_interactions-1)
+          possible_pairs[upper.tri(possible_pairs)] <- NA
+          
+          interaction_freq <- inter_cluster_interactions/possible_pairs %>% as.data.frame()
+          interaction_freq$C1 <- rownames(interaction_freq)
+          interaction_freq <- interaction_freq %>% gather(C2, freq, -C1) %>% filter(!is.na(freq), C1 != C2) %>%
+            mutate(logic_connection = ifelse(freq > 0.1, "AND", "OR"))
         }
       }
       ### Optional printing of graph layout ###
@@ -1276,12 +1366,11 @@ group_regulation <- function(reactionInfo, rxnList_form, literature_support){
       
       # Setup vertex attributes
       
-      reg_significance <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type, Qvalue) %>% unique() %>%
+      reg_significance <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type, AIC_prob) %>% unique() %>%
         group_by(rMech) %>% filter(n() == 1) %>% group_by(SubstrateID, Type) %>%
-        dplyr::summarize(Qvalue = min(Qvalue)) %>%
-        mutate(nlog10q = -1*log10(Qvalue)) %>% 
-        ungroup() %>% mutate(size = nlog10q / min(nlog10q)) %>%
-        mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
+        filter(AIC_prob == max(AIC_prob)) %>%
+        mutate(size = log10(AIC_prob) + 5) %>% mutate(size = ifelse(size < 0.5, 0.5, size)) %>%
+        ungroup() %>% mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
       
       # add nodes with no edges
       reg_connection_graph <- reg_connection_graph + vertices(reg_significance$tID_type[!(reg_significance$tID_type %in% V(reg_connection_graph)$name)])
@@ -1300,20 +1389,58 @@ group_regulation <- function(reactionInfo, rxnList_form, literature_support){
       V(reg_connection_graph)$size <- vertex_match$size*10
       V(reg_connection_graph)$color <- vertex_match$color
       
-      #tkplot(reg_connection_graph)
-      l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight)
+      # All regulation that improves simpler models
+      
+      l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight, initemp = 100, coolexp = 0.995, niter = 5000)
       reg_connection_graph$layout <- l
       reg_connection_graph$main = reaction_name
       
-      reaction_graphs[[paste(a_rxn, a_cond_subset, sep = "-")]] <- reg_connection_graph
+      reaction_graphs$complete[[paste(a_rxn, a_cond_subset, sep = "-")]] <- reg_connection_graph
+      plot(reg_connection_graph)
+     
+      # Filter regulators if they have low support (high AIC) and a substantially lower spearman correlation than the best form (~0.05)
+      supported_rMech <- rMech_support %>% filter(reaction == a_rxn, ncond == a_cond_subset) %>% ungroup() %>%
+        filter(spearman > max(spearman)-0.05 | AIC_prob > 0.001) %>% arrange(desc(AIC_prob)) %>% dplyr::slice(1:20)
+      
+      reduced_regulators <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type) %>% unique() %>% filter(rMech %in% supported_rMech$rMech) %>%
+        mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
+      
+      # delete irrelevant regulators
+      reg_connection_graph <- delete.vertices(reg_connection_graph, V(reg_connection_graph)$name[!(V(reg_connection_graph)$name %in% unique(reduced_regulators$tID_type))])
+      
+      reduced_edges <- reduced_regulators %>% group_by(rMech) %>% filter(n() != 1)
+      
+      if(nrow(reduced_edges) != 0){
+        reduced_edge_matches <- which(apply(get.edgelist(reg_connection_graph), 1, function(x){
+          if(clus_assignments$cluster[clus_assignments$ID == x[1]] == clus_assignments$cluster[clus_assignments$ID == x[2]]){
+            # same cluster
+            T
+          }else{
+            # different cluster 
+            node_matches <- reduced_edges %>% filter(tID_type %in% x) %>% dplyr::summarize(edge_ind = n())
+            if(nrow(node_matches) == 0){
+              F 
+            }else if(any(node_matches$edge_ind == 2)){
+              T}else{F}
+          }
+        }))
+        
+        # delete irrelevant pairwise interaction
+        reg_connection_graph <- delete.edges(reg_connection_graph, which(!(c(1:length(E(reg_connection_graph))) %in% reduced_edge_matches)))
+      }
+      
+      # Best supported regulation
+      
+      l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight, initemp = 100, coolexp = 0.995, niter = 5000)
+      reg_connection_graph$layout <- l
+     
+      reaction_graphs$reduced[[paste(a_rxn, a_cond_subset, sep = "-")]] <- reg_connection_graph
+      
       plot(reg_connection_graph)
       
     }
   }
-  
-  
-  
-  }
+}
 
 
 
