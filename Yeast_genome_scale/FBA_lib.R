@@ -3805,7 +3805,434 @@ enzyme_control_source <- function(){
   
 }
 
-
+group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support, print_plots = F){
+  
+  # core functions
+  require(dplyr)
+  require(igraph)
+  # color scheme
+  require(colorRamps)
+  require(wesanderson)
+  
+  # two tuning parameters
+  corr_penalty <- 0.5 # subtract from correlation s.t. grouping is only favored when cor > 0.5
+  interact_penalty <- -2 # penalty for having an interaction within a group of consistent metabolites
+  
+  # for each reaction with significant regulation (or combinatorial regulation) attempt to group
+  # regulators into sets with a similar role
+  
+  all_reg <- rMech_support %>% filter(type != "unregulated") %>% dplyr::select(reaction, rMech, ncond, AIC_prob, spearman)
+  
+  # for each reaction consider a metabolite as an activator and inhibitor seperately
+  
+  regulator_trends <- lapply(all_reg$rMech, function(x){
+    
+    regs <- rxnList_form[[x]]$rxnFormData %>% filter(Type %in% c("inh", "act")) %>% dplyr::select(SubstrateID, Type)
+    regs <- regs %>% left_join(data.frame(SubstrateID = names(rxnList_form[[x]]$metNames), commonName = unname(rxnList_form[[x]]$metNames)), by = "SubstrateID")
+    
+    rxnList_form[[x]]$rxnMet[,colnames(rxnList_form[[x]]$rxnMet) %in% regs$SubstrateID, drop = F] %>%
+      mutate(condition = rownames(.)) %>% gather("SubstrateID", "RA", -condition, convert = T) %>%
+      left_join(regs, by = "SubstrateID") %>% mutate(rMech = x)
+    
+  })
+  regulator_trends <- do.call("rbind", regulator_trends)
+  
+  regulator_trends <- regulator_trends %>% left_join(all_reg, by = "rMech")
+  
+  reg_ID <- regulator_trends %>% dplyr::select(SubstrateID, Type, commonName) %>% unique() %>%
+    mutate(tID_type = paste(SubstrateID, Type, sep = "-"),
+           common_type = paste(commonName, ifelse(Type == "act", "+", "-")))
+  
+  # prepare outputs
+  # plot showing the seperation of regulators into sets with a similar role
+  reaction_graphs <- list()
+  
+  for(a_rxn in unique(all_reg$reaction)){
+    
+    reaction_regulators <- regulator_trends %>% filter(reaction %in% a_rxn) %>% tbl_df()
+    
+    for(a_cond_subset in unique(sort(reaction_regulators$ncond))){ # allow full and reduced sets of conditions to be evalutated
+      
+      #warning(paste0(a_rxn, "-", a_cond_subset))
+      
+      # All metabolite trends for the relevent reaction
+      relevant_regulators <- reaction_regulators %>% filter(ncond == a_cond_subset)
+      
+      # pull down name of reaction for plotting
+      
+      reaction_name <- ifelse(length(unique(reaction_regulators$ncond)) == 1,
+                              paste0(a_rxn, ": ", rxnList_form[[relevant_regulators$rMech[1]]]$reaction),
+                              paste0(a_rxn, ": ", rxnList_form[[relevant_regulators$rMech[1]]]$reaction, " (", a_cond_subset, " conditions)")
+      )
+      
+      # look at correlation of regulators
+      
+      regulator_info <- relevant_regulators %>% dplyr::select(SubstrateID, Type) %>% unique() %>% mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
+      
+      if(nrow(regulator_info) == 1){
+        reaction_graphs$regulation[[paste(a_rxn, a_cond_subset, sep = "-")]] <- paste(relevant_regulators$commonName[1], ifelse(relevant_regulators$Type[1] == "inh", "-", "+"))
+        next
+      }
+      
+      # flip inhibitors, so that anticorrelated activators and inhibitors are grouped
+      reg_RA <- relevant_regulators %>% left_join(regulator_info, by = c("SubstrateID", "Type")) %>%
+        dplyr::select(tID_type, Type, condition, RA) %>%
+        unique() %>% mutate(RA = ifelse(Type == "inh", -1*RA, RA)) %>%
+        spread("condition", "RA") %>% as.data.frame(.)
+      rownames(reg_RA) <- reg_RA$tID_type
+      reg_RA <- reg_RA[,!(colnames(reg_RA) %in% c('tID_type', 'Type'))]
+      
+      reg_corr <- as.matrix(reg_RA) %>% t() %>% cor(.)
+      
+      # look at interaction of pairwise regulators
+      
+      regulator_overlap <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type) %>% unique() %>%
+        group_by(rMech) %>% filter(n() != 1) %>% mutate(overlap = T) %>% spread("rMech", "overlap", fill = F) %>%
+        as.data.frame()
+      
+      rownames(regulator_overlap) <- paste(regulator_overlap$SubstrateID, regulator_overlap$Type, sep = "-")
+      regulator_overlap <- regulator_overlap[,-c(1:2), drop = F]
+      
+      regulator_overlap <- as.matrix(regulator_overlap*1) %*% as.matrix(t(regulator_overlap*1))
+      regulator_overlap <- regulator_overlap > 0
+      
+      # two types of edges between metabolites
+      # - joint regulation
+      # - equivalent regulation
+      
+      if(length(regulator_overlap) == 0){
+        # no pairwise interaction
+        interaction_edges <- NULL
+      }else{
+        interaction_edges <- regulator_overlap
+        interaction_edges[upper.tri(interaction_edges, diag = T)] <- NA
+        interaction_edges <- interaction_edges %>% as.data.frame() %>% mutate(tID_type_1 = rownames(.)) %>%
+          gather("tID_type_2", "interact", -tID_type_1, convert = T) %>% filter(interact & !is.na(interact)) %>%
+          mutate(interact = interact_penalty * interact, type = "pairwise")
+      }
+      
+      corr_edges <- reg_corr
+      corr_edges[upper.tri(reg_corr, diag = T)] <- NA
+      corr_edges <- corr_edges %>% as.data.frame() %>% mutate(tID_type_1 = rownames(.)) %>%
+        gather("tID_type_2", "interact", -tID_type_1, convert = T) %>% filter(!is.na(interact)) %>%
+        mutate(interact = interact - corr_penalty, type = "corr")
+      
+      edge_weights <- rbind(corr_edges, interaction_edges) %>%
+        group_by(tID_type_1, tID_type_2) %>% dplyr::summarize(weight = sum(interact))
+      
+      edge_color_key <- data.frame(weight = seq(-1 - corr_penalty, 1 - corr_penalty, length.out = 1000),
+                                   color = green2red(1000))
+      
+      edge_weights <- edge_weights %>% rowwise() %>% mutate(color = edge_color_key$color[which.min(abs(edge_color_key$weight - weight))])
+      
+      ### We want to seperate the fully-connected graph into subgraphs with high weight
+      # Each metabolites is initially grouped into its own cluster
+      # One at a time, each metabolite is tested with every cluster and then
+      # assigned to the cluster with the greatest score (+ correlation, - interaction)
+      
+      all_species <- rownames(reg_corr)
+      nclus <- length(all_species)
+      clus_assignments <- data.frame(ID = all_species, cluster = 1:nclus)
+      
+      has_converged = F
+      iter <- 0
+      old_score <- -Inf
+      
+      while(!has_converged){
+        
+        iter <- iter + 1
+        
+        for(i in 1:nclus){
+          current_assignments <- clus_assignments %>% slice(-i)
+          cluster_score <- rbind(current_assignments, data.frame(ID = all_species[i], cluster = 1:nclus)) %>%
+            group_by(cluster) %>% summarize(score = sum(edge_weights$weight[edge_weights$tID_type_1 %in% ID & edge_weights$tID_type_2 %in% ID]) + 0)
+          clus_assignments$cluster[i] <- cluster_score$cluster[which.max(cluster_score$score)]
+        }
+        
+        current_score = clus_assignments %>% group_by(cluster) %>% summarize(score = sum(edge_weights$weight[edge_weights$tID_type_1 %in% ID & edge_weights$tID_type_2 %in% ID]) + 0) %>%
+          dplyr::select(score) %>% unlist() %>% unname() %>% sum()
+        
+        if(old_score >= current_score){
+          has_converged <- T
+        }else{
+          old_score <- current_score
+        }
+      }
+      
+      if(length(unique(clus_assignments$cluster)) > 1){
+        
+        if(is.null(interaction_edges)){
+          
+          interaction_freq <- t(combn(unique(clus_assignments$cluster), 2)) %>% as.data.frame()
+          colnames(interaction_freq) <- c("C1", "C2")
+          interaction_freq <- interaction_freq %>% mutate(freq = 0, logic_connection = "OR")
+          
+        }else{
+          
+          # If multiple clusters exist, how are they related
+          
+          inter_cluster_interactions <- interaction_edges %>% rowwise() %>% mutate(C1 = clus_assignments$cluster[clus_assignments$ID == tID_type_1],
+                                                                                   C2 = clus_assignments$cluster[clus_assignments$ID == tID_type_2]) %>%
+            dplyr::select(C1, C2) %>% ungroup() %>% group_by(C1, C2) %>%
+            dplyr::summarize(count = n())
+          
+          inter_cluster_interactions <- rbind(inter_cluster_interactions,
+                                              expand.grid(C1 = unique(clus_assignments$cluster), C2 = unique(clus_assignments$cluster), count = 0) %>% apply(c(1,2), as.numeric) %>%
+                                                as.data.frame() %>% anti_join(inter_cluster_interactions, by = c("C1", "C2")))
+          
+          inter_cluster_interactions <- inter_cluster_interactions %>% spread(C1, count) %>% as.data.frame()
+          rownames(inter_cluster_interactions) <- inter_cluster_interactions[,1]
+          inter_cluster_interactions <- inter_cluster_interactions[,-1]
+          
+          inter_cluster_interactions[lower.tri(inter_cluster_interactions)] <- inter_cluster_interactions[lower.tri(inter_cluster_interactions)] + t(inter_cluster_interactions)[lower.tri(inter_cluster_interactions)]
+          inter_cluster_interactions[upper.tri(inter_cluster_interactions)] <- NA
+          
+          possible_interactions <- clus_assignments %>% group_by(cluster) %>% summarize(N = n()) %>%
+            as.data.frame()
+          rownames(possible_interactions) <- possible_interactions$cluster
+          possible_interactions <- possible_interactions[,-1, drop = F]
+          possible_interactions <- as.matrix(possible_interactions)
+          
+          possible_pairs <- possible_interactions %*% t(possible_interactions)
+          diag(possible_pairs) <- possible_interactions * (possible_interactions-1)
+          possible_pairs[upper.tri(possible_pairs)] <- NA
+          
+          interaction_freq <- inter_cluster_interactions/possible_pairs %>% as.data.frame()
+          interaction_freq$C1 <- rownames(interaction_freq)
+          interaction_freq <- interaction_freq %>% gather(C2, freq, -C1) %>% filter(!is.na(freq), C1 != C2) %>%
+            mutate(logic_connection = ifelse(freq > 0.1, "AND", "OR")) %>%
+            mutate(C1 = as.numeric(as.character(C1)), C2 = as.numeric(as.character(C2)))
+        }
+      }
+      ### Optional printing of graph layout ###
+      
+      pruned_subnetworks <- edge_weights %>% ungroup() %>% group_by(tID_type_1) %>%
+        filter(tID_type_2 %in% clus_assignments$ID[clus_assignments$cluster == clus_assignments$cluster[clus_assignments$ID == tID_type_1[1]]])
+      
+      if(is.null(interaction_edges)){
+        
+        pruned_subnetworks <- pruned_subnetworks %>% mutate(width = 1.2)
+        
+      }else{
+        
+        pruned_subnetworks <- pruned_subnetworks %>% full_join(
+          interaction_edges %>% mutate(width = 1) %>% dplyr::select(-interact),
+          by = c("tID_type_1", "tID_type_2")) %>%
+          mutate(lty = ifelse(is.na(color), 3, 1)) %>%
+          mutate(width = ifelse(is.na(width), 1.2, width),
+                 weight = ifelse(is.na(weight), 0, weight),
+                 color = ifelse(is.na(color), "grey50", color))
+        
+      }
+      
+      # Initialize undirected graph from edge list (adding edge attributes too)
+      
+      reg_connection_graph <- graph.data.frame(pruned_subnetworks, directed = F)
+      
+      # Setup vertex attributes
+      
+      reg_significance <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type, AIC_prob) %>% unique() %>%
+        group_by(rMech) %>% filter(n() == 1) %>% group_by(SubstrateID, Type) %>%
+        filter(AIC_prob == max(AIC_prob)) %>%
+        mutate(size = log10(AIC_prob) + 5) %>% mutate(size = ifelse(size < 0.5, 0.5, size)) %>%
+        ungroup() %>% mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
+      
+      # add nodes with no edges
+      reg_connection_graph <- reg_connection_graph + vertices(reg_significance$tID_type[!(reg_significance$tID_type %in% V(reg_connection_graph)$name)])
+      
+      # color nodes based on cluster
+      color_cluster <- data.frame(cluster = unique(clus_assignments$cluster))
+      color_cluster$color <- c(wes_palette("Moonrise3", 5), wes_palette("Zissou", 5))[1:nrow(color_cluster)]
+      
+      vertex_match <- data.frame(tID_type = V(reg_connection_graph)$name) %>% left_join(reg_ID, by = "tID_type") %>%
+        left_join(reg_significance, by = "tID_type") %>%
+        left_join(clus_assignments, by = c("tID_type" = "ID")) %>%
+        left_join(color_cluster, by = "cluster") %>%
+        mutate(size = ifelse(is.na(size), 0.5, size))
+      
+      V(reg_connection_graph)$label <- vertex_match$common_type
+      V(reg_connection_graph)$size <- vertex_match$size*10
+      V(reg_connection_graph)$color <- vertex_match$color
+      
+      # All regulation that improves simpler models
+      
+      l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight, initemp = 100, coolexp = 0.995, niter = 5000)
+      reg_connection_graph$layout <- l
+      reg_connection_graph$main = reaction_name
+      
+      reaction_graphs$complete[[paste(a_rxn, a_cond_subset, sep = "-")]] <- reg_connection_graph
+      if(print_plots){
+        plot(reg_connection_graph)
+      }
+      
+      # Filter regulators if they have low support (high AIC) and a substantially lower spearman correlation than the best form (~0.05)
+      supported_rMech <- rMech_support %>% filter(reaction == a_rxn, ncond == a_cond_subset) %>% ungroup() %>%
+        filter(spearman > max(spearman)-0.05 | AIC_prob > 0.001) %>% arrange(desc(AIC_prob)) %>% dplyr::slice(1:20)
+      
+      sig_GS_regulation <- GS_regulation_support %>% filter(reaction == a_rxn, is_sig) %>% dplyr::select(SubstrateID = tID, Type = modtype) %>%
+        mutate(tID_type = paste(SubstrateID, Type, sep = "-"), rMech = NA)
+      
+      reduced_regulators <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type) %>% unique() %>% filter(rMech %in% supported_rMech$rMech) %>%
+        mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
+      
+      if(nrow(sig_GS_regulation) != 0){
+        shedded_reg <- sig_GS_regulation %>% anti_join(reduced_regulators, by = "tID_type")
+        shedded_reg <- shedded_reg %>% filter(tID_type %in% regulator_info$tID_type)
+        
+        if(nrow(shedded_reg) != 0){
+          reduced_regulators <- rbind(reduced_regulators, 
+                                      sig_GS_regulation %>% anti_join(reduced_regulators, by = "tID_type")
+          )
+          #print(paste(a_rxn))
+        }
+      }
+      
+      # delete irrelevant regulators
+      reg_connection_graph <- delete.vertices(reg_connection_graph, V(reg_connection_graph)$name[!(V(reg_connection_graph)$name %in% unique(reduced_regulators$tID_type))])
+      
+      reduced_edges <- reduced_regulators %>% group_by(rMech) %>% filter(n() != 1)
+      
+      if(nrow(reduced_edges) != 0){
+        reduced_edge_matches <- which(apply(get.edgelist(reg_connection_graph), 1, function(x){
+          if(clus_assignments$cluster[clus_assignments$ID == x[1]] == clus_assignments$cluster[clus_assignments$ID == x[2]]){
+            # same cluster
+            T
+          }else{
+            # different cluster 
+            node_matches <- reduced_edges %>% filter(tID_type %in% x) %>% dplyr::summarize(edge_ind = n())
+            if(nrow(node_matches) == 0){
+              F 
+            }else if(any(node_matches$edge_ind == 2)){
+              T}else{F}
+          }
+        }))
+        
+        # delete irrelevant pairwise interaction
+        reg_connection_graph <- delete.edges(reg_connection_graph, which(!(c(1:length(E(reg_connection_graph))) %in% reduced_edge_matches)))
+      }
+      
+      # Best supported regulation
+      
+      l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight, initemp = 100, coolexp = 0.995, niter = 5000)
+      reg_connection_graph$layout <- l
+     
+      reaction_graphs$reduced[[paste(a_rxn, a_cond_subset, sep = "-")]] <- reg_connection_graph
+      
+      if(print_plots){
+        plot(reg_connection_graph)
+      }
+      
+      # From parsimonious regulators, specify combinatorial regulation
+      
+      reduced_clus_assignments <- clus_assignments %>% filter(ID %in% reduced_regulators$tID_type)
+      reduced_clusters <- interaction_freq %>% filter(C1 %in% unique(reduced_clus_assignments$cluster) & C2 %in% unique(reduced_clus_assignments$cluster))
+      
+      cluster_AIC <- reduced_regulators %>% left_join(supported_rMech %>% dplyr::select(rMech, AIC_prob), by = "rMech") %>%
+        left_join(reduced_clus_assignments, by = c("tID_type" = "ID"))
+      
+      interaction_AIC <- matrix(0, nrow = length(unique(cluster_AIC$cluster)), ncol = length(unique(cluster_AIC$cluster)))
+      rownames(interaction_AIC) <- colnames(interaction_AIC) <- sort(unique(cluster_AIC$cluster))
+      for(a_rMech in unique(cluster_AIC$rMech)){
+        rMech_data <- cluster_AIC %>% filter(rMech == a_rMech) 
+        if(nrow(rMech_data) == 1){
+          interaction_AIC[rownames(interaction_AIC) == rMech_data$cluster, colnames(interaction_AIC) == rMech_data$cluster] <- 
+            interaction_AIC[rownames(interaction_AIC) == rMech_data$cluster, colnames(interaction_AIC) == rMech_data$cluster] + rMech_data$AIC_prob
+        }else{
+          chunk_store <- interaction_AIC[rownames(interaction_AIC) %in% rMech_data$cluster, colnames(interaction_AIC) %in% rMech_data$cluster]
+          chunk_store[lower.tri(chunk_store)] <- chunk_store[lower.tri(chunk_store)] + rMech_data$AIC_prob[1]
+          interaction_AIC[rownames(interaction_AIC) %in% rMech_data$cluster, colnames(interaction_AIC) %in% rMech_data$cluster] <- chunk_store
+        }
+      }
+      
+      # Summarize the clusters or combinations that need be represented
+      all_summary_combinations <- interaction_AIC %>% as.data.frame() %>% mutate(C1 = rownames(.)) %>% gather(C2, "AIC", -C1) %>%
+        filter(AIC != 0) %>% mutate(C1 = as.numeric(C1), C2 = as.numeric(as.character(C2))) %>%
+        left_join(interaction_freq, by = c("C1", "C2")) %>%
+        filter(is.na(logic_connection) | logic_connection == "AND") %>%
+        mutate(combinatorial = ifelse(C1 == C2, F, T)) %>%
+        dplyr::select(C1, C2, AIC, combinatorial) %>% 
+        mutate(summary_order = NA, primary_cluster = NA)
+      
+      order_counter <- 1
+      while(any(is.na(all_summary_combinations$summary_order))){
+        
+        single_reg <- all_summary_combinations %>% filter(!combinatorial & is.na(summary_order))
+        combo_reg <- all_summary_combinations %>% filter(combinatorial & is.na(summary_order))
+        
+        if(nrow(combo_reg) != 0){
+          clusters_remaining <- data.frame(query_cluster = unique(c(combo_reg$C1, combo_reg$C2)), AIC = NA)
+          for(a_cluster_n in 1:nrow(clusters_remaining)){
+            clus_subset <- combo_reg %>% filter(C1 == clusters_remaining$query_cluster[a_cluster_n] | C2 == clusters_remaining$query_cluster[a_cluster_n])
+            clusters_remaining$AIC[a_cluster_n] <- sum(clus_subset$AIC)
+          }
+          
+          if(nrow(single_reg) == 0){
+            combo <- T
+          }else{
+            if(max(clusters_remaining$AIC) > max(single_reg$AIC)){
+              combo <- T 
+            }else{
+              combo <- F
+            }}
+        }else{
+          combo <- F
+        }
+        
+        if(combo){
+          # add combinatorial with a primary regulator
+          all_summary_combinations$summary_order[all_summary_combinations$combinatorial & (all_summary_combinations$C1 == clusters_remaining$query_cluster[which.max(clusters_remaining$AIC)] |
+                                                                                             all_summary_combinations$C2 == clusters_remaining$query_cluster[which.max(clusters_remaining$AIC)])] <- order_counter
+          all_summary_combinations$primary_cluster[all_summary_combinations$combinatorial & (all_summary_combinations$C1 == clusters_remaining$query_cluster[which.max(clusters_remaining$AIC)] |
+                                                                                               all_summary_combinations$C2 == clusters_remaining$query_cluster[which.max(clusters_remaining$AIC)])] <- clusters_remaining$query_cluster[which.max(clusters_remaining$AIC)]
+        }else{
+          # add single regulation
+          all_summary_combinations$summary_order[is.na(all_summary_combinations$summary_order) & !all_summary_combinations$combinatorial & all_summary_combinations$C1 == single_reg$C1[which.max(single_reg$AIC)]] <- order_counter
+        }
+        order_counter <- order_counter + 1
+      }
+      
+      # Layout the cluster combinations using a cluster identifier as a standin for metabolites
+      
+      cluster_printout <- c()
+      for(i in 1:max(all_summary_combinations$summary_order)){
+        
+        if(all_summary_combinations$combinatorial[all_summary_combinations$summary_order == i][1]){
+          primary_clus <- all_summary_combinations$primary_cluster[all_summary_combinations$summary_order == i][1]
+          secondary_clus <- all_summary_combinations %>% filter(primary_cluster == primary_clus) %>% arrange(desc(AIC)) %>% mutate(secondary_cluster = ifelse(C1 == primary_cluster, C2, C1))
+          
+          if(nrow(secondary_clus) == 1){
+            cluster_printout[i] <- paste0(paste0("C", primary_clus), " AND ",
+                                          paste0("C", secondary_clus$secondary_cluster))
+          }else{
+            cluster_printout[i] <- paste0(paste0("C", primary_clus), " AND (",
+                                          paste(paste0("C", secondary_clus$secondary_cluster), collapse = " OR "),
+                                          ")")
+          }
+          
+        }else{
+          cluster_printout[i] <- paste0("C", all_summary_combinations$C1[all_summary_combinations$summary_order == i])
+        }
+      }
+      
+      cluster_members <- cluster_AIC %>% group_by(tID_type, cluster) %>% dplyr::summarize(AIC = sum(AIC_prob)) %>%
+        group_by(cluster) %>% arrange(desc(AIC)) %>% mutate(clusterID = paste0("C", cluster)) %>%
+        left_join(vertex_match %>% dplyr::select(tID_type, common_type), by = "tID_type")
+      
+      cluster_members <- cluster_members %>% group_by(clusterID) %>% dplyr::summarize(print = paste(common_type, collapse = " / "), N = n()) %>%
+        mutate(print = ifelse(N != 1, sub('$', ')', sub('^', '(', print)), print))
+      
+      # sub cluster members into cluster placeholders
+      for(i in 1:nrow(cluster_members)){
+        cluster_printout <- sub(paste0(cluster_members$clusterID[i], '([ )]|$)'), paste0(cluster_members$print[i],'\\1'), cluster_printout)
+      }
+      cluster_printout <- ifelse(grepl('AND', cluster_printout), sub('$', ']', sub('^', '[', cluster_printout)), cluster_printout)
+      
+      reaction_graphs$regulation[[paste(a_rxn, a_cond_subset, sep = "-")]] <- paste(cluster_printout, collapse = " OR ")
+      
+    }
+  }
+  return(reaction_graphs)
+}
 
 allostery_affinity <- function(){
   
