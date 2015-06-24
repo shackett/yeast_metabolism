@@ -1003,7 +1003,7 @@ modelComparison <- function(reactionInfo, rxnList_form){
   # Evaluate nested comparisons between simpler and more complicated models
   # alternative parametrization of simple kinetics (with the same # of parameters)
   # 1 regulators vs. rMM
-  # 1 regulator w/ coopertivity vs. 1 regulator & rMM
+  # 1 regulator w/ cooperativity vs. 1 regulator & rMM
   # 2 regulators vs. each single regulator
   
   # rMech | rID | modelType | tID | regulationType | ML | npar
@@ -1036,7 +1036,7 @@ modelComparison <- function(reactionInfo, rxnList_form){
     }else{
       regulators <- x$rxnFormData[!(x$rxnFormData$Subtype %in% c("substrate", "product")),]
       if(any(regulators$Hill == 0)){
-        "coopertivity" 
+        "cooperativity" 
       }else if(nrow(regulators) == 1){
         "regulator"
       }else{
@@ -1068,7 +1068,7 @@ modelComparison <- function(reactionInfo, rxnList_form){
         rxn_reg <- regulator_info %>% filter(reaction ==  reaction_info_comparison$reaction[i], ncond == reaction_info_comparison$ncond[i],
                                              !isoenzyme_specific)
         
-        if(reaction_info_comparison$modelType[i] == "coopertivity"){
+        if(reaction_info_comparison$modelType[i] == "cooperativity"){
           if(nrow(evaluated_reg) > 1){
             warning("multiple reaction allostery not currently supported") 
           }else{
@@ -1152,7 +1152,7 @@ modelComparison <- function(reactionInfo, rxnList_form){
   # when looking at "hypothetical metabolites" (governed by principle components), use AICc for model comparison because the large number of fitted parameters
   # results in an misposed LRT
   comparison_groups <- model_comparison_list %>% group_by(daughterModel, parentModel) %>% dplyr::summarize(N = n()) %>%
-    dplyr::mutate(metricUsed = ifelse(daughterModel %in% c("hypo met regulator", "hypo met coopertivity"), "changeAIC", "changeP"))
+    dplyr::mutate(metricUsed = ifelse(daughterModel %in% c("hypo met regulator", "hypo met cooperativity"), "changeAIC", "changeP"))
   comparison_groups$pi0 <- NA; comparison_groups$Nsig <- NA
   comparison_list <- list()
   
@@ -1894,11 +1894,11 @@ modelComparisonPlots <- function(rxn, reactionInfo, all_reactionInfo){
   # pull in fit information
   rxInfo_subset <- rxInfo_subset %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, parSpearman), by = "rMech") %>%
     left_join(fraction_flux_deviation %>% dplyr::select(rMech = rxn, dotProduct, angle, get("Interval Overlap")), by = "rMech") %>%
-    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "coopertivity"), "coop/2+reg", modelType))
+    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "cooperativity"), "coop/2+reg", modelType))
   
   maskedReg <- all_reactionInfo %>% filter(reaction == rxn) %>% filter(!(rMech %in% rxInfo_subset$rMech)) %>%
-    filter(!(modelType %in% c("alternative_simple_kinetics", "irreversible", "hypo met regulator", "hypo met coopertivity"))) %>%
-    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "coopertivity"), "coop/2+reg", modelType)) %>%
+    filter(!(modelType %in% c("alternative_simple_kinetics", "irreversible", "hypo met regulator", "hypo met cooperativity"))) %>%
+    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "cooperativity"), "coop/2+reg", modelType)) %>%
     group_by(reaction, modelType, ncond) %>% dplyr::summarize(N = n())
   
   if(nrow(maskedReg) == 0){
@@ -1944,7 +1944,7 @@ modelComparisonPlots <- function(rxn, reactionInfo, all_reactionInfo){
     plotDat <- rbind(plotDat, nullRegulation %>% dplyr::select(-c(reaction, N)))
     
     classAesthetics <- data.frame(modelType = c("irreversible", "rMM", "alternative_simple_kinetics", "null regulator", "regulator", "null coop/2+reg",
-                                                "coop/2+reg", "hypo met regulator", "hypo met coopertivity"),
+                                                "coop/2+reg", "hypo met regulator", "hypo met cooperativity"),
                                   fill = c("cornflowerblue", "dodgerblue3", "blueviolet", "white", "firebrick1", "white", "limegreen", "darkgoldenrod1", "darkgoldenrod3"),
                                   color = c("black", "black", "black", "firebrick1", "black", "limegreen", "black", "black", "black"))
     
@@ -2019,22 +2019,22 @@ pathwayPlots <- function(pathway){
   
   reactions <- rxToPW$rID[rxToPW$pathway == pathwaySet$pathway[pathwaySet$display == pathway]]
   
-  rxInfo_subset <- reactionInfo %>% filter(reaction %in% reactions) %>% filter(modelType %in% c("rMM", "irreversible", "regulator", "coopertivity", "2+ regulators"))
+  rxInfo_subset <- reactionInfo %>% filter(reaction %in% reactions) %>% filter(modelType %in% c("rMM", "irreversible", "regulator", "cooperativity", "2+ regulators"))
   
   noReg <- rxInfo_subset %>% filter(modelType == "rMM" | (modelType == "irreversible" & (!is.na(Qvalue) & Qvalue < 0.1)))
   oneReg <- rxInfo_subset %>% filter(modelType == "regulator") %>% group_by(reaction) %>% filter(ML == max(ML))
   
-  multiReg <- rxInfo_subset %>% filter(modelType %in% c("coopertivity", "2+ regulators")) %>% left_join(oneReg %>% dplyr::select(reaction, ncond, one_reg_ML = ML), by = c("ncond", "reaction"))
+  multiReg <- rxInfo_subset %>% filter(modelType %in% c("cooperativity", "2+ regulators")) %>% left_join(oneReg %>% dplyr::select(reaction, ncond, one_reg_ML = ML), by = c("ncond", "reaction"))
   multiReg <- multiReg %>% filter(ML > one_reg_ML) %>% group_by(reaction) %>% filter(ML == max(ML)) %>% dplyr::select(-one_reg_ML)
   
   rxInfo_plotted <- rbind(noReg, oneReg, multiReg) 
   
   rxInfo_plotted <- rxInfo_plotted %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, parSpearman), by = "rMech") %>%
     left_join(fraction_flux_deviation %>% dplyr::select(rMech = rxn, dotProduct, angle, get("Interval Overlap")), by = "rMech") %>%
-    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "coopertivity"), "coop/2+reg", modelType))
+    mutate(modelType = ifelse(modelType %in% c("2+ regulators", "cooperativity"), "coop/2+reg", modelType))
   
   # Determine how many rxnForms that improve fit are masked (because there is a stronger fit)
-  maskedReg <- rxInfo_subset %>% filter(!(rMech %in% rxInfo_plotted$rMech) & modelType != "irreversible") %>% mutate(modelType = ifelse(modelType %in% c("2+ regulators", "coopertivity"), "coop/2+reg", modelType)) %>%
+  maskedReg <- rxInfo_subset %>% filter(!(rMech %in% rxInfo_plotted$rMech) & modelType != "irreversible") %>% mutate(modelType = ifelse(modelType %in% c("2+ regulators", "cooperativity"), "coop/2+reg", modelType)) %>%
     group_by(reaction, modelType, ncond) %>% dplyr::summarize(N = n())
   
   barplot_theme <- barplot_theme + theme(axis.text.x = element_text(size = min(8 + 80/(nrow(rxInfo_subset)+nrow(maskedReg)), 24), color = "black", vjust = 0.5, hjust = 1, angle = 90))
@@ -2062,7 +2062,7 @@ pathwayPlots <- function(pathway){
     plotDat <- rbind(plotDat, nullRegulation %>% dplyr::select(-c(N)))
     
     classAesthetics <- data.frame(modelType = c("irreversible", "rMM", "alternative_simple_kinetics", "null regulator", "regulator", "null coop/2+reg",
-                                                "coop/2+reg", "hypo met regulator", "hypo met coopertivity"),
+                                                "coop/2+reg", "hypo met regulator", "hypo met cooperativity"),
                                   fill = c("cornflowerblue", "dodgerblue3", "blueviolet", "white", "firebrick1", "white", "limegreen", "darkgoldenrod1", "darkgoldenrod3"),
                                   color = c("black", "black", "black", "firebrick1", "black", "limegreen", "black", "black", "black"))
     
@@ -3123,7 +3123,7 @@ filter_reactions <- function(reactionInfo, rxn_fits, rxnList_form){
     
     # Some relevant species missing - either the fit is still good but needs to be checked or the reaction should be discarded
     
-    fit_rMechs <- reactionInfo %>% filter(reaction == a_reaction) %>% filter(modelType %in% c("rMM", "regulator", "coopertivity", "2+ regulators")) %>%
+    fit_rMechs <- reactionInfo %>% filter(reaction == a_reaction) %>% filter(modelType %in% c("rMM", "regulator", "cooperativity", "2+ regulators")) %>%
       left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman = parSpearman), by = "rMech") %>% filter(is.na(Qvalue) | Qvalue < 0.05)
     
     if(any(fit_rMechs$spearman > 0.3)){
@@ -3137,7 +3137,7 @@ filter_reactions <- function(reactionInfo, rxn_fits, rxnList_form){
   
   suspect_reactions <- reaction_quality %>% filter(is.na(include))
   
-  suspect_rMechs <- reactionInfo %>% filter(reaction %in% suspect_reactions$reaction) %>% filter(modelType %in% c("rMM", "regulator", "coopertivity", "2+ regulators")) %>%
+  suspect_rMechs <- reactionInfo %>% filter(reaction %in% suspect_reactions$reaction) %>% filter(modelType %in% c("rMM", "regulator", "cooperativity", "2+ regulators")) %>%
     filter(is.na(Qvalue) | Qvalue < 0.05)
   
   # For each reaction where the best reaction form is Michaelis-Menten, either this form is sufficient
@@ -3278,7 +3278,7 @@ filter_rMech_by_prior <- function(relevant_rxns, reactionInfo, literature_suppor
   # For each reaction, compare rMM with models of regulation penalizing regulatory models
   # based on the BRENDA-informed plausibility
   
-  rMechs_considered <- reactionInfo %>% filter(reaction %in% relevant_rxns, modelType %in% c("rMM", "regulator", "coopertivity", "2+ regulators")) %>% tbl_df()
+  rMechs_considered <- reactionInfo %>% filter(reaction %in% relevant_rxns, modelType %in% c("rMM", "regulator", "cooperativity", "2+ regulators")) %>% tbl_df()
   
   regulators <- lapply(1:nrow(rMechs_considered), function(i){
     
