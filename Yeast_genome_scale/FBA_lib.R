@@ -3153,7 +3153,8 @@ filter_reactions <- function(reactionInfo, rxn_fits, rxnList_form){
                                 "r_0800", # no GDP
                                 "r_0818", # no N-acetyl ornithine substrate
                                 "r_0988", # Saccharopine DH, no saccharopine
-                                "r_1055") # missing major substrate
+                                "r_1055", # missing major substrate
+                                "r_0510") # fluxes are suspect
   
   reaction_quality$include[reaction_quality$reaction %in% missing_major_substrates] <- FALSE
   reaction_quality$include[is.na(reaction_quality$include)] <- TRUE
@@ -3297,7 +3298,7 @@ filter_rMech_by_prior <- function(relevant_rxns, reactionInfo, literature_suppor
     dplyr::select(rMech, reaction, tID_type, common_type)
   
   regulator_prior <- literature_support %>% mutate(tID_type = paste(tID, modtype, sep = "-")) %>%
-    select(reaction, tID_type, prob_sig)
+    dplyr::select(reaction, tID_type, prob_sig)
   
   # join regulators with literature annotations and model fit (and model d.o.f.)
   regulators <- regulators %>% left_join(regulator_prior, by = c("reaction", "tID_type")) %>%
@@ -3943,7 +3944,7 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
         iter <- iter + 1
         
         for(i in 1:nclus){
-          current_assignments <- clus_assignments %>% slice(-i)
+          current_assignments <- clus_assignments %>% dplyr::slice(-i)
           cluster_score <- rbind(current_assignments, data.frame(ID = all_species[i], cluster = 1:nclus)) %>%
             group_by(cluster) %>% summarize(score = sum(edge_weights$weight[edge_weights$tID_type_1 %in% ID & edge_weights$tID_type_2 %in% ID]) + 0)
           clus_assignments$cluster[i] <- cluster_score$cluster[which.max(cluster_score$score)]
