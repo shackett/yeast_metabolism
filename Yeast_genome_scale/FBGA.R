@@ -35,7 +35,7 @@ n_c <- nrow(chemostatInfo)
 ### Additional reactions with BRENDA activators and inhibitors
 ### To search for novel allosteric modifiers in an unsupervised manner - allow for reaction with extensions an abundance profile that is not specified a priori
 
-add_pairwise_regulation <- T
+add_pairwise_regulation <- F
 
 if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
   source("reactionStructures.R")
@@ -72,7 +72,7 @@ rmCondList <- data.frame() # reactions which will be duplicated with some condit
 
 
 # valid reactions have well-constrained, non-zero fluxes and measured enzymes (a reaction possessing a minimal complement of metabolites is enforced in reactionStructures.R -> rxnf"
-valid_rxns <- grep('r_unit[0-9]{4}', rownames(flux_summary$total_flux_cast), value = T) # valid flux
+valid_rxns <- grep('r_[0-9]{4}', rownames(flux_summary$total_flux_cast), value = T) # valid flux
 valid_rxns <- valid_rxns[valid_rxns %in% rxn_enzyme_measured$reaction[rxn_enzyme_measured$measured]] # valid proteins
 valid_rxns <- valid_rxns[valid_rxns %in% unique(substr(names(rxnf), 1, 6))] # valid metabolites
 
@@ -109,13 +109,13 @@ for(rxN in 1:length(valid_rxns)){
                                    source = 'overflow', nZero = length(grep('^U', rownames(rxFlux)))))
   }
   # manually flagged leucine dysregulated
-  if (valid_rxns[rxN] %in% c("r_0096", "r_0097", "r_0352", "r_669", "r_0816")){
+  if (valid_rxns[rxN] %in% c("r_0096", "r_0097", "r_0352", "r_669",
+                             "r_0115", "r_0759", "r_0118", "r_0818", "r_0816", "r_0208", "r_0207")){
     rmCondList <- rbind(rmCondList,
                         data.frame(rxn = valid_rxns[rxN],
                                    cond = paste(grep('^L', rownames(rxFlux), value = T), collapse = ';'),
                                    source = 'dysregulation', nZero = length(grep('^L', rownames(rxFlux)))))
   }
-  
   
   for (entry in idx){
     rxnList[[entry]]$reaction = flux_summary$IDs$Name[flux_summary$IDs$reactionID == valid_rxns[rxN]]
@@ -1104,7 +1104,7 @@ ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 8)
 load("flux_cache/paramCI.Rdata")
 
 # remove reactions where the search for hypothetical regualtion is nearly underdetermined
-relevant_rxns <- setdiff(relevant_rxns, reactionInfo %>% filter(ncond - npar < 5, modelType == "hypo met regulator") %>%
+relevant_rxns <- setdiff(valid_rxns, reactionInfo %>% filter(ncond - npar < 5, modelType == "hypo met regulator") %>%
                            dplyr::select(reaction) %>% unlist() %>% unname() %>% unique())
 
 ### Compare hypothetical regulator to significant regulators to rMM ###
@@ -1124,7 +1124,7 @@ hypo_met_AICc <- Hypo_met_compare %>% filter(modelType %in% c("regulator", "hypo
   spread(modelType, AICc)
 
 meaningful_hypo_met <- hypo_met_AICc %>% mutate(rel_lik = exp((`hypo met regulator` - regulator)/2)) %>%
-  mutate(hypo_met_role = ifelse(!is.na(`hypo met regulator`) & (rel_lik < 0.1 | is.na(regulator)), "improves regulator", "n.s.")) %>%
+  mutate(hypo_met_role = ifelse(!is.na(`hypo met regulator`) & (rel_lik < 0.5 | is.na(regulator)), "improves regulator", "n.s.")) %>%
   mutate(hypo_met_role = ifelse(hypo_met_role == "n.s." & !is.na(`hypo met regulator`), "improves rMM", hypo_met_role))
   
 
