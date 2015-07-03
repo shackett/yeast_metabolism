@@ -3177,7 +3177,6 @@ regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
   # -- fitted probability of significance given literature and GS
   
   require(dplyr)
-  require(glmnet)
   
   return_list <- list()
   
@@ -3235,12 +3234,143 @@ regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
   #set.seed(1234)
   #chisq.test(GS_contingency, simulate.p.value = T, B = 1e7)
   
+  ### Collapse highly correlated entries ###
+  corr_penalty <- 0.6 # subtract from correlation s.t. grouping is only favored when cor > corr_penalty
+  
+  regulator_trends <- lapply(tested_regulation$rMech, function(x){
+    
+    regs <- rxnList_form[[x]]$rxnFormData %>% filter(Type %in% c("inh", "act")) %>% dplyr::select(SubstrateID, Type)
+    regs <- regs %>% left_join(data.frame(SubstrateID = names(rxnList_form[[x]]$metNames), commonName = unname(rxnList_form[[x]]$metNames)), by = "SubstrateID")
+    
+    rxnList_form[[x]]$rxnMet[,colnames(rxnList_form[[x]]$rxnMet) %in% regs$SubstrateID, drop = F] %>%
+      mutate(condition = rownames(.)) %>% gather("SubstrateID", "RA", -condition, convert = T) %>%
+      left_join(regs, by = "SubstrateID") %>% mutate(rMech = x)
+    
+  })
+  regulator_trends <- do.call("rbind", regulator_trends)
+  regulator_trends <- regulator_trends %>% left_join(tested_regulation %>% dplyr::select(rMech, reaction), by = "rMech") %>%
+    dplyr::select(condition, tID = SubstrateID, RA) %>% unique()
+  
+  met_cluster <- NULL
+  
+  for(a_reaction in unique(tested_regulation$reaction)){
+    for(a_reg_type in c("inh", "act")){
+      for(signif in c(T, F)){
+        
+        reg_subset <- tested_regulation %>% filter(reaction == a_reaction, modtype == a_reg_type, is_sig == signif)
+        
+        if(nrow(reg_subset) == 0){
+          # no regulators in class
+          next 
+        }else if(nrow(reg_subset) == 1){
+          # only one metabolite
+          met_cluster <- rbind(met_cluster, data.frame(reaction = a_reaction, modtype = a_reg_type, tID = reg_subset$tID, group = 1))
+          next
+          
+        }
+        
+        regulator_RA <- regulator_trends %>% filter(tID %in% reg_subset$tID) %>%
+          spread(tID, value = RA)
+        
+        regulator_corr <- regulator_RA %>% dplyr::select(-condition) %>% as.matrix() %>% cor()
+        regulator_corr <- regulator_corr - corr_penalty
+        
+        all_species <- rownames(regulator_corr)
+        nclus <- length(all_species)
+        clus_assignments <- data.frame(ID = all_species, cluster = 1:nclus)
+        
+        has_converged = F
+        iter <- 0
+        old_score <- -Inf
+        
+        while(!has_converged){
+          
+          iter <- iter + 1
+          
+          for(i in 1:nclus){
+            current_assignments <- clus_assignments %>% dplyr::slice(-i)
+            
+            cluster_score <- rbind(current_assignments, data.frame(ID = all_species[i], cluster = 1:nclus)) %>%
+              group_by(cluster) %>% summarize(score = 
+                                                mean(regulator_corr[rownames(regulator_corr) %in% ID, colnames(regulator_corr) %in% ID][
+                                                  lower.tri(regulator_corr[rownames(regulator_corr) %in% ID, colnames(regulator_corr) %in% ID], diag = F)]))
+            cluster_score$score[is.na(cluster_score$score)] <- 0
+            
+            clus_assignments$cluster[i] <- cluster_score$cluster[which.max(cluster_score$score)]
+          }
+          
+          current_score <- clus_assignments %>% group_by(cluster) %>%
+            summarize(score = mean(regulator_corr[rownames(regulator_corr) %in% ID, colnames(regulator_corr) %in% ID][
+              lower.tri(regulator_corr[rownames(regulator_corr) %in% ID, colnames(regulator_corr) %in% ID], diag = F)]))
+          current_score$score[is.na(current_score$score)] <- 0
+          
+          current_score <- current_score %>% dplyr::select(score) %>% unlist() %>% unname() %>% sum()
+          
+          if(old_score >= current_score){
+            has_converged <- T
+          }else{
+            old_score <- current_score
+          }
+        }
+        
+        met_cluster <- rbind(met_cluster, data.frame(reaction = a_reaction, modtype = a_reg_type, tID = clus_assignments$ID, group = clus_assignments$cluster))
+      }
+    }
+  }
+  
+  tested_regulation <- tested_regulation %>% left_join(met_cluster, by = c("reaction", "modtype", "tID"))
+  
+  tested_regulation_aggregate <- tested_regulation %>% group_by(reaction, modtype, is_sig, group) %>%
+    dplyr::summarize(N = n(), is_GS = sum(is_GS), sce = sum(sce), other = sum(other))
+  
+  tested_regulation_aggregate <- tested_regulation_aggregate %>% dplyr::select(-group) %>%
+    rowwise() %>% mutate(sce_mean = sce/N, other_mean = other/N) %>%
+    group_by(reaction) %>% mutate(totalCitations = sum(sce_mean) + sum(other_mean), 
+                                  totalYeast = sum(sce_mean),
+                                  regTests = sum(N)) %>%
+    rowwise() %>% mutate(sce_frac = ifelse(totalYeast != 0, sce_mean/totalYeast, 0),
+                         other_frac = other_mean/totalCitations)
+  
+  tested_regulation_aggregate <- tested_regulation_aggregate %>%
+    mutate(sce_factor = ifelse(sce == 0, "None", "NA"),
+           sce_factor = ifelse(sce > 3, "High", sce_factor),
+           sce_factor = ifelse(sce_factor == "NA", "Noted", sce_factor),
+           sce_factor = factor(sce_factor, levels = c("None", "Noted", "High"), ordered = T)) %>%
+    mutate(other_factor = ifelse(other > 20 | other_frac > 0.3, "High", "NA"),
+           other_factor = ifelse(other <= 2 | other_frac < 0.04, "Low", other_factor),
+           other_factor = ifelse(other_factor == "NA", "Mid", other_factor),
+           other_factor = factor(other_factor, levels = c("Low", "Mid", "High"), ordered = T))
+  
   ### Hypothesis testing
   
-  sig_association <- tested_regulation %>% dplyr::select(is_sig, sce, other, is_GS) %>% ungroup()
+  weightedReg_withGS = glm(is_sig ~ modtype + sce_frac + sce_mean + other_frac + other_mean + is_GS,
+                           weight = N, family=binomial(logit), data = tested_regulation_aggregate)
   
-  sig_assoc_norm <- sig_association %>% group_by(reaction) %>% mutate(totalObs = sum(sce + other)) %>%
-    rowwise() %>% mutate(sce_frac = sce/totalObs, other_frac = other/totalObs)
+  weightedReg_withGS = glm(is_sig ~ modtype + regTests + sce_mean + other_mean,
+                           weight = N, family=binomial(logit), data = tested_regulation_aggregate)
+  
+  
+  
+  
+  
+  
+  
+  
+  sig_assoc_norm <- sig_association %>% group_by(reaction) %>% mutate(totalObs = sum(sce + other), totalYeast = sum(sce)) %>%
+    rowwise() %>% mutate(sce_frac = ifelse(totalYeast != 0, sce/totalYeast, 0), other_frac = other/totalObs)
+  
+  sig_assoc_norm <- sig_assoc_norm %>%
+    mutate(sce_factor = ifelse(sce == 0, "None", "NA"),
+           sce_factor = ifelse(sce > 3 & sce_frac > 0.3, "High", sce_factor),
+           sce_factor = ifelse(sce_factor == "NA", "Noted", sce_factor),
+           sce_factor = factor(sce_factor, levels = c("None", "Noted", "High"))) %>%
+    mutate(other_factor = ifelse(other > 20 | other_frac > 0.3, "High", "NA"),
+           other_factor = ifelse(other <= 2 | other_frac < 0.07, "Low", other_factor),
+           other_factor = ifelse(other_factor == "NA", "Mid", other_factor),
+           other_factor = factor(other_factor, levels = c("Low", "Mid", "High")))
+  
+  # table(sig_assoc_norm$is_sig, sig_assoc_norm$sce != 0)
+  
   
   # standard models
   #glm(is_sig ~ modtype + sce_frac + other_frac, family=binomial(logit), data=sig_assoc_norm)
@@ -3253,8 +3383,23 @@ regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
   #weightedReg_noGS = glm(is_sig ~ modtype + sce_frac + other_frac + totalObs,
   #    weights = (other_frac + sce_frac)*totalObs, family=binomial(logit), data=sig_assoc_norm)
   
+  weightedReg_withGS = glm(is_sig ~ modtype + sce_frac + other_frac,
+                           family=binomial(logit), data=sig_assoc_norm)
+  
+  weightedReg_withGS = glm(is_sig ~ modtype + sce_factor + other_factor,
+                           family=binomial(logit), data=sig_assoc_norm)
+  summary(weightedReg_withGS)
+  
+  weightedReg_withGS = glm(is_sig ~ modtype + sce_factor + other_factor + is_GS,
+                           family=binomial(logit), data=sig_assoc_norm)
+  summary(weightedReg_withGS)
+  
+  weightedReg_withGS = glm(is_sig ~ modtype + sce_factor + other_factor + is_GS,
+                           family=binomial(logit), data=sig_assoc_norm)
+  
+  
   weightedReg_withGS = glm(is_sig ~ modtype + sce_frac + other_frac + is_GS + totalObs,
-                           weights = (other_frac + sce_frac)*totalObs, family=binomial(logit), data=sig_assoc_norm)
+                           family=binomial(logit), data=sig_assoc_norm)
   
   sig_assoc_norm <- sig_assoc_norm %>% ungroup() %>% mutate(prob_sig = unname(weightedReg_withGS$fitted))
   
