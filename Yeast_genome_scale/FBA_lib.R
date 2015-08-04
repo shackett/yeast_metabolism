@@ -3211,11 +3211,13 @@ regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
   tested_regulation <- tested_regulation %>% group_by(reaction, tID, modtype) %>% filter(ML == max(ML))
   
   tested_regulation <- tested_regulation %>% dplyr::select(rMech, reaction, tID, modtype, Qvalue, FullName) %>%
-    mutate(is_sig = ifelse(Qvalue < 0.05, T, F))
+    mutate(is_sig = ifelse(Qvalue < 0.1, T, F))
   
   tested_regulation <- tested_regulation %>% left_join(all_regulation, by = c("reaction", "tID", "modtype")) %>%
     mutate(other = ifelse(is.na(other), 0, other),
            sce = ifelse(is.na(sce), 1, sce))
+  
+  ### Assess which regulators improve fit in the context of their literature support ###
   
   # look at gold standard validated regulation #
   GS_regulation <- read.delim("companionFiles/gold_standard_regulation.txt") %>%
@@ -3223,196 +3225,109 @@ regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
                         modtype = ifelse(type == "activator", "act", modtype)) %>%
     mutate(is_GS = T) %>% dplyr::select(tID, reaction, modtype, is_GS)
   
+  # add GS to regulation support df
   tested_regulation <- tested_regulation %>% left_join(GS_regulation, by = c("tID", "reaction", "modtype")) %>%
     mutate(is_GS = ifelse(is.na(is_GS), F, is_GS))
   
-  #
+  # outpute gold-standard improvements
   GS_contingency <- table(SIG = tested_regulation$is_sig, GS = tested_regulation$is_GS)
   
-  # GS annotated regulation is more likely to be consistent
-  #(GS_contingency[2,2]/sum(GS_contingency[,2])) / (GS_contingency[2,1]/sum(GS_contingency[,1]))
-  #set.seed(1234)
-  #chisq.test(GS_contingency, simulate.p.value = T, B = 1e7)
+  # Do reactions that improve fit have greater literature support ? #
   
-  ### Collapse highly correlated entries ###
-  corr_penalty <- 0.6 # subtract from correlation s.t. grouping is only favored when cor > corr_penalty
+  input_df <- tested_regulation %>% ungroup() %>% dplyr::select(reaction, sce, other, is_GS, is_sig) %>%
+    group_by(reaction) %>% mutate(`sig and not sig` = ifelse(all(c(T, F) %in% is_sig), T, F)) %>%
+    filter(`sig and not sig`) %>% dplyr::select(reaction, is_sig, other)
   
-  regulator_trends <- lapply(tested_regulation$rMech, function(x){
-    
-    regs <- rxnList_form[[x]]$rxnFormData %>% filter(Type %in% c("inh", "act")) %>% dplyr::select(SubstrateID, Type)
-    regs <- regs %>% left_join(data.frame(SubstrateID = names(rxnList_form[[x]]$metNames), commonName = unname(rxnList_form[[x]]$metNames)), by = "SubstrateID")
-    
-    rxnList_form[[x]]$rxnMet[,colnames(rxnList_form[[x]]$rxnMet) %in% regs$SubstrateID, drop = F] %>%
-      mutate(condition = rownames(.)) %>% gather("SubstrateID", "RA", -condition, convert = T) %>%
-      left_join(regs, by = "SubstrateID") %>% mutate(rMech = x)
-    
-  })
-  regulator_trends <- do.call("rbind", regulator_trends)
-  regulator_trends <- regulator_trends %>% left_join(tested_regulation %>% dplyr::select(rMech, reaction), by = "rMech") %>%
-    dplyr::select(condition, tID = SubstrateID, RA) %>% unique()
+  set.seed(1234)
+  Lit_support_improve_fit <- other_lit_support(input_df, 10000)
   
-  met_cluster <- NULL
+  # Do reactions that improve fit have greater literature support (exluding GS) ?
   
-  for(a_reaction in unique(tested_regulation$reaction)){
-    for(a_reg_type in c("inh", "act")){
-      for(signif in c(T, F)){
-        
-        reg_subset <- tested_regulation %>% filter(reaction == a_reaction, modtype == a_reg_type, is_sig == signif)
-        
-        if(nrow(reg_subset) == 0){
-          # no regulators in class
-          next 
-        }else if(nrow(reg_subset) == 1){
-          # only one metabolite
-          met_cluster <- rbind(met_cluster, data.frame(reaction = a_reaction, modtype = a_reg_type, tID = reg_subset$tID, group = 1))
-          next
-          
-        }
-        
-        regulator_RA <- regulator_trends %>% filter(tID %in% reg_subset$tID) %>%
-          spread(tID, value = RA)
-        
-        regulator_corr <- regulator_RA %>% dplyr::select(-condition) %>% as.matrix() %>% cor()
-        regulator_corr <- regulator_corr - corr_penalty
-        
-        all_species <- rownames(regulator_corr)
-        nclus <- length(all_species)
-        clus_assignments <- data.frame(ID = all_species, cluster = 1:nclus)
-        
-        has_converged = F
-        iter <- 0
-        old_score <- -Inf
-        
-        while(!has_converged){
-          
-          iter <- iter + 1
-          
-          for(i in 1:nclus){
-            current_assignments <- clus_assignments %>% dplyr::slice(-i)
-            
-            cluster_score <- rbind(current_assignments, data.frame(ID = all_species[i], cluster = 1:nclus)) %>%
-              group_by(cluster) %>% summarize(score = 
-                                                mean(regulator_corr[rownames(regulator_corr) %in% ID, colnames(regulator_corr) %in% ID][
-                                                  lower.tri(regulator_corr[rownames(regulator_corr) %in% ID, colnames(regulator_corr) %in% ID], diag = F)]))
-            cluster_score$score[is.na(cluster_score$score)] <- 0
-            
-            clus_assignments$cluster[i] <- cluster_score$cluster[which.max(cluster_score$score)]
-          }
-          
-          current_score <- clus_assignments %>% group_by(cluster) %>%
-            summarize(score = mean(regulator_corr[rownames(regulator_corr) %in% ID, colnames(regulator_corr) %in% ID][
-              lower.tri(regulator_corr[rownames(regulator_corr) %in% ID, colnames(regulator_corr) %in% ID], diag = F)]))
-          current_score$score[is.na(current_score$score)] <- 0
-          
-          current_score <- current_score %>% dplyr::select(score) %>% unlist() %>% unname() %>% sum()
-          
-          if(old_score >= current_score){
-            has_converged <- T
-          }else{
-            old_score <- current_score
-          }
-        }
-        
-        met_cluster <- rbind(met_cluster, data.frame(reaction = a_reaction, modtype = a_reg_type, tID = clus_assignments$ID, group = clus_assignments$cluster))
-      }
-    }
+  input_df <- tested_regulation %>% ungroup() %>% dplyr::select(reaction, sce, other, is_GS, is_sig) %>% filter(!is_GS) %>%
+    group_by(reaction) %>% mutate(`sig and not sig` = ifelse(all(c(T, F) %in% is_sig), T, F)) %>%
+    filter(`sig and not sig`) %>% dplyr::select(reaction, is_sig, sce, other) %>% dplyr::select(-sce)
+  
+  set.seed(1234)
+  Lit_support_improve_fit_noGS <- other_lit_support(input_df, 10000)
+  
+  ### predict physiological regulation from literature support ###
+  # Allowing reactions with gold-standard regulation to serve as a basis,
+  # Treat gold-standard regulation as physiologically verified
+  # Treat non-GS BRENDA regulation as primarily non-physiological
+  # predict GS (1) versus non-GS (0) regulation from BRENDA literature support
+  # Extend to reactions with no gold-standard annotated regulation
+  
+  GS_reaction_predictors <- tested_regulation %>% group_by(reaction) %>% dplyr::select(rMech, reaction, is_GS, modtype, sce, other) %>%
+    dplyr::mutate(log2Nreg = log2(n())) %>% dplyr::mutate(is_GS = is_GS*1)
+  
+  logit_fit <- glm(is_GS ~ sce + other + log2Nreg, data = GS_reaction_predictors %>% filter(!all(is_GS == F)), family = "binomial")
+  
+  GS_reaction_predictors <- GS_reaction_predictors %>% ungroup() %>%
+    mutate(logit = predict(logit_fit, newdata = .)) %>%
+    mutate(prob_sig = exp(logit)/(1 + exp(logit)))
+  
+  if(!(all(logit_fit$fitted == (GS_reaction_predictors %>% group_by(reaction) %>% filter(!all(is_GS == F)))$prob_sig))){
+    stop("fitted probabilities are misaligned/incorrect")
   }
   
-  tested_regulation <- tested_regulation %>% left_join(met_cluster, by = c("reaction", "modtype", "tID"))
+  #ggplot(GS_reaction_predictors %>% group_by(reaction) %>% filter(!all(is_GS == F)), aes(x = factor(is_GS), y = logit)) + geom_violin()
   
-  tested_regulation_aggregate <- tested_regulation %>% group_by(reaction, modtype, is_sig, group) %>%
-    dplyr::summarize(N = n(), is_GS = sum(is_GS), sce = sum(sce), other = sum(other))
-  
-  tested_regulation_aggregate <- tested_regulation_aggregate %>% dplyr::select(-group) %>%
-    rowwise() %>% mutate(sce_mean = sce/N, other_mean = other/N) %>%
-    group_by(reaction) %>% mutate(totalCitations = sum(sce_mean) + sum(other_mean), 
-                                  totalYeast = sum(sce_mean),
-                                  regTests = sum(N)) %>%
-    rowwise() %>% mutate(sce_frac = ifelse(totalYeast != 0, sce_mean/totalYeast, 0),
-                         other_frac = other_mean/totalCitations)
-  
-  tested_regulation_aggregate <- tested_regulation_aggregate %>%
-    mutate(sce_factor = ifelse(sce == 0, "None", "NA"),
-           sce_factor = ifelse(sce > 3, "High", sce_factor),
-           sce_factor = ifelse(sce_factor == "NA", "Noted", sce_factor),
-           sce_factor = factor(sce_factor, levels = c("None", "Noted", "High"), ordered = T)) %>%
-    mutate(other_factor = ifelse(other > 20 | other_frac > 0.3, "High", "NA"),
-           other_factor = ifelse(other <= 2 | other_frac < 0.04, "Low", other_factor),
-           other_factor = ifelse(other_factor == "NA", "Mid", other_factor),
-           other_factor = factor(other_factor, levels = c("Low", "Mid", "High"), ordered = T))
-  
-  ### Hypothesis testing
-  
-  weightedReg_withGS = glm(is_sig ~ modtype + sce_frac + sce_mean + other_frac + other_mean + is_GS,
-                           weight = N, family=binomial(logit), data = tested_regulation_aggregate)
-  
-  weightedReg_withGS = glm(is_sig ~ modtype + regTests + sce_mean + other_mean,
-                           weight = N, family=binomial(logit), data = tested_regulation_aggregate)
-  
-  
-  
-  
-  
-  
-  
-  
-  sig_assoc_norm <- sig_association %>% group_by(reaction) %>% mutate(totalObs = sum(sce + other), totalYeast = sum(sce)) %>%
-    rowwise() %>% mutate(sce_frac = ifelse(totalYeast != 0, sce/totalYeast, 0), other_frac = other/totalObs)
-  
-  sig_assoc_norm <- sig_assoc_norm %>%
-    mutate(sce_factor = ifelse(sce == 0, "None", "NA"),
-           sce_factor = ifelse(sce > 3 & sce_frac > 0.3, "High", sce_factor),
-           sce_factor = ifelse(sce_factor == "NA", "Noted", sce_factor),
-           sce_factor = factor(sce_factor, levels = c("None", "Noted", "High"))) %>%
-    mutate(other_factor = ifelse(other > 20 | other_frac > 0.3, "High", "NA"),
-           other_factor = ifelse(other <= 2 | other_frac < 0.07, "Low", other_factor),
-           other_factor = ifelse(other_factor == "NA", "Mid", other_factor),
-           other_factor = factor(other_factor, levels = c("Low", "Mid", "High")))
-  
-  # table(sig_assoc_norm$is_sig, sig_assoc_norm$sce != 0)
-  
-  
-  # standard models
-  #glm(is_sig ~ modtype + sce_frac + other_frac, family=binomial(logit), data=sig_assoc_norm)
-  #glm(is_sig ~ modtype + sce_frac + other_frac + totalObs, family=binomial(logit), data=sig_assoc_norm)
-  #glm(is_sig ~ modtype + sce + other + totalObs, family=binomial(logit), data=sig_assoc_norm)
-  #glm(is_sig ~ modtype*sce_frac + modtype*other_frac + modtype*totalObs, family=binomial(logit), data=sig_assoc_norm)
-  
-  # weighted models for significance
-  
-  #weightedReg_noGS = glm(is_sig ~ modtype + sce_frac + other_frac + totalObs,
-  #    weights = (other_frac + sce_frac)*totalObs, family=binomial(logit), data=sig_assoc_norm)
-  
-  weightedReg_withGS = glm(is_sig ~ modtype + sce_frac + other_frac,
-                           family=binomial(logit), data=sig_assoc_norm)
-  
-  weightedReg_withGS = glm(is_sig ~ modtype + sce_factor + other_factor,
-                           family=binomial(logit), data=sig_assoc_norm)
-  summary(weightedReg_withGS)
-  
-  weightedReg_withGS = glm(is_sig ~ modtype + sce_factor + other_factor + is_GS,
-                           family=binomial(logit), data=sig_assoc_norm)
-  summary(weightedReg_withGS)
-  
-  weightedReg_withGS = glm(is_sig ~ modtype + sce_factor + other_factor + is_GS,
-                           family=binomial(logit), data=sig_assoc_norm)
-  
-  
-  weightedReg_withGS = glm(is_sig ~ modtype + sce_frac + other_frac + is_GS + totalObs,
-                           family=binomial(logit), data=sig_assoc_norm)
-  
-  sig_assoc_norm <- sig_assoc_norm %>% ungroup() %>% mutate(prob_sig = unname(weightedReg_withGS$fitted))
-  
-  #ggplot(sig_assoc_norm, aes(x = prob_sig)) + facet_grid(is_sig ~., scale = "free_y") + geom_bar(binwidth = 0.02)
-  #ggplot(sig_assoc_norm, aes(x = is_sig, y = log(prob_sig/(1 - prob_sig)))) + geom_boxplot(notch = T)
+  # Big guns that over-fit
+  #set.seed(1234)
+  #library(neuralnet)
+  #mlp_fit <- neuralnet( 
+  #is_GS ~ modtype + sce + other + Nreg, 
+  #data=all_GS_reg, hidden=2, threshold=0.01, linear.output = F)
+  #all_GS_reg$mlp_fit <- mlp_fit$net.result %>% unlist()
   
   return_list[['GS_contingency']] = GS_contingency
-  return_list[['fitted_model']] = weightedReg_withGS
-  return_list[['prob_reg']] = sig_assoc_norm
+  return_list[['Lit_support_improve_fit']] <- Lit_support_improve_fit
+  return_list[['Lit_support_improve_fit_noGS']] <- Lit_support_improve_fit_noGS
+  return_list[['fitted_model']] = logit_fit
+  return_list[['prob_reg']] = tested_regulation %>% left_join(GS_reaction_predictors %>% dplyr::select(rMech, prob_sig), by = "rMech")
   
   return(return_list)
   
 }
+
+
+
+other_lit_support <- function(input_df, n_perm){
+  
+  # determine whether literature support is related to significance of non-gold-standard regulation
+  # count_p - citations-per-regulator summed over reactions
+  # frac_p - citations of sig / all reaction citations summed over reactions
+  
+  other_enrich <- input_df %>% group_by(reaction, is_sig) %>% group_by(reaction) %>% 
+    mutate(all_lit = sum(other)) %>% group_by(reaction, is_sig) %>%
+    dplyr::summarize(other_count = sum(other)/n(), other_frac = sum(other/all_lit)) %>%
+    group_by(is_sig) %>% dplyr::summarize(other_count = sum(other_count), other_frac = sum(other_frac))
+  
+  other_perm <- lapply(1:n_perm, function(i){
+    
+    input_df %>% group_by(reaction) %>%
+      mutate(is_sig = sample(is_sig, replace = F)) %>% 
+      group_by(reaction, is_sig) %>% group_by(reaction) %>% 
+      mutate(all_lit = sum(other)) %>% group_by(reaction, is_sig) %>%
+      dplyr::summarize(other_count = sum(other)/n(), other_frac = sum(other/all_lit)) %>%
+      group_by(is_sig) %>% dplyr::summarize(other_count = sum(other_count), other_frac = sum(other_frac)) %>%
+      mutate(set = i)
+    
+  })
+  
+  other_perm <- do.call("rbind", other_perm)
+  
+  perm_summary <- other_perm %>% group_by(set) %>%
+    dplyr::summarize(sig_rel_count = other_count[is_sig] / sum(other_count),
+                     sig_rel_frac = other_frac[is_sig] / sum(other_frac))
+  
+  count_p = 1 - (sum(other_enrich$other_count[other_enrich$is_sig] / sum(other_enrich$other_count) > perm_summary$sig_rel_count))/n_perm
+  frac_p = 1 - (sum(other_enrich$other_frac[other_enrich$is_sig] / sum(other_enrich$other_frac) > perm_summary$sig_rel_frac))/n_perm
+  
+  return(c(count_p = count_p, frac_p = frac_p))
+  
+}
+
 
 filter_rMech_by_prior <- function(relevant_rxns, reactionInfo, literature_support, rxnList_form){
   
@@ -3449,6 +3364,23 @@ filter_rMech_by_prior <- function(relevant_rxns, reactionInfo, literature_suppor
   regulators <- regulators %>% left_join(regulator_prior, by = c("reaction", "tID_type")) %>%
     left_join(reactionInfo %>% dplyr::select(rMech, modelType, ncond, npar, ML), by = "rMech")
   
+  # for each regulatory mechanism create a prior relative to the null (i.e. p(model|lit)*p(reg) relative to (1-p(reg)))
+  # if multiple regulators exist take the product over all species
+  
+  regulatory_model_relative_prior <- regulators %>% group_by(rMech) %>%
+    dplyr::summarize(relative_prior = prod(prob_sig))
+  
+  # Summarize p(data|model)p(model) for each rMech accounting for different model complexity with AICc
+  
+  support_summary <- rMechs_considered %>% filter(modelType == "rMM" | rMech %in% regulatory_model_relative_prior$rMech) %>%
+    left_join(regulatory_model_relative_prior, by = "rMech") %>%
+    mutate(relative_prior = ifelse(is.na(relative_prior), 1, relative_prior)) %>%
+    dplyr::select(reaction, rMech, ncond, npar, ML, relative_prior)
+  
+  support_summary <- support_summary %>% mutate(ML_prior = ML + log(relative_prior),
+                                                AICc = 2*npar - 2*ML_prior + 2*npar*(npar + 1)/(ncond - npar - 1))
+  
+  
   # If multiple types of inhibitor or activation are included, collapse them to the best form
   # for combinatorial regulation this involves taking a single rMech combination
   
@@ -3456,7 +3388,7 @@ filter_rMech_by_prior <- function(relevant_rxns, reactionInfo, literature_suppor
     spread(key = tID_type, value = present, fill = 0) 
   
   similar_rMech_matrix <- similar_rMech_matrix %>% dplyr::select(rMech, reaction, modelType, ncond, ML) %>%
-    mutate(regulators = apply(as.data.frame(similar_rMech_matrix[,!(colnames(similar_rMech_matrix) %in% c("rMech", "reaction", "ncond", "ML"))]), 1, function(x){
+    mutate(regulators = apply(as.data.frame(similar_rMech_matrix[,!(colnames(similar_rMech_matrix) %in% c("rMech", "reaction", "modelType", "ncond", "ML"))]), 1, function(x){
       paste(x, collapse = "") 
     }))
   
@@ -4213,7 +4145,14 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
       
       # Filter regulators if they have low support (high AIC) and a substantially lower spearman correlation than the best form (~0.05)
       supported_rMech <- rMech_support %>% filter(reaction == a_rxn, ncond == a_cond_subset) %>% ungroup() %>%
-        filter(spearman > max(spearman)-0.05 | AIC_prob > 0.001) %>% arrange(desc(AIC_prob)) %>% dplyr::slice(1:20)
+        filter(spearman > max(spearman)-0.05 | AIC_prob > 0.001) 
+      
+      # filter reaction mechanisms that use more free parameters than better supported simpler models
+      rMech_filter <- sapply(1:nrow(supported_rMech), function(i){
+        ifelse(supported_rMech$npar[i] == min(supported_rMech$npar), T,
+               ifelse(supported_rMech$AIC_prob[i] < max(supported_rMech$AIC_prob[supported_rMech$npar < supported_rMech$npar[i]]), F, T))})
+      
+      supported_rMech <- supported_rMech %>% filter(rMech_filter) %>% arrange(desc(AIC_prob)) %>% dplyr::slice(1:20)
       
       sig_GS_regulation <- GS_regulation_support %>% filter(reaction == a_rxn, is_sig) %>% dplyr::select(SubstrateID = tID, Type = modtype) %>%
         mutate(tID_type = paste(SubstrateID, Type, sep = "-"), rMech = NA)
