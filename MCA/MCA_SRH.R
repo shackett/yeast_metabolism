@@ -49,12 +49,12 @@ for(a_model in pathway_models){
   
   if(a_model %in% c("Glycolysis", "Glycolysis with FBP feed-forward")){
     
-    modelRxns <- c(PFK = "r_0886-rm-t_0452-inh-uncomp", # PFK
-                   ALD = "r_0450-rm-t_0234-inh-noncomp", # ALD
+    modelRxns <- c(PFK = "r_0886-rm-t_0234-inh-noncomp", # AMP -| PFK
+                   ALD = "r_0450-rm-t_0234-inh-noncomp", # AMP -| ALD
                    GAPDH = "r_0486-rm", # GAPDH
                    PGK = "r_0892-rm", # PGK
                    #PGM = "r_0893-rm-t_0139-inh-noncomp", # PGM
-                   PyK = "r_0962-rm-t_0276-inh-noncomp" # PyK
+                   PyK = "r_0962-rm-pairwise-t_0452-inh-noncomp+t_0234-inh-noncomp" # isocitrate, AMP -| PyK
     )
     
     modelRxnNames <- c(PFK = 'PFK',
@@ -63,7 +63,7 @@ for(a_model in pathway_models){
                        PyK = 'Citrate -| PyK') # optional renaming
     
     if(a_model == "Glycolysis with FBP feed-forward"){
-      modelRxns[names(modelRxns) == "PyK"] <- "r_0962-rm-t_0290-act-mm"
+      modelRxns[names(modelRxns) == "PyK"] <- "r_0962-rm-pairwise-t_0276-inh-noncomp+t_0290-act-mm"
       modelRxnNames['PyK'] <- 'FBP -+ PyK'
       
     }
