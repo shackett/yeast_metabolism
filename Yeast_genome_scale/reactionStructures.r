@@ -1503,7 +1503,7 @@ rxnf <- list() # a list
 
 # Generate reaaction forms just using irreversible michaelis-menten kinetics
 
-# For reactions flowing in the canonical forward direction : evaluate when V > 
+# For reactions flowing in the canonical forward direction : evaluate when V > 0
 rct_s <- rct_s2p[rct_s2p$Subtype == "substrate",]
 rct_s$Reversible <- 1
 rxnForms <- tab2ReactionForms(rct_s,'rm')
@@ -1551,16 +1551,16 @@ gs_missing <- gs_regulation %>% dplyr::select(rxn, tID, modtype) %>% anti_join(a
 
 allo_table <- rbind(allo_table, gs_missing)
 
-rxnForms <- Mod2reactionEq(allo_table,'rm',T,T)
+rxnForms <- Mod2reactionEq(allo_table,'rm',T,F)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 Brenda_rxn_forms <- names(rxnForms) # save 
 
-## for allosteric regulators, also look at a varaible hill coefficient
+## for allosteric activation and uncompetitive inhibition, also look at a varaible hill coefficient
 alloModTable <- allo_table
 alloModTable$hill <- 0
-rxnForms <- Mod2reactionEq(alloModTable,'rm',F,T)
+rxnForms <- Mod2reactionEq(alloModTable,'rm',F,F)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
@@ -1571,7 +1571,7 @@ deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)
 deNovoRegulators$modtype <- rep(c("act", "inh"), each = length(unique(rct_s2p$ReactionID)))
 deNovoRegulators_bind <- deNovoRegulators; deNovoRegulators_bind$hill <- 0
 deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators_bind)
-rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F,T)
+rxnForms <- Mod2reactionEq(deNovoRegulators,'rm',F,F)
 for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
@@ -1598,13 +1598,13 @@ rm(rxnForms)
 
 if(add_pairwise_regulation & file.exists("flux_cache/paramCI.Rdata")){
 
-  # pull down already evaluated regulation
+  # pull down al ready evaluated regulation
   load("flux_cache/paramCI.Rdata")
 
   library(dplyr)
   library(tidyr)
   
-  reactionInfo %>% filter(!is.na(Qvalue) & Qvalue < 0.1) %>% filter(modelType == "regulator") %>% filter(!(rMech %in% Brenda_rxn_forms))
+  #reactionInfo %>% filter(!is.na(Qvalue) & Qvalue < 0.1) %>% filter(modelType == "regulator") %>% filter(!(rMech %in% Brenda_rxn_forms))
   
   # pull out single/highly-suggestive single regulators
   significant_regulation <- reactionInfo %>% filter(!is.na(Qvalue) & Qvalue < 0.1) %>%
@@ -1612,7 +1612,7 @@ if(add_pairwise_regulation & file.exists("flux_cache/paramCI.Rdata")){
     separate(modification, into = c("tID", "modtype", "subtype"), sep = "-")  %>%
     mutate(subtype = gsub('comp', 'competitive', subtype))
   
-  rxnForms <- Mod2reactionEq_pairwise(significant_regulation, allo_table,'rm',allInhMods=T, allActMods=T)
+  rxnForms <- Mod2reactionEq_pairwise(significant_regulation, allo_table,'rm',allInhMods=T, allActMods=F)
   
   for (x in names(rxnForms)){
     rxnf[[x]] <- rxnForms[[x]]
