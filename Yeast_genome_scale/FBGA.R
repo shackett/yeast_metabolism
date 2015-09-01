@@ -371,7 +371,7 @@ for(arxn in custom_plotted_rxns){
   
   load(paste(c("FBGA_files/paramSets/", param_run_info$file[param_run_info$index == par_likelihood$index[1]]), collapse = ""))
   run_rxn <- run_summary[[arxn]]
-  
+  #run_rxn$specSD[,'t_0234'] <- 0.4567561
   ### A couple of catches for poorly defined reactions or if optimization grossly fails ### 
   
   if(sum(is.finite(par_likelihood$likelihood)) == 0){# all parameter sets have a zero likelihood (e.g. SD = 0)
@@ -546,11 +546,18 @@ if(!all(valid_rxns %in% fitReactionNames$reaction)){
 rxn_regulation <- regulation_lit_support(valid_rxns, all_reactionInfo)
 literature_support <- rxn_regulation[['prob_reg']]
 
+rxn_regulation[["prob_reg"]] %>% ungroup() %>% dplyr::summarize(sce = sum(sce), other = sum(other))
+
 # increased p(improve fit) for gold-standard and BRENDA regulation
 set.seed(1234)
 chisq.test(rxn_regulation[['GS_contingency']], simulate.p.value = T, B = 1e7)
 rxn_regulation[['Lit_support_improve_fit']]
 rxn_regulation[['Lit_support_improve_fit_noGS']]
+
+# total citations
+rxn_regulation[['prob_reg']] %>% ungroup() %>% dplyr::summarize(sce = sum(sce), other = sum(other))
+
+
 
 # p(model | literature)
 summary(rxn_regulation[['fitted_model']])
@@ -624,6 +631,22 @@ write.table(GS_regulation_support %>% dplyr::select(reaction_name, regulator, ty
 library(xtable)
 print(xtable(GS_regulation_support %>% dplyr::select(reaction_name, regulator, type, support, rank) %>% ungroup() %>% arrange(tolower(reaction_name), regulator)),
              include.rownames = F)
+
+### Include validated regulation ###
+
+optimal_reaction_form <- rbind(optimal_reaction_form %>% filter(reaction != "r_0816"),
+                               rMech_support %>% filter(rMech == "r_0816-rm-t_0461-inh-comp_rmCond")
+) %>% arrange(reaction)
+
+append_GS <- data.frame(reaction_name = 'ornithine transcarbamylase', reaction = 'r_0816', regulator = 'alanine',
+        tID = 't_0461', type = 'inhibitor', reference = NA, modtype = 'inh', is_sig = T, rMech = 'r_0816-rm-t_0461-inh-comp_rmCond',
+        reg_type = NA, ncond = 20, spearman = NA, optimal = NA, support = NA, hypo_rMech = NA, hypo_corr = NA, rank = NA)
+        
+GS_regulation_support <- rbind(GS_regulation_support, append_GS)
+
+
+
+
 
 #### Group reaction mechanisms into similarly behaving groups and filter low-confidence mechanisims ####
 # save this for later once well-fit reactions are identified
@@ -830,7 +853,21 @@ ggplot(ML_rxn_tall, aes(x = rMech, y = ML, fill = Type, order = Type)) + geom_ba
   scale_x_discrete("Reactions", breaks = ML_rxn_tall$rMech, labels = ML_rxn_tall$abbrev)
 ggsave("Figures/metabolicLeverageBar.pdf", height = 10, width = 16)
 
+# Pie chart summarizing metabolic leverage component contributions
 
+pie_theme <- theme(text = element_text(size = 20, face = "plain"), title = element_text(size = 25), 
+                       panel.background = element_rect(fill = "gray100"), legend.position = "top", 
+                       axis.ticks = element_blank(), axis.text = element_blank(),
+                       panel.grid = element_blank(), axis.line = element_blank(), legend.title=element_blank())
+
+ML_component_summary <- ML_rxn_tall %>% group_by(reversibility, Type) %>% dplyr::summarize(ML = sum(ML)) %>% group_by(reversibility) %>% mutate(ML = ML/sum(ML))
+
+ggplot(ML_component_summary, aes(x = factor(1), y = ML, fill = Type)) + geom_bar(stat = "identity", width = 1) + coord_polar(theta = "y") +
+  facet_wrap(~ reversibility) + scale_fill_manual(values = TypeColors) + pie_theme +
+  scale_x_discrete("") + scale_y_continuous("")
+ggsave("Figures/metabolicLeveragePie.pdf", height = 5, width = 7)
+
+# Generate a ternary plot to show the contributions of metabolites and enzymes in controlling flux
 
 color_key <- color_ternary(100)
 #color_key <- color_simplex(200, 0, T, 6)
@@ -1135,19 +1172,28 @@ ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 8)
 
 load("flux_cache/paramCI.Rdata")
 
+# Look at a subset of reactions
+
 # remove reactions where the search for hypothetical regualtion is nearly underdetermined
 relevant_rxns <- setdiff(valid_rxns, reactionInfo %>% filter(ncond - npar < 5, modelType == "hypo met regulator") %>%
                            dplyr::select(reaction) %>% unlist() %>% unname() %>% unique())
+relevant_rxns <- rbind(
+  # select understudied reactions
+  data.frame(reaction = relevant_rxns[relevant_rxns %in% c("r_0195", "r_0225", "r_0468", "r_0514", "r_0528", "r_1049")], class = "understudied"),
+  # reactions not fit by regulation or rMM
+  data.frame(reaction = relevant_rxns[relevant_rxns %in% (optimal_reaction_form %>% filter(!(rMech %in% adequate_fit_optimal_rxn_form)))$reaction], class = "poorly-fit")
+)
+unregulated_rxns <- (optimal_reaction_form %>% filter(reaction %in% relevant_rxns$reaction) %>% filter(type == "unregulated"))$reaction
+relevant_rxns <- relevant_rxns %>% group_by(reaction) %>% dplyr::slice(1)
 
-relevant_rxns <- intersect(relevant_rxns, (total_tested_regulators %>% filter(N_reg_tested < 5))$reaction)
-
-### Compare hypothetical regulator to significant regulators to rMM ###
+## Compare hypothetical regulator to significant regulators to rMM ###
 
 Hypo_met_compare <- reactionInfo %>% tbl_df() %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman = parSpearman), by = "rMech") %>%
-  filter(reaction %in% relevant_rxns, modelType %in% c("rMM", "regulator", "hypo met regulator")) %>%
-  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup()
-  
-# Is the hypothetical regulator much more likely than any ascertained metabolite
+  filter(reaction %in% relevant_rxns$reaction, modelType %in% c("rMM", "regulator", "hypo met regulator")) %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup() %>%
+  filter(!(reaction %in% unregulated_rxns & modelType == "regulator"))
+
+# Is the hypothetical regulator much more likely than any tested regulatory metabolite
 
 hypo_met_AICc <- Hypo_met_compare %>% filter(modelType %in% c("regulator", "hypo met regulator")) %>%
   filter(Qvalue < 0.1) %>%
@@ -1180,32 +1226,49 @@ Hypo_y_rMM <- Hypo_met_compare %>% filter(modelType == "rMM" | rMech %in% Hypo_m
   mutate(reaction = factor(reaction, levels = Hypo_met_ranking$reaction),
          printType = factor(printType, levels = c("rMM", "n.s.", "improves rMM", "improves regulator"))) %>% ungroup()
 
-Hypo_y_rMM <- Hypo_y_rMM %>% mutate(spearman = ifelse(spearman < 0, 0, spearman)) %>% dplyr::group_by(reaction) %>%
-  mutate(spearman = ifelse(modelType == "hypo met regulator", spearman - spearman[modelType == "rMM"], spearman))
-
 # pull out regulation by ascertained metabolites as well
 
 measured_spear <- Hypo_met_compare %>% filter(modelType == "regulator", Qvalue < 0.1) %>% dplyr::select(rMech, reaction, spearman) %>%
-  mutate(reaction = factor(reaction, levels = Hypo_met_ranking$reaction))
+  group_by(reaction) %>% filter(spearman == max(spearman)) %>% dplyr::slice(1)
+
+stacked_reg_hypo_comp <- rbind(Hypo_y_rMM %>% dplyr::select(reaction, modelType, spearman, printType),
+      measured_spear %>% mutate(modelType = "regulator", printType = "regulator") %>% dplyr::select(reaction, modelType, spearman, printType))
+
+stacked_reg_hypo_comp <- stacked_reg_hypo_comp %>% group_by(reaction) %>% mutate(regRef = spearman[modelType == "rMM"]) %>%
+  mutate(spearman = ifelse(modelType == "regulator" & spearman < regRef, regRef, spearman)) %>%
+  mutate(hypoRef = max(spearman[modelType %in% c("rMM", "regulator")])) %>%
+  mutate(spearman = ifelse(modelType == "hypo met regulator" & spearman < hypoRef, hypoRef, spearman))
+
+stacked_reg_hypo_comp <- stacked_reg_hypo_comp %>% mutate(spearman = ifelse(modelType == "regulator", spearman - regRef, spearman),
+         spearman = ifelse(modelType == "hypo met regulator", spearman - hypoRef, spearman))
+
+stacked_reg_hypo_comp <- stacked_reg_hypo_comp %>% ungroup() %>% arrange(regRef) %>%
+  left_join(relevant_rxns, by = "reaction") %>%
+  mutate(reaction = factor(reaction, levels = unique(reaction)),
+         modelType = factor(modelType, levels = c("rMM", "regulator", "hypo met regulator")) )
+  
+
 
 # This method is underpowered particularly for reactions when the 
 # literature can help us discriminate between quantitatively similar metabolites
 
 barplot_theme <- theme(text = element_text(size = 22), title = element_text(size = 25), 
-                       panel.background = element_rect(fill = "gray92"), legend.position = "top", 
+                       panel.background = element_rect(fill = "gray96"), legend.position = "top", 
                        axis.ticks = element_line(color = "black", size = 1),
-                       axis.text = element_text(color = "black"), axis.text.y = element_text(size = 12),
+                       axis.text = element_text(color = "black"),
+                       axis.text.x = element_text(angle = 60, hjust = 1),
                        panel.grid = element_blank(),
                        axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
 )
 
-ggplot(Hypo_y_rMM, aes(x = reaction, y = spearman)) + geom_hline(size = 1, yintercept = c(0, 0.25, 0.5, 0.75, 1)) +
+ggplot(stacked_reg_hypo_comp, aes(x = reaction, y = spearman, order = modelType)) + geom_hline(size = 1, yintercept = c(0, 0.25, 0.5, 0.75, 1)) +
   geom_bar(aes(fill = printType), color = "black", size = 0.25, width = 0.9, stat = "identity", position = "stack") +
-  geom_point(data = measured_spear) + coord_flip(ylim = c(0,1)) + scale_y_continuous("Spearman Correlation") +
-  scale_fill_manual(values = c("rMM" = "gray50","n.s." = "gold1","improves rMM" = "limegreen", "improves regulator" = "red")) +
+  scale_y_continuous("Spearman Correlation", expand = c(0,0)) +
+  scale_fill_manual(values = c("rMM" = "gray70", "regulator" = "gray50", "n.s." = "darkgoldenrod2","improves rMM" = "coral1", "improves regulator" = "red"),
+                    breaks = c("rMM", "regulator", "n.s.", "improves rMM", "improves regulator")) +
   scale_x_discrete(name = "Reactions", breaks = fitReactionNames$reaction, labels = fitReactionNames$abbrev) +
-  barplot_theme
-ggsave("Figures/hypoMetImprove.pdf", height = 10, width = 10)
+  barplot_theme + facet_grid(~class, scale = "free_x", space = "free_x", drop = T)
+ggsave("Figures/hypoMetImprove.pdf", height = 7.6, width = 9)
 
 
 ### Look at hypothetical 
