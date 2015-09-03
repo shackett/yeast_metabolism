@@ -1527,10 +1527,10 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 
-rxnForms <- tab2ReactionForms(rct_s2p,'cc') # convenience kinetics
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
+#rxnForms <- tab2ReactionForms(rct_s2p,'cc') # convenience kinetics
+#for (x in names(rxnForms)){
+#  rxnf[[x]] <- rxnForms[[x]]
+#}
 
 ## Write all the rate laws with all Brenda modifications and all possible inhibitor modes
 
@@ -1565,6 +1565,72 @@ for (x in names(rxnForms)){
   rxnf[[x]] <- rxnForms[[x]]
 }
 
+## If all metabolite x reactions are desired, then supplement BRENDA regulators with all remaining
+## unique measurements
+
+if(add_all_single_metabolites){
+  
+  possible_regulators <- alloModTable %>% tbl_df() %>% filter(!is.na(measured)) %>% filter(measured != "not") %>%
+    filter(rxn %in% unique(rct_s2p$ReactionID)) %>%
+    dplyr::select(rxn, tID, modtype) %>% unique()
+  
+  
+  # Sometimes multiple tIDs correspond to a single measurement, in this case only test once
+  redunant_metabolites <- expanded_met_correlations
+  rownames(redunant_metabolites) <- colnames(redunant_metabolites) <- tab_boer$SpeciesType
+  redunant_metabolites <- redunant_metabolites %>% as.data.frame() %>% mutate(tID1 = rownames(.)) %>%
+    gather(tID2, corr, -tID1, convert = T)
+  
+  redunant_metabolites <- redunant_metabolites %>% filter(tID1 != tID2 & corr == 1) %>%
+    spread(tID2, corr, fill = 0) %>% dplyr::select(-tID1)
+  redunant_metabolites <- as.matrix(redunant_metabolites)
+  rownames(redunant_metabolites) <- colnames(redunant_metabolites)
+  
+  grouped_mets <- NULL
+  group_n <- 1
+  redunant_metabolites_track <- redunant_metabolites
+  while(nrow(redunant_metabolites_track) != 0){
+    degenerates <- c(rownames(redunant_metabolites_track)[1], colnames(redunant_metabolites_track)[redunant_metabolites_track[1,] == 1])
+    grouped_mets <- rbind(grouped_mets, data.frame(group = group_n, tID = degenerates))
+    
+    group_n <- group_n + 1
+    redunant_metabolites_track <- redunant_metabolites_track[!(rownames(redunant_metabolites_track) %in% degenerates),!(rownames(redunant_metabolites_track) %in% degenerates)]
+  }
+  
+  # match all tIDs to an index indicating a unique measurement
+  
+  unambiguous_metabolites <- setdiff(tab_boer$SpeciesType, grouped_mets$tID)
+  
+  redundant_met_index <- rbind(grouped_mets, 
+                               data.frame(group = c(1:length(unambiguous_metabolites)) + max(grouped_mets$group),
+                                          tID = unambiguous_metabolites))
+  redundant_met_index <- redundant_met_index %>% left_join(tab_boer %>% mutate(measured = ifelse(is.na(concConv), "rel", "abs")) %>%
+                                                             dplyr::select(name = SpeciesName, tID = SpeciesType, measured), by = "tID")
+  
+  
+  # compare all metabolites to tested regulators
+  
+  possible_regulators <- possible_regulators %>% left_join(redundant_met_index %>% dplyr::select(-name), by = "tID")
+  
+  all_regulators <- expand.grid(rxn = unique(possible_regulators$rxn),
+                                group = unique(redundant_met_index$group),
+                                modtype = c("act", "inh"), stringsAsFactors = F) %>% tbl_df()
+  
+  untested_regulators <- all_regulators %>% anti_join(possible_regulators, by = c("rxn", "group", "modtype"))
+  untested_regulators <- untested_regulators %>% left_join(redundant_met_index %>% group_by(group) %>% slice(1), by = "group")
+  
+  untested_regulators <- untested_regulators %>% mutate(subtype = NA, origin = "allMets", hill = 1, SimMatch = NA) %>%
+    dplyr::select(rxn, name, tID, modtype, subtype, measured, origin, hill, SimMatch)
+  
+  rxnForms <- Mod2reactionEq(untested_regulators,'rm',F,F)
+  names(rxnForms) <- paste0(names(rxnForms), "_allMetabolites")
+  for (x in names(rxnForms)){
+    rxnf[[x]] <- rxnForms[[x]]
+  }
+  rm(rxnForms)
+  
+}
+
 ## Write out allosteric activator and inhibitor reaction equations for a hypothetical regulator whose patterns of variation are governed by metabolomic PCs.
 deNovoRegulators <- data.frame(rxn = unique(rct_s2p$ReactionID), name = "Hypothetical Regulator", tID = "t_metX", modtype = NA, subtype = NA, measured = "rel", origin = "novelMetSearch", hill = 1)
 deNovoRegulators <- rbind(deNovoRegulators, deNovoRegulators)
@@ -1587,23 +1653,20 @@ listTID <- rbind(listTID, data.frame(SpeciesType = "t_metX", SpeciesID = "s_metX
 #rm(rxnForms)
 
 ## Supervised verification of multiple regulators or isoenzyme specific kinetics/regulation
-manualRegulators <- read.table('companionFiles/manual_ComplexRegulation.txt', sep = "\t", header = T)
-rxnForms <- Mod2reactionEqComplex(manualRegulators)
-for (x in names(rxnForms)){
-  rxnf[[x]] <- rxnForms[[x]]
-}
-rm(rxnForms)
+#manualRegulators <- read.table('companionFiles/manual_ComplexRegulation.txt', sep = "\t", header = T)
+#rxnForms <- Mod2reactionEqComplex(manualRegulators)
+#for (x in names(rxnForms)){
+#  rxnf[[x]] <- rxnForms[[x]]
+#}
+#rm(rxnForms)
 
 ## Look at pairwise interactions involving regulators that improve fit x all BRENDA
 
 if(add_pairwise_regulation & file.exists("flux_cache/paramCI.Rdata")){
 
-  # pull down al ready evaluated regulation
+  # pull down already evaluated regulation
   load("flux_cache/paramCI.Rdata")
 
-  library(dplyr)
-  library(tidyr)
-  
   #reactionInfo %>% filter(!is.na(Qvalue) & Qvalue < 0.1) %>% filter(modelType == "regulator") %>% filter(!(rMech %in% Brenda_rxn_forms))
   
   # pull out single/highly-suggestive single regulators

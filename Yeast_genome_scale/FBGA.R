@@ -36,6 +36,7 @@ n_c <- nrow(chemostatInfo)
 ### To search for novel allosteric modifiers in an unsupervised manner - allow for reaction with extensions an abundance profile that is not specified a priori
 
 add_pairwise_regulation <- T
+add_all_single_metabolites <- T
 
 if(!file.exists("flux_cache/rxnf_formulametab.rdata")){
   source("reactionStructures.R")
