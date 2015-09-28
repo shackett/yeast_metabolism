@@ -1095,7 +1095,9 @@ modelComparison <- function(reactionInfo, rxnList_form){
   
   # add some additional modelTypes
   # treat a freely inferred metabolite (w and w/o hill seperately from real metabolites)
-  reaction_info_comparison <- reaction_info_comparison %>% mutate(modelType = ifelse(grepl('t_metX', rMech), paste("hypo met", modelType), modelType))
+  reaction_info_comparison <- reaction_info_comparison %>% mutate(modelType = ifelse(grepl('t_metX', rMech), paste("hypo met", modelType), modelType),
+                                                                  modelType = ifelse(grepl('allMetabolites', rMech), paste("non-literature supported met", modelType), modelType)
+                                                                  )
   
   # Compare full and reduced models using AICc and LRT
   model_comparison_list <- list()
@@ -1175,11 +1177,11 @@ modelComparison <- function(reactionInfo, rxnList_form){
   all_models <- do.call("rbind", comparison_list)
   
   # Each reaction is assigned a consensus measure of significance - based on the least significant comparison between reaction forms
-  all_models <- all_models %>% group_by(reaction, daughter_rMech, daughterModel) %>% dplyr::summarize(Qvalue = max(Qvalue)) %>%
-    dplyr::select(reaction, rMech = daughter_rMech, modelType = daughterModel, Qvalue)
+  all_models <- all_models %>% group_by(reaction, daughter_rMech, daughterModel) %>% dplyr::summarize(Pvalue = max(changeP), Qvalue = max(Qvalue)) %>%
+    dplyr::select(reaction, rMech = daughter_rMech, modelType = daughterModel, Pvalue, Qvalue)
   
   # add back the baseline rMM reaction forms
-  all_models <- rbind(all_models, reaction_info_comparison %>% filter(modelType == "rMM") %>% dplyr::select(reaction, rMech, modelType) %>% dplyr::mutate(Qvalue = NA)) %>% ungroup()
+  all_models <- rbind(all_models, reaction_info_comparison %>% filter(modelType == "rMM") %>% dplyr::select(reaction, rMech, modelType) %>% dplyr::mutate(Pvalue = NA, Qvalue = NA)) %>% ungroup()
   
   signifCO <- data.frame(q_cutoff = c(0.1, 0.001, 0.00001), code = c("*", "**", "***"))
   
@@ -1209,10 +1211,8 @@ modelComparison <- function(reactionInfo, rxnList_form){
     all_models$Name[i] <- paste(subnames, collapse = " + ")
   }
   
-  all_models <- rbind( 
-    all_models %>% filter(!grepl('rmCond', rMech)),
-    all_models %>% filter(grepl('rmCond', rMech)) %>% mutate(Name = sub('$', ' (zero flux / overflow conditions removed)', Name))
-  )
+  all_models <- all_models %>% mutate(Name = ifelse(grepl('rmCond', rMech), sub('$', ' (zero flux / overflow conditions removed)', Name), Name),
+                                      Name = ifelse(modelType  == "non-literature supported met regulator", sub('$', ' (non-literature supported met regulator)', Name), Name))
   
   manualRegulators <- read.delim('./companionFiles/manual_ComplexRegulation.txt')
   
@@ -3270,6 +3270,10 @@ regulation_lit_support <- function(relevant_rxns, all_reactionInfo){
     stop("fitted probabilities are misaligned/incorrect")
   }
   
+  #library(zoo) # for rolling mean
+  #prior_improve <- tested_regulation %>% dplyr::select(rMech, is_sig, is_GS) %>% left_join(GS_reaction_predictors %>% dplyr::select(rMech, prob_sig), by = "rMech")  
+  #rollmean(prior_improve$is_sig*1, 20)
+  
   #ggplot(GS_reaction_predictors %>% group_by(reaction) %>% filter(!all(is_GS == F)), aes(x = factor(is_GS), y = logit)) + geom_violin()
   
   # Big guns that over-fit
@@ -3380,37 +3384,28 @@ filter_rMech_by_prior <- function(relevant_rxns, reactionInfo, literature_suppor
   support_summary <- support_summary %>% mutate(ML_prior = ML + log(relative_prior),
                                                 AICc = 2*npar - 2*ML_prior + 2*npar*(npar + 1)/(ncond - npar - 1))
   
-  
   # If multiple types of inhibitor or activation are included, collapse them to the best form
   # for combinatorial regulation this involves taking a single rMech combination
   
-  similar_rMech_matrix <- regulators %>% dplyr::select(rMech, reaction, modelType, ncond, tID_type, ML) %>% mutate(present = 1) %>%
+  similar_rMech_matrix <- regulators %>% dplyr::select(rMech, reaction, modelType, ncond, tID_type) %>% mutate(present = 1) %>%
     spread(key = tID_type, value = present, fill = 0) 
   
-  similar_rMech_matrix <- similar_rMech_matrix %>% dplyr::select(rMech, reaction, modelType, ncond, ML) %>%
-    mutate(regulators = apply(as.data.frame(similar_rMech_matrix[,!(colnames(similar_rMech_matrix) %in% c("rMech", "reaction", "modelType", "ncond", "ML"))]), 1, function(x){
+  similar_rMech_matrix <- similar_rMech_matrix %>% dplyr::select(rMech, reaction, modelType, ncond) %>%
+    mutate(regulators = apply(as.data.frame(similar_rMech_matrix[,!(colnames(similar_rMech_matrix) %in% c("rMech", "reaction", "modelType", "ncond"))]), 1, function(x){
       paste(x, collapse = "") 
     }))
   
   # the most likely rMech of each type of similar regulation
-  similar_rMech_matrix <- similar_rMech_matrix %>% group_by(reaction, ncond, regulators) %>% filter(ML == max(ML))
+  similar_rMech_matrix <- similar_rMech_matrix %>%
+    left_join(support_summary %>% dplyr::select(rMech, AICc), by = "rMech") %>%
+    group_by(reaction, ncond, modelType, regulators) %>% filter(AICc == min(AICc))
   
-  # for each regulatory mechanism create a prior relative to the null (i.e. p/(1-p))
-  # if multiple regulators exist take the product over all species
-  regulatory_model_relative_prior <- regulators %>% filter(rMech %in% similar_rMech_matrix$rMech) %>% group_by(rMech) %>%
-    dplyr::summarize(relative_prior = prod(prob_sig/(1-prob_sig))) %>%
-    mutate(relative_prior = ifelse(relative_prior > 1, 1, relative_prior))
+  # all non-regulated rMechs and the best supported of similar rMechs
   
-  # Summarize p(model)*p(data|model) for each rMech
-  # look at AICc
+  support_summary <- rbind(support_summary %>% filter(!(rMech %in% regulators$rMech)),
+                           support_summary %>% filter(rMech %in% similar_rMech_matrix$rMech))
   
-  support_summary <- rMechs_considered %>% filter(modelType == "rMM" | rMech %in% regulatory_model_relative_prior$rMech) %>%
-    left_join(regulatory_model_relative_prior, by = "rMech") %>%
-    mutate(relative_prior = ifelse(is.na(relative_prior), 1, relative_prior)) %>%
-    dplyr::select(reaction, rMech, ncond, npar, ML, relative_prior)
-  
-  support_summary <- support_summary %>% mutate(ML_prior = ML + log(relative_prior),
-                                                AICc = 2*npar - 2*ML_prior + 2*npar*(npar + 1)/(ncond - npar - 1))
+  # Compare the support for all models of a given reaction
   
   support_summary <- support_summary %>% group_by(reaction, ncond) %>%
     dplyr::mutate(minAIC = min(AICc),
@@ -4154,8 +4149,8 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
       
       supported_rMech <- supported_rMech %>% filter(rMech_filter) %>% arrange(desc(AIC_prob)) %>% dplyr::slice(1:20)
       
-      sig_GS_regulation <- GS_regulation_support %>% filter(reaction == a_rxn, is_sig) %>% dplyr::select(SubstrateID = tID, Type = modtype) %>%
-        mutate(tID_type = paste(SubstrateID, Type, sep = "-"), rMech = NA)
+      sig_GS_regulation <- GS_regulation_support %>% filter(reaction == a_rxn, ncond == a_cond_subset, is_sig) %>% dplyr::select(SubstrateID = tID, Type = modtype) %>%
+        mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
       
       reduced_regulators <- relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type) %>% unique() %>% filter(rMech %in% supported_rMech$rMech) %>%
         mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
@@ -4165,12 +4160,25 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
         shedded_reg <- shedded_reg %>% filter(tID_type %in% regulator_info$tID_type)
         
         if(nrow(shedded_reg) != 0){
-          reduced_regulators <- rbind(reduced_regulators, 
-                                      sig_GS_regulation %>% anti_join(reduced_regulators, by = "tID_type")
-          )
+          
+          shedded_rMech <- shedded_reg %>% left_join(
+            relevant_regulators %>% dplyr::select(rMech, SubstrateID, Type) %>% unique(.) %>%
+            group_by(rMech) %>% filter(n() == 1), by = c("SubstrateID", "Type"))
+          
+          reduced_regulators <- rbind(reduced_regulators, shedded_rMech)
+          
+          supported_rMech <- rbind(supported_rMech,  
+                                   rMech_support %>% filter(rMech %in% shedded_rMech$rMech))
           #print(paste(a_rxn))
         }
       }
+      
+      if(nrow(reduced_regulators) == 0){
+        # all regulation is less favorable than rMM
+        reaction_graphs$regulation[[paste(a_rxn, a_cond_subset, sep = "-")]] <- ""
+       next
+      }
+      
       
       # delete irrelevant regulators
       reg_connection_graph <- delete.vertices(reg_connection_graph, V(reg_connection_graph)$name[!(V(reg_connection_graph)$name %in% unique(reduced_regulators$tID_type))])
