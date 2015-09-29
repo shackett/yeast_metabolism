@@ -995,6 +995,8 @@ cond_order_check <- function(query){
 
 ########## Functions used in optimization of fitted flux versus actual flux ############
 
+
+
 modelComparison <- function(reactionInfo, rxnList_form){
   
   require(dplyr)
@@ -1098,6 +1100,8 @@ modelComparison <- function(reactionInfo, rxnList_form){
   reaction_info_comparison <- reaction_info_comparison %>% mutate(modelType = ifelse(grepl('t_metX', rMech), paste("hypo met", modelType), modelType),
                                                                   modelType = ifelse(grepl('allMetabolites', rMech), paste("non-literature supported met", modelType), modelType)
                                                                   )
+  
+  #return(reaction_info_comparison)
   
   # Compare full and reduced models using AICc and LRT
   model_comparison_list <- list()
@@ -1210,6 +1214,8 @@ modelComparison <- function(reactionInfo, rxnList_form){
     
     all_models$Name[i] <- paste(subnames, collapse = " + ")
   }
+  
+  #return(all_models)
   
   all_models <- all_models %>% mutate(Name = ifelse(grepl('rmCond', rMech), sub('$', ' (zero flux / overflow conditions removed)', Name), Name),
                                       Name = ifelse(modelType  == "non-literature supported met regulator", sub('$', ' (non-literature supported met regulator)', Name), Name))
@@ -1625,7 +1631,14 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   ### What measured metabolites most resemble these trends ###
   
-  specCorrQuantiles <- t(apply(cor(t(tab_boer[,colnames(tab_boer) %in% colnames(reconstructedDraws)]), t(reconstructedDraws)), 1, function(x){quantile(x, probs = c(0.025, 0.5, 0.975))}))
+  markov_ra <- t(reconstructedDraws) - matrix(apply(t(reconstructedDraws), 2, mean), nrow = ncol(reconstructedDraws), ncol = nrow(reconstructedDraws), byrow = T)
+  met_ra <- t(tab_boer[,colnames(tab_boer) %in% colnames(reconstructedDraws)])
+  met_ra <- met_ra - matrix(apply(met_ra, 2, mean), nrow = nrow(met_ra), ncol = ncol(met_ra), byrow = T)
+  
+  markov_met_dist <- rdist(t(markov_ra), t(boer_ra))
+  
+  specCorrQuantiles <- t(apply(markov_met_dist, 2, function(x){quantile(x, probs = c(0.025, 0.5, 0.975))}))
+  rownames(specCorrQuantiles) <- colnames(met_ra)
   
   # saving all correlations
   specCorrQuantiles_all <- cbind(rMech = run_rxn$rxnSummary$listEntry, tab_boer[,colnames(tab_boer) %in% c("SpeciesName", "SpeciesType")], specCorrQuantiles)
@@ -1633,13 +1646,13 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   hypoMetPlots$specCorrQuantiles_all <- specCorrQuantiles_all
   
   # only looking at top hits
-  specCorrQuantiles <- specCorrQuantiles[order(specCorrQuantiles[,2], decreasing = T),][1:4,]
+  specCorrQuantiles <- specCorrQuantiles[order(specCorrQuantiles[,1], decreasing = F),][1:4,]
   
   specCorrQuantiles_m <- melt(t(specCorrQuantiles)); colnames(specCorrQuantiles_m) <- c("Quantile", "variable", "Correlation")
   specCorrQuantiles_m$y <- rep(2:4, times = nrow(specCorrQuantiles))
   specCorrQuantiles_m$text <- mapply(function(x, y){paste(x,y, sep = ": ")}, x = specCorrQuantiles_m$Quantile, y = round(specCorrQuantiles_m$Correlation,2))
   
-  specCorrQuantiles_m <- rbind(specCorrQuantiles_m, data.frame(Quantile = NA, variable = rownames(specCorrQuantiles), Correlation = NA, y = 1, text = "Correlation quantiles"))
+  specCorrQuantiles_m <- rbind(specCorrQuantiles_m, data.frame(Quantile = NA, variable = rownames(specCorrQuantiles), Correlation = NA, y = 1, text = "distance quantiles"))
   
   PCsimilaritySubset <- tab_boer[rownames(tab_boer) %in% rownames(specCorrQuantiles),colnames(tab_boer) %in% colnames(reconstructedDraws)]
   PCsimilaritySubset <- PCsimilaritySubset[chmatch(rownames(PCsimilaritySubset), rownames(specCorrQuantiles)),]

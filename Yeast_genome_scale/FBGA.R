@@ -261,12 +261,23 @@ reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(
 
 reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])}) # the maximum likelihood over all corresponding parameter sets
 
+# save(list = ls(), file = "tmp.Rdata")
+
 ### Model comparison between more complex models with additional regulators or alterative reaction forms relative to reversible-MM using LRT and AICc ###
+
+#tmp <- reactionInfo %>% filter(reaction == "r_0005")
+#rxnList_form <- rxnList_form[names(rxnList_form) %in% tmp$rMech]
+#reaction_signif <- modelComparison(tmp, rxnList_form)
+
 
 reaction_signif <- modelComparison(reactionInfo, rxnList_form)
 
 reactionInfo <- reactionInfo %>% dplyr::select(-form) %>%
   left_join(reaction_signif %>% dplyr::select(-signifCode), by = c("reaction", "rMech"))
+
+all_reactionInfo <- reactionInfo
+
+save(list = c("all_reactionInfo", "param_set_list", "parSetInfo"), file = "flux_cache/modelComparison.Rdata")
 
 ### Base reaction specific information ###
 
@@ -326,8 +337,13 @@ pathwaySet <- data.frame(pathway = names(pathwaySet), members = unname(pathwaySe
 
 # For a subset of reactions
 
-all_reactionInfo <- reactionInfo
-reactionInfo <- all_reactionInfo %>% filter(modelType %in% c("rMM", "irreversible", "hypo met regulator") | Qvalue < 0.1)
+top_non_lit <- all_reactionInfo %>% filter(modelType == "non-literature supported met regulator") %>%
+  mutate(type = ifelse(grepl('act', rMech), "act", "inh")) %>%
+  group_by(reaction, ncond, type) %>% filter(Qvalue == min(Qvalue))
+
+reactionInfo <- all_reactionInfo %>% filter(modelType %in% c("rMM", "irreversible", "hypo met regulator") |
+                                              (modelType != "non-literature supported met regulator" & Qvalue < 0.1) |
+                                              rMech %in% top_non_lit$rMech)
 
 load("companionFiles/PTcomparison_list.Rdata") # by-gene comparisons of protein and transcript abundance
 
@@ -356,8 +372,8 @@ if(!(all(custom_plotted_rxns %in% reactionInfo$rMech))){stop("Some reaction mech
 
 #arxn <- c("r_0214-rm")
 #for(arxn in rxn_subset){
-for(arxn in custom_plotted_rxns){
-#for(arxn in reactionInfo$rMech){
+#for(arxn in custom_plotted_rxns){
+for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -500,7 +516,7 @@ save(pathwaySet, rxToPW, pathway_plot_list, rxn_plot_list, reactionInfo, file = 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, all_reactionInfo, MLdata, TRdata, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, TRdata, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
 save(ELdata, file = "flux_cache/elasticityData.Rdata")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
@@ -679,6 +695,49 @@ regulation_summary_table %>% mutate(reg_string = ifelse(type == "unregulated", "
                 `\\# Regulators Tested` = N_reg_tested) %>%
   ungroup() %>% arrange(tolower(`Reaction Name`)),
 file = "Figures/all_reaction_table.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
+
+#### Summarize all "best regulators" ####
+
+sig_regulators <- reactionInfo %>% filter(rMech %in% adequate_fit_optimal_rxn_form) %>% filter(modelType != "rMM")
+
+sig_regulators <- do.call("rbind", lapply(1:nrow(sig_regulators), function(i){data.frame(reaction = sig_regulators$reaction[i], rMech = sig_regulators$rMech[i], regulators = strsplit(sig_regulators$modification[i], split = "\\+")[[1]])})) %>%
+  mutate(regulators = gsub('(pairwise-)|(_ultra)|(_rmCond)', '', regulators))
+
+ranked_regulators <- literature_support %>% group_by(reaction) %>% arrange(desc(prob_sig)) %>% mutate(prior_rank = paste(1:n(), "of", n())) %>%
+  ungroup() %>% dplyr::select(reaction, tID, modtype, is_GS, sce, other, prior_rank, FullName)
+
+sig_regulators <- sig_regulators %>% separate(regulators, into = c("tID", "modtype", "subtype"), sep = "-") %>%
+  left_join(ranked_regulators, by = c("reaction", "tID", "modtype"))
+
+write.table(sig_regulators %>% arrange(desc(is_GS), desc(sce), desc(other)), file = "Figures/significant_regulation.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
+
+
+    
+all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")    
+
+regulation_summary_table %>% filter(`Regulation Type` != "unregulated") 
+
+all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
+all_regulation <- all_affinities %>% tbl_df() %>% filter(speciesType == "regulator")
+
+all_regulation_unfold <- apply(all_regulation, 1, function(x){
+  x <- unlist(x)
+  cbind(expand.grid(tID = strsplit(x['tID'], split = '/')[[1]], reaction = strsplit(x['reactions'], split = '/')[[1]], stringsAsFactors = F),
+        t(x[c('EC', 'isYeast', 'modtype', 'nQual')]))
+})
+all_regulation <- do.call("rbind", all_regulation_unfold) %>% tbl_df() %>%
+  mutate(nQual = as.numeric(nQual),
+         isYeast = gsub(' ', '', isYeast), isYeast = as.logical(isYeast),
+         isYeast = ifelse(isYeast, "sce", "other"))
+
+all_regulation <- all_regulation %>% group_by(EC, reaction, tID, isYeast, modtype) %>% dplyr::summarize(nQual = sum(nQual)) %>%
+  spread(key = isYeast, value = nQual, fill = 0)
+
+all_regulation %>% filter(reaction %in% sig_regulators$reaction) %>% group_by(reaction) %>% arrange(desc(sce), desc(other)) %>% View()
+
+brenda_citations <- read.delim('./flux_cache/brendamat.tsv')
+literature_support
+
 
 #### Summary based on spearman correlation for MM and most significant regulator (if applicable) #####
 
