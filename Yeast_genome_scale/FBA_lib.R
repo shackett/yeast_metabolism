@@ -1564,6 +1564,7 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   
   require(reshape2)
   require(ggplot2)
+  require(fields) # for euclidean distance
   
   boxplot_theme <- theme(text = element_text(size = 25, face = "bold"), title = element_text(size = 25, face = "bold"), panel.background = element_rect(fill = "mintcream"), 
                          panel.grid = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_text(size = 12, angle = 90, hjust = 1), axis.line = element_blank(),
@@ -1635,7 +1636,7 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
   met_ra <- t(tab_boer[,colnames(tab_boer) %in% colnames(reconstructedDraws)])
   met_ra <- met_ra - matrix(apply(met_ra, 2, mean), nrow = nrow(met_ra), ncol = ncol(met_ra), byrow = T)
   
-  markov_met_dist <- rdist(t(markov_ra), t(boer_ra))
+  markov_met_dist <- rdist(t(markov_ra), t(met_ra))
   
   specCorrQuantiles <- t(apply(markov_met_dist, 2, function(x){quantile(x, probs = c(0.025, 0.5, 0.975))}))
   rownames(specCorrQuantiles) <- colnames(met_ra)
@@ -2342,12 +2343,22 @@ customPlots <- function(run_rxn, flux_fit, chemostatInfo){
   flux_plot_data$flux_plot_comp$UB[flux_plot_data$flux_plot_comp$UB >= flux_range[2]*1.05] <- flux_range[2]*1.05
   flux_plot_data$flux_plot_comp$LB[flux_plot_data$flux_plot_comp$LB <= flux_range[1]] <- flux_range[1]
   
+  bound_polygon <- flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR") %>% dplyr::select(LB, UB, condName, condition, DR) %>%
+    gather("BOUND", "FLUX", -condName, -condition, -DR)
+  
+  bound_polygon <- rbind(  
+    bound_polygon %>% filter(BOUND == "LB") %>% group_by(condition) %>% arrange(DR) %>% mutate(plotOrder = 1:n()),
+    bound_polygon %>% filter(BOUND == "UB") %>% group_by(condition) %>% arrange(desc(DR)) %>% mutate(plotOrder = 1:n())  
+  ) %>% ungroup() %>% arrange(condition, BOUND, plotOrder)
+  
   ggplot() + geom_hline(y = 0, size = 3) + geom_vline(x = 0, size = 3) +
+    geom_polygon(data = bound_polygon, aes(x = condName, y = FLUX, group = condition), size = 2.6, alpha = 0.5, fill = "mediumpurple2", width = 10) +
     geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
     geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +
     geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
     geom_text(data = corr_label, aes(x = x, y = y, label = label), size = 8, parse = T) +
-    geom_pointrange(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, ymin = LB, ymax = UB, col = factor(METHOD)), size = 2.6, alpha = 1, width = 10) +
+    geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 2.6, alpha = 1, width = 10) +
+    geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +
     ci_theme + scale_color_manual("Method", guide = "none", values= c("FBA" = "firebrick1", "PAR" = "darkblue")) +
     scale_y_continuous("Relative Flux", limits = c(flux_range[1],flux_range[2]*1.05), expand = c(0,0)) + scale_x_discrete("Conditions") +
     scale_size_identity()
@@ -3590,6 +3601,7 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
                                         which(V(S_igraph)$name == unique_met_rxn_pairs$reaction[i]),
                                         which(V(S_igraph)$name %in% met_sID))$res
     if(length(feedbacks) != 0){
+      feedbacks <- lapply(feedbacks, function(x){names(x)})
       feedbacks <- melt(feedbacks)
       colnames(feedbacks) <- c("node", "path")
       feedbacks$pairnum <- i
@@ -3602,13 +3614,14 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
                                           which(V(S_igraph)$name %in% met_sID),
                                           which(V(S_igraph)$name == unique_met_rxn_pairs$reaction[i]))$res
     if(length(feedforward) != 0){
+      feedforward <- lapply(feedforward, function(x){names(x)})
       feedforward <- melt(feedforward)
       colnames(feedforward) <- c("node", "path")
       feedforward$pairnum <- i
       feedforward$type <- "feedforward"
       regulation_path <- rbind(regulation_path, feedforward)
     }
-   
+   print(i)
     return(regulation_path)
     
   })
@@ -3621,8 +3634,8 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   # Do not classify distant regulation as feedback/feedfoward, if there are many bifurcations
   vertex_info[,c('in_degree', 'out_degree')][vertex_info[,c('in_degree', 'out_degree')] == 0] <- 1
   
-  pathway_class_call <- all_reg_paths %>% left_join(vertex_info, by = "node") %>% filter(spec_type == "reaction") %>%
-    dplyr::select(path, pairnum, type, reactionID = name) %>% left_join(rxn_pathways, by = "reactionID")
+  pathway_class_call <- all_reg_paths %>% left_join(vertex_info, by = c("node" = "name")) %>% filter(spec_type == "reaction") %>%
+    dplyr::select(path, pairnum, type, reactionID = node) %>% left_join(rxn_pathways, by = "reactionID")
   
   pathway_class_call <- pathway_class_call %>% group_by(path, pairnum, type, pathway) %>% dplyr::summarize(Npathway = n()) %>%
     left_join(pathway_class_call %>% group_by(path, pairnum, type) %>% dplyr::summarize(N = length(unique(reactionID))), by = c("path", "pairnum", "type"))
@@ -3641,16 +3654,16 @@ mode_of_regulation <- function(rMech_support, rxnList_form){
   
   # Also call paths where the reaction is very close to the regulator in the pruned network #
   
-  regulator_betweenness <- all_reg_paths %>% left_join(vertex_info, by = "node") %>% filter(spec_type == "metabolite") %>%
+  regulator_betweenness <- all_reg_paths %>% left_join(vertex_info, by = c("node" = "name")) %>% filter(spec_type == "metabolite") %>%
     group_by(path, pairnum, type) %>% dplyr::summarize(met_betweenness = ifelse(type[1] == "feedback", last(betweenness), first(betweenness)))
   
-  reg_class_call <- all_reg_paths %>% left_join(vertex_info, by = "node") %>% filter(spec_type == "reaction") %>%
+  reg_class_call <- all_reg_paths %>% left_join(vertex_info, by = c("node" = "name")) %>% filter(spec_type == "reaction") %>%
     group_by(path, pairnum, type) %>% dplyr::summarize(N_steps = n(),
                                                        split_prod = ifelse(type[1] == "feedback", prod(1/in_degree),  prod(1/out_degree))) %>%
     left_join(regulator_betweenness, by = c("path", "pairnum", "type")) %>%
     left_join(pathway_class_call, by = c("path", "pairnum", "type")) %>%
     group_by(pairnum) %>% filter(N_steps == min(N_steps), split_prod == max(split_prod)) %>% dplyr::slice(1) %>%
-    mutate(type = ifelse(split_prod < 0.2 & !pathway_match, "cross-pathway", type))
+    group_by(pairnum) %>% mutate(type = ifelse(split_prod < 0.2 & !pathway_match, "cross-pathway", type))
     
   # By regulation mechanism, regulation type call:
   all_regulation_type <- unique_met_rxn_pairs %>% mutate(pairnum = 1:n()) %>% left_join(reg_class_call %>% dplyr::select(pairnum, type, N_steps), by = "pairnum") %>%
@@ -4342,6 +4355,11 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
 
 allostery_affinity <- function(){
   
+  load("flux_cache/modelComparison.Rdata")
+  
+  #reaction_info
+  #parSetInfo$rx
+  
   # plot physiological concentrations of alanine
   
   parSubset <- param_set_list[parSetInfo$rx == "r_0816-rm-t_0461-inh-comp_rmCond"]
@@ -4353,7 +4371,7 @@ allostery_affinity <- function(){
     mutate(limitation = substr(condition, 1, 1), GR = substr(condition, 2, length(condition))) %>%
     mutate(limitation = factor(limitation, levels = c("P", "C", "N", "U")), condition = factor(condition, levels = condition))
   
-  barplot_theme <- theme(text = element_text(size = 20, face = "bold"), title = element_text(size = 20, face = "bold"), 
+  barplot_theme <- theme(text = element_text(size = 20), title = element_text(size = 20), 
                          panel.background = element_rect(fill = "gray80"), legend.position = "right", 
                          axis.text = element_text(color = "black"), axis.text.x = element_text(size = 20, angle = 90, hjust = 0.5, vjust = 0.5),
                          panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
@@ -4367,6 +4385,44 @@ allostery_affinity <- function(){
     geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3)
   
   ggsave("Figures/alanineConcentration.pdf", height = 10, width = 10)
+  
+  # plot physiological concentrations of phenylpyruvate
+  
+  parSubset <- param_set_list[parSetInfo$rx == "r_0959-rm-t_0457-inh-noncomp"]
+  load(paste(c("FBGA_files/paramSets/", param_run_info$file[parSubset[[1]]$name$index]), collapse = ""))
+  run_rxn <- run_summary[["r_0959-rm-t_0457-inh-noncomp"]]
+  
+  phepyr_conc <- 2^run_rxn$metabolites[,names(run_rxn$rxnSummary$metNames)[run_rxn$rxnSummary$metNames == "keto-phenylpyruvate"], drop = F]
+  phepyr_conc <- phepyr_conc %>% as.data.frame() %>% mutate(condition = rownames(.)) %>% dplyr::select(phenylpyruvate = t_0457, condition) %>%
+    mutate(limitation = substr(condition, 1, 1), GR = substr(condition, 2, length(condition))) %>%
+    mutate(limitation = factor(limitation, levels = c("P", "C", "N", "L", "U")), condition = factor(condition, levels = condition))
+  
+  ggplot(phepyr_conc, aes(x = condition, y = phenylpyruvate * 1000, group = limitation)) + geom_path(size = 4, alpha = 1, col = "RED",) + geom_point(size = 10, col = "RED") +
+    barplot_theme + scale_color_identity(guide = "none") + scale_size_identity() + expand_limits(y = 0) + geom_blank(aes(y = phenylpyruvate*1000*1.05)) +
+    scale_y_continuous("Phenylpyruvate Concentration (mM)", breaks = c(0, 0.25, 0.5, 0.75, 1), expand = c(0,0)) + scale_x_discrete("Conditions") +
+    geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3)
+  
+  ggsave("Figures/phenylpyruvateConcentration.pdf", height = 10, width = 10)
+  
+  # plot physiological concentrations of citrate
+  
+  parSubset <- param_set_list[parSetInfo$rx == "r_0962-rm-t_0276-inh-noncomp"]
+  load(paste(c("FBGA_files/paramSets/", param_run_info$file[parSubset[[1]]$name$index]), collapse = ""))
+  run_rxn <- run_summary[["r_0962-rm-t_0276-inh-noncomp"]]
+  
+  citrate_conc <- 2^run_rxn$metabolites[,names(run_rxn$rxnSummary$metNames)[run_rxn$rxnSummary$metNames == "citrate"], drop = F]
+  citrate_conc <- citrate_conc %>% as.data.frame() %>% mutate(condition = rownames(.)) %>% dplyr::select(citrate = t_0276, condition) %>%
+    mutate(limitation = substr(condition, 1, 1), GR = substr(condition, 2, length(condition))) %>%
+    mutate(limitation = factor(limitation, levels = c("P", "C", "N", "L", "U")), condition = factor(condition, levels = condition))
+  
+  ggplot(citrate_conc, aes(x = condition, y = citrate, group = limitation)) + geom_path(size = 4, alpha = 1, col = "RED",) + geom_point(size = 10, col = "RED") +
+    barplot_theme + scale_color_identity(guide = "none") + scale_size_identity() + expand_limits(y = 0) + geom_blank(aes(y = citrate)) +
+    scale_y_continuous("Citrate Concentration (a.u.)", breaks = c(0, 0.5, 1, 1.5, 2), expand = c(0,0)) + scale_x_discrete("Conditions") +
+    geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3)
+  
+  ggsave("Figures/citrateConcentration.pdf", height = 10, width = 10)
+  
+  
   
   
   # plot marginal distribution of alanine ki
