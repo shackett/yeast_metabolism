@@ -12,14 +12,6 @@ if(run_location == "local"){
   
   setwd("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale")
   
-  runNum <- 1
-  chunkNum <- NA
-  
-  markov_pars <- list()
-  markov_pars$sample_freq <- 5 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-  markov_pars$n_samples <- 10 #how many total markov samples are desired
-  markov_pars$burn_in <- 0 #how many initial samples should be skipped
-  
 }else if(run_location == "cluster"){
   
   setwd("/Genomics/grid/users/shackett/FBA/FluxParOptim/")
@@ -31,11 +23,6 @@ if(run_location == "local"){
   chunkNum = as.numeric(unlist(strsplit(args[grep("chunk", args)], "="))[2])
   
   print(paste("CHUNK NUMBER: ", chunkNum, ", RUN NUMBER: ", runNum, sep = ""))
-  
-  markov_pars <- list()
-  markov_pars$sample_freq <- 300 #what fraction of markov samples are reported (this thinning of samples decreases sample autocorrelation)
-  markov_pars$n_samples <- 200 #how many total markov samples are desired
-  markov_pars$burn_in <- 8000 #how many initial samples should be skipped
   
 }else{
   stop("provide a valid value to run_location") 
@@ -256,9 +243,18 @@ rxTests <- c(which(names(rxnList_form) == "r_0005-rm-t_metX-inh-uncomp_ultra"), 
              which(names(rxnList_form) == "r_0211-rm-t_0234-inh-noncomp"),
              which(names(rxnList_form) == "r_0250-cc")) 
 
+library(dplyr)
+
+NLS_rxns <- data.frame(rxnID = names(rxnList_form), row = 1:length(rxnList_form)) %>% tbl_df() %>%
+  filter(!grepl('allMetabolites$', rxnID)) %>%
+  filter(!grepl('metX', rxnID)) %>%
+  filter(!grepl('forward', rxnID))
+
+NLS_fit_list <- list()
+
 #rxN <- 21
 #rxN <- 20
-for(rxN in 1:length(rxnList_form)){
+for(rxN in NLS_rxns$row){
 #for(rxN in rxTests){  
   
   rxnSummary <- rxnList_form[[rxN]]
@@ -514,23 +510,17 @@ for(rxN in 1:length(rxnList_form)){
   
   rxn_data <- cbind(flux = flux$FVAmin + flux$FVAmax, met_abund, enzyme_abund)
   
-  # generate a regression formula
-  nls_formula <- gsub('^', 'flux ~ ', rxnEquations$full_kinetic_form_list)
-  
-  #nls_formula <- "flux ~ ((1/((2^K_r_0962_t_0468_act/2^t_0468)^2^KH_r_0962_t_0468_act + 1)) * 1/(2^K_r_0962_t_0219 * 2^K_r_0962_t_0398 * 2^K_r_0962_t_0617) * (2^t_0219 * 2^t_0398 * 2^t_0617 - 2^t_0239 * 2^t_0643/2^Keqr_0962)/((1 + (2^t_0617/2^K_r_0962_t_0617) + (2^t_0643/2^K_r_0962_t_0643)) * (1 + (2^t_0219/2^K_r_0962_t_0219) + (2^t_0239/2^K_r_0962_t_0239)) * (1 + (2^t_0398/2^K_r_0962_t_0398)))) + 0"
-  
-  #nls_formula <- "flux ~ ((E_r_0005_A_YGR032W * 2^A_YGR032W + E_r_0005_B_YLR342W * 2^B_YLR342W) * ((2^t_0712)/(2^K_r_0005_t_0712))/((1 + (2^t_0712/2^K_r_0005_t_0712)))) + 0"
-  for(i in 1:nrow(kineticPars)){
-    # replace affinity & keq with their log2
-    nls_formula <- gsub(paste0('(',kineticPars$formulaName[i],')'), '2^\\1', nls_formula)
-  }
+  ##
   
   nls_parameters <- rbind(
-    data.frame(formulaName = all_species$formulaName[all_species$SpeciesType == "Enzyme"], SpeciesType = "kcat", lower = 0, upper = 1e7),
-    data.frame(kineticPars[,colnames(kineticPars) %in% c("formulaName", "SpeciesType")], lower = kineticParPrior$par_1, upper = kineticParPrior$par_2)
+    data.frame(formulaName = all_species$formulaName[all_species$SpeciesType == "Enzyme"], SpeciesType = "kcat", lower = 0, upper = Inf),
+    data.frame(kineticPars[,colnames(kineticPars) %in% c("formulaName", "SpeciesType")], lower = 2^kineticParPrior$par_1, upper = 2^kineticParPrior$par_2)
   )
-  nls_parameters$lower[nls_parameters$SpeciesType == "hillCoefficient"] <- -3
-  nls_parameters$upper[nls_parameters$SpeciesType == "hillCoefficient"] <- 3
+  nls_parameters$lower[nls_parameters$SpeciesType == "hillCoefficient"] <- 2^-3
+  nls_parameters$upper[nls_parameters$SpeciesType == "hillCoefficient"] <- 2^3
+  
+  # generate a regression formula
+  nls_formula <- gsub('^', 'flux ~ ', rxnEquations$full_kinetic_form_list)
   
   nls_parameters <- nls_parameters[sapply(nls_parameters$formulaName, function(x){grepl(x, nls_formula)}),]
   
@@ -538,120 +528,52 @@ for(rxN in 1:length(rxnList_form)){
   nls_initializations <- matrix(NA, ncol = N_nls_runs, nrow = nrow(nls_parameters))
   
   for(i in 1:nrow(nls_parameters)){
-   if(nls_parameters$SpeciesType[i] == "kcat"){
-     nls_initializations[i,] <- 1
-   }else{
-     nls_initializations[i,] <- runif(N_nls_runs, nls_parameters[i,'lower'], nls_parameters[i,'upper'])
-   }
+    if(nls_parameters$SpeciesType[i] == "kcat"){
+      nls_initializations[i,] <- 1
+    }else{
+      nls_initializations[i,] <- 2^runif(N_nls_runs, log2(nls_parameters[i,'lower']), log2(nls_parameters[i,'upper']))
+    }
   }
   
   nls_runs <- list()
   for(j in 1:ncol(nls_initializations)){
     
-    nls_runs[[j]] <- try(nls(formula = nls_formula, data = rxn_data,
-           start = setNames(nls_initializations[,j], nls_parameters$formulaName),
-           lower = setNames(nls_parameters$lower, nls_parameters$formulaName),
-           upper = setNames(nls_parameters$upper, nls_parameters$formulaName), alorithm = "port"))
-  
-    
+    nls_runs[[j]] <- try(nls(formula = nls_formula,
+                         data = rxn_data, algorithm = "port",
+                         start = setNames(nls_initializations[,j], nls_parameters$formulaName),
+                         lower = setNames(nls_parameters$lower, nls_parameters$formulaName),
+                         upper = setNames(nls_parameters$upper, nls_parameters$formulaName)), silent = T)
   }
   
-  
-  setNames(rep(1, length(nls_parameters$formulaName)), nls_parameters$formulaName)
-  
-  c(nls_parameters$formulaName = nls_parameters$lower)
-  
-  x <- nls(formula = nls_formula, data = rxn_data,
-           start = setNames(rep(1, length(nls_parameters$formulaName)), nls_parameters$formulaName),
-           lower = setNames(nls_parameters$lower, nls_parameters$formulaName),
-           upper = setNames(nls_parameters$upper, nls_parameters$formulaName), algorithm = "port")
-  
-  
-  kineticPars
-  
-  kineticPars$formulaName, 
-  
-  kineticParPrior
-  all_species
-  
-  # bound parameters
-  
-  x <- nls(formula = nls_formula, data = rxn_data, start = c("E_r_0005_A_YGR032W" = 1, "E_r_0005_B_YLR342W" = 1, "K_r_0005_t_0712" = 1),
-      lower = c(-15, 0, 0), upper = c(15, Inf, Inf), algorithm = "port")
-  predict(x)
-  
-  
-  nls(formula = "flux ~ 2^t_0712 / (2^t_0712 + x)", data = rxn_data, start = c("x" = 1), algorithm = "port")
-  
-  kineticPars, kineticParPrior
-  
-  
-  
-  ### Initialize parameters & setup tracking of likelihood and parameters ###
-  
-  lik_track <- NULL
-  markov_par_vals <- matrix(NA, ncol = nrow(kineticParPrior), nrow = markov_pars$n_samples)
-  colnames(markov_par_vals) <- kineticPars$formulaName
-  
-  current_pars <- rep(NA, times = nrow(kineticParPrior))
-  current_pars <- par_draw(1:nrow(kineticParPrior))
-  if("t_metX" %in% all_species$rel_spec){met_abund$t_metX <- metX_calc(current_pars, kineticPars, treatmentPCs)}
-  
-  current_lik <- lik_calc_fittedSD(current_pars)
-  
-  proposed_params <- current_pars
-  
-  ### Generate markov chain ###
-  
-  for(i in 1:(markov_pars$burn_in + markov_pars$n_samples*markov_pars$sample_freq)){
-    for(j in 1:nrow(kineticPars)){#loop over parameters values
-      proposed_par <- par_draw(j)
-      if("t_metX" %in% all_species$rel_spec){met_abund$t_metX <- metX_calc(proposed_par, kineticPars, treatmentPCs)}
-      proposed_lik <- lik_calc_fittedSD(proposed_par)
-      if(runif(1, 0, 1) < exp(proposed_lik - current_lik) | (proposed_lik == current_lik & proposed_lik == -Inf)){
-        current_pars <- proposed_par
-        current_lik <- proposed_lik
-      }
-    }
+  valid_output <- sapply(nls_runs, function(x){class(x) == "nls"})
+  if(sum(valid_output) == 0){next}else{
     
-    if(i > markov_pars$burn_in){
-      if((i - markov_pars$burn_in) %% markov_pars$sample_freq == 0){
-        markov_par_vals[(i - markov_pars$burn_in)/markov_pars$sample_freq,] <- current_pars
-        lik_track <- c(lik_track, current_lik)
-      }
-    }
+    NLS_logLik <- sapply(nls_runs[valid_output], function(x){
+      
+      fit_resid_error <- sqrt(mean((residuals(x) - mean(residuals(x)))^2))*sqrt(n_c/(n_c-1))
+      #fit_resid_error <- sqrt(mean(residuals(x)^2) * (n_c/(n_c-1)))
+      sum(dnorm(residuals(x), 0, fit_resid_error, log = T))
+      
+    }) %>% max()
+    
+    print("valid fit")
+    NLS_fit_list[[rxN]] <- data.frame(rxN = rxN, logLik = NLS_logLik)
+    
   }
-  
-  colnames(markov_par_vals) <- kineticPars$rel_spec
-  
-  kineticPars$formatted[kineticPars$SpeciesType != "keq"] <- unname(sapply(kineticPars$commonName[kineticPars$SpeciesType != "keq"], function(name_int){
-    if(length(strsplit(name_int, split = "")[[1]]) >= 25){
-      split_name <- strsplit(name_int, split = "")[[1]]
-      split_pois <- c(1:length(split_name))[split_name %in% c(" ", "-")][which.min(abs(20 - c(1:length(split_name)))[split_name %in% c(" ", "-")])]
-      split_name[split_pois] <- "\n"
-      paste(split_name, collapse = "")
-    }else{name_int}
-  }))
-  kineticPars$formatted[kineticPars$SpeciesType == "keq"] <- "keq"
-  
-  ## Save MC information
-  run_summary[[names(rxnList_form)[rxN]]]$kineticPars <- kineticPars
-  run_summary[[names(rxnList_form)[rxN]]]$markovChain <- markov_par_vals
-  run_summary[[names(rxnList_form)[rxN]]]$likelihood <- lik_track
-  ##  Save flux and rxn information
-  run_summary[[names(rxnList_form)[rxN]]]$metabolites <- met_abund
-  run_summary[[names(rxnList_form)[rxN]]]$enzymes <- enzyme_abund
-  run_summary[[names(rxnList_form)[rxN]]]$flux <- flux
-  run_summary[[names(rxnList_form)[rxN]]]$occupancyEq <- rxnEquations
-  run_summary[[names(rxnList_form)[rxN]]]$all_species <- all_species
-  run_summary[[names(rxnList_form)[rxN]]]$rxnSummary <- rxnSummary
-  run_summary[[names(rxnList_form)[rxN]]]$specSD <- species_SD
-  run_summary[[names(rxnList_form)[rxN]]]$specCorr <- species_corr
-  ## Save priors
-  run_summary[[names(rxnList_form)[rxN]]]$kineticParPrior <- data.frame(kineticPars, kineticParPrior)
-  
-  print(paste(names(rxnList_form)[rxN], "finished in ", round(proc.time()[3] - t_start, 0), " seconds", sep = " "))
-  
+
 }
 
-save(run_summary, file = paste(c("paramSets/paramSet", "C", chunkNum, "R", runNum, ".Rdata"), collapse = ""))
+NLS_fit_list <- rbind_all(NLS_fit_list)
+
+NLS_logLik <- NLS_rxns %>% left_join(NLS_fit_list, by = c("row" = "rxN")) %>% filter(!is.na(logLik))
+
+NLScompare <- NLS_logLik %>% left_join(all_reactionInfo %>% tbl_df() %>% select(rMech, ML), by = c("rxnID" = "rMech")) 
+
+library(ggplot2)
+
+ggplot(NLScompare, aes(x = logLik, y = ML)) + geom_point() + geom_abline(a = 0, b = 1)
+
+load("flux_cache/modelComparison.Rdata")
+all_reactionInfo %>% tbl_df()
+
+
