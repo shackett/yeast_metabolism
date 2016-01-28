@@ -1015,7 +1015,7 @@ modelComparison <- function(reactionInfo, rxnList_form){
     x$rxnFormData %>% dplyr::select(SubstrateID, Hill, Subtype, form = EqType) %>% filter(!(Subtype %in% c("substrate", "product"))) %>%
       mutate(rMech = x$listEntry, reaction = x$rxnID, isoenzyme_specific = ifelse(all(is.na(x$rxnFormData$enzymeInvolved)), F, T))
   })
-  regulator_info <- do.call("rbind", regulator_info)
+  regulator_info <- rbind_rows(regulator_info)
   
   reaction_info_comparison <- reactionInfo %>% tbl_df() %>% dplyr::select(rMech, reaction, ML, ncond, npar)
   

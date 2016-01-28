@@ -972,10 +972,15 @@ ML_rxn_summary$Type[grepl("r_0302", ML_rxn_summary$reaction) & ML_rxn_summary$sp
 
 # all reactions
 # either "all" or "supported"
-rxn_subset <- "supported"
+#rxn_subset <- "supported"
+rxn_subset <- "all"
 
 if(rxn_subset == "all"){
-ML_rxn_summary <- ML_rxn_summary %>% filter(conditions == "NATURAL") %>% filter(reaction %in% adequate_fit_optimal_rxn_form)
+  
+  adequate_fit_optimal_rxn_form[substr(adequate_fit_optimal_rxn_form, 1, 6) == "r_0962"] <- "r_0962-rm-pairwise-t_0276-inh-noncomp+t_0290-act-mm"
+  ML_rxn_summary <- ML_rxn_summary %>% filter(conditions == "NATURAL") %>% filter(reaction %in% adequate_fit_optimal_rxn_form)
+  adequate_rxn_form_data <- rMech_support %>% filter(rMech %in% adequate_fit_optimal_rxn_form) %>% left_join(fitReactionNames, by = "reaction")
+  
 }else if(rxn_subset == "supported"){
   
   # verified regulation + significant rMM
@@ -1050,7 +1055,7 @@ ggplot(ML_rxn_tall, aes(x = rMech, y = ML, fill = Type, order = Type)) + geom_ba
   barplot_facet_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
   scale_fill_manual(values = TypeColors) + facet_grid(~ reversibility, scales = "free_x", space = "free_x") +
   scale_x_discrete("Reactions", breaks = ML_rxn_tall$rMech, labels = ML_rxn_tall$abbrev)
-ggsave("Figures/metabolicLeverageBar.pdf", height = 10, width = 16)
+ggsave(paste0("Figures/", rxn_subset, "-metabolicLeverageBar.pdf"), height = 10, width = 16)
 
 # Pie chart summarizing metabolic leverage component contributions
 
@@ -1064,7 +1069,7 @@ ML_component_summary <- ML_rxn_tall %>% group_by(reversibility, Type) %>% dplyr:
 ggplot(ML_component_summary, aes(x = factor(1), y = ML, fill = Type)) + geom_bar(stat = "identity", width = 1) + coord_polar(theta = "y") +
   facet_wrap(~ reversibility) + scale_fill_manual(values = TypeColors) + pie_theme +
   scale_x_discrete("") + scale_y_continuous("")
-ggsave("Figures/metabolicLeveragePie.pdf", height = 5, width = 7)
+ggsave(paste0("Figures/", rxn_subset, "-metabolicLeveragePie.pdf"), height = 5, width = 7)
 
 # Generate a ternary plot to show the contributions of metabolites and enzymes in controlling flux
 
@@ -1091,28 +1096,39 @@ ML_rxn_summary_1 <- ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(co
 ML_rxn_ternaryPoints_1 <- ML_rxn_summary_1 %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
                                               y = sqrt(3)/2 * enzyme*(regulator + enzyme + rxn_metabolite))
 
-ML_rxn_ternaryPoints_1 %>% left_join(ML_rxn_tall %>% select(reaction, woot = reversibility), by = "reaction")
+ML_rxn_ternaryPoints_1 <- ML_rxn_ternaryPoints_1 %>% left_join(ML_rxn_tall %>% select(reaction, Dir = reversibility) %>% unique(), by = c("rMech" = "reaction"))
 
 summary(lm(ML_rxn_summary_1, formula = rxn_metabolite ~ reversibility))
 
 color_key$Figure_BW + 
-  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == TRUE), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
-  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == TRUE), aes(x = x, y = y, fill = color), size = 8, shape = 21)
-ggsave("Figures/MLcolorKey_REV.pdf", height = 9.1, width = 10.7)
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(Dir == "Kinetically Reversible"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(Dir == "Kinetically Reversible"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
+ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey_kinRev.pdf"), height = 9.1, width = 10.7)
+
+color_key$Figure_BW + 
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(Dir == "Kinetically Irreversible"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(Dir == "Kinetically Irreversible"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
+ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey_kinIrrev.pdf"), height = 9.1, width = 10.7)
+
+color_key$Figure_BW + 
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(Dir == "Thermodynamically Irreversible"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
+  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(Dir == "Thermodynamically Irreversible"), aes(x = x, y = y, fill = color), size = 8, shape = 21)
+ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey_thermIrrev.pdf"), height = 9.1, width = 10.7)
+
 
 # Irreversible
-color_key$Figure_BW + 
-  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == FALSE), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
-  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == FALSE), aes(x = x, y = y, fill = color), size = 8, shape = 21)
-  ggsave("Figures/MLcolorKey_FOR.pdf", height = 9.1, width = 10.7)
+#color_key$Figure_BW + 
+#  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == FALSE), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
+#  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == FALSE), aes(x = x, y = y, fill = color), size = 8, shape = 21)
+#  ggsave("Figures/MLcolorKey_FOR.pdf", height = 9.1, width = 10.7)
 
 ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints_1 %>% filter(regulator != 0)
 
 color_key$Figure_Color + 
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE") +
-  geom_text(data = ML_rxn_ternaryPoints_labels, aes(x = x + 0.05, y = y + 0.05, label = abbrev), color = "WHITE")
-ggsave("Figures/MLcolorKey.pdf", height = 9.1, width = 10.7)
+  geom_text(data = ML_rxn_ternaryPoints_labels, aes(x = x + 0.05, y = y + 0.05, label = abbrev.x), color = "WHITE")
+ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey.pdf"), height = 9.1, width = 10.7)
 
 control_layout <- ML_rxn_summary_1 %>% dplyr::select(reaction, reaction.name, abbrev, rxn_metabolite, enzyme, regulator, color)
 
@@ -1361,11 +1377,11 @@ free_energy_theme <- boxplot_theme_label_rotate + theme(axis.text.x = element_te
 
 ggplot() + facet_grid(~ pathway, scale = "free_x", space = "free_x") +
   geom_violin(data = all_condition_Q, aes(x = reaction, y = 2^Qkeq, fill = reversible), scale = "width") +
-  geom_errorbar(data = free_energy_table, aes(x = reaction, ymin = 2^QkeqDiff_LB, ymax = 2^QkeqDiff_UB), size = 1) +
+  #geom_errorbar(data = free_energy_table, aes(x = reaction, ymin = 2^QkeqDiff_LB, ymax = 2^QkeqDiff_UB), size = 1) +
   geom_point(data = fast_C_lim, aes(x = reaction, y = 2^Qkeq), fill = "chartreuse3", size = 4, shape = 21) + 
-  geom_point(data = free_energy_table, aes(x = reaction, y = 2^QkeqDiff_MLE), fill = "darkblue", size = 4, shape = 21) +
+  #geom_point(data = free_energy_table, aes(x = reaction, y = 2^QkeqDiff_MLE), fill = "darkblue", size = 4, shape = 21) +
   scale_y_log10(expression(frac(Q, K[eq]) ~ "=" ~ frac(v[r], v[f])), expand = c(0,0)) + coord_cartesian(ylim = c(10^-3, 1)) + free_energy_theme +
-  scale_fill_discrete() +
+  scale_fill_manual(values = c("Kinetically reversible" = "cornflowerblue", "Kinetically irreversible" = "goldenrod1", "Thermodynamically irreversible" = "firebrick1")) +
   scale_x_discrete(breaks = free_energy_table$reaction, labels = free_energy_table$abbrev)
 ggsave("Figures/reactionDisequilibrium.eps", width = 15, height = 8)
 ggsave("Figures/reactionDisequilibrium.pdf", width = 15, height = 8)
