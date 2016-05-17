@@ -1015,7 +1015,7 @@ modelComparison <- function(reactionInfo, rxnList_form){
     x$rxnFormData %>% dplyr::select(SubstrateID, Hill, Subtype, form = EqType) %>% filter(!(Subtype %in% c("substrate", "product"))) %>%
       mutate(rMech = x$listEntry, reaction = x$rxnID, isoenzyme_specific = ifelse(all(is.na(x$rxnFormData$enzymeInvolved)), F, T))
   })
-  regulator_info <- rbind_rows(regulator_info)
+  regulator_info <- bind_rows(regulator_info)
   
   reaction_info_comparison <- reactionInfo %>% tbl_df() %>% dplyr::select(rMech, reaction, ML, ncond, npar)
   
@@ -1143,7 +1143,7 @@ modelComparison <- function(reactionInfo, rxnList_form){
   # Multiple hypothesis correction
   # p-values are analyzed seperately for each daughterModel X parentModel
   
-  model_comparison_list <- do.call("rbind", model_comparison_list)
+  model_comparison_list <- bind_rows(model_comparison_list)
   
   #tmp -> model_comparison_list
   
@@ -1178,7 +1178,7 @@ modelComparison <- function(reactionInfo, rxnList_form){
     
   }
   
-  all_models <- do.call("rbind", comparison_list)
+  all_models <- bind_rows(comparison_list)
   
   # Each reaction is assigned a consensus measure of significance - based on the least significant comparison between reaction forms
   all_models <- all_models %>% group_by(reaction, daughter_rMech, daughterModel) %>% dplyr::summarize(Pvalue = max(changeP), Qvalue = max(Qvalue)) %>%
@@ -1292,7 +1292,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   flux_plot_condLabel <- flux_plot_FBA[,list(x = DR[which.max(DR)], y = FLUX[which.max(DR)]), by = condition]
   
-  output_plots$"FBA flux" <- ggplot() + geom_hline(y = 0, size = 2) + scatter_theme +
+  output_plots$"FBA flux" <- ggplot() + geom_hline(yintercept = 0, size = 2) + scatter_theme +
     geom_path(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition, group = condition), size = 2) +
     geom_linerange(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition, ymin = LB, ymax = UB), size = 2) + 
     geom_point(data = flux_plot_FBA, aes(x = DR, y = FLUX, col = condition, size = sqrt(DR)*16)) +
@@ -1315,7 +1315,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
   
   flux_plot_header <- data.frame(label = c("FBA-determined flux at optimum", "Parametric fit (95% CI)"), METHOD = c("FBA", "PAR"), x = 1, y = max(flux_range) - diff(flux_range)/15 * c(0,1))
   
-  output_plots$"Flux comparison" <- ggplot() + geom_hline(y = 0, size = 2) + geom_pointrange(data = flux_plot_comp, aes(x = condName, y = FLUX, ymin = LB, ymax = UB, col = factor(METHOD)), size = 1.5, alpha = 0.8) +
+  output_plots$"Flux comparison" <- ggplot() + geom_hline(yintercept = 0, size = 2) + geom_pointrange(data = flux_plot_comp, aes(x = condName, y = FLUX, ymin = LB, ymax = UB, col = factor(METHOD)), size = 1.5, alpha = 0.8) +
     geom_text(data = flux_plot_header, aes(x = x, y = y, label = label, col = factor(METHOD)), size = 10, hjust = 0) +
     ci_theme + scale_color_brewer("Method", guide = "none", palette = "Set1") +
     scale_y_continuous("Relative Flux", limits = flux_range) + scale_x_discrete("Conditions")
@@ -1513,7 +1513,7 @@ species_plot <- function(run_rxn, flux_fit, chemostatInfo){
     geom_point(data = all_changes, aes(x = condition, y = RA, col = factor(variable)), size = 5) +
     geom_text(data = all_changes[all_changes$Truncated,], aes(x = condition, y = UB, col = variable), label = "+", size = 8, alpha = 0.5) +
     geom_text(data = variable_labels, aes(x = x, y = y, col = variable, label = label), hjust = 0) +
-    geom_vline(x = 0) + geom_hline(y = 0) +
+    geom_vline(xintercept = 0) + geom_hline(yintercept = 0) +
     facet_grid(Pane ~ ., scale = "free_y") +
     scale_color_manual(guide = "none", labels = variable_colors$variable, values = variable_colors$color) +
     ci_theme + scale_size_identity() +
@@ -1623,7 +1623,7 @@ hypoMetTrend <- function(run_rxn, metSVD, tab_boer){
     
     hypoMetPlots$Hill <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.7) +
       stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.7) +
-      geom_vline(x = 2^mle_pars[run_rxn$kineticParPrior$rel_spec == "t_metX" & run_rxn$kineticParPrior$SpeciesType == "hillCoefficient"], size = 2, alpha = 0.5) +
+      geom_vline(xintercept = 2^mle_pars[run_rxn$kineticParPrior$rel_spec == "t_metX" & run_rxn$kineticParPrior$SpeciesType == "hillCoefficient"], size = 2, alpha = 0.5) +
       geom_text(aes(x = 0, y = 9.8, label = 'Posterior distribution', color = "RED"), hjust = 0, size = 8) +
       geom_text(aes(x = 0, y = 9, label = 'Prior / expectation', color = "BLUE"), hjust = 0, size = 8) +
       scale_x_continuous("Hill coefficient", limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
@@ -1702,7 +1702,7 @@ hillPlot <- function(run_rxn){
   
   hillPlot <- ggplot() + stat_bin(data = SpSldensity, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill="blue", alpha = 0.5) +
     stat_bin(data = hillDF, aes(x = 2^hill, y = ..density.., geom="line", position="identity"), binwidth = 0.05, fill = "RED", alpha = 0.5) +
-    geom_vline(x = 2^hill_MLE, size = 2, alpha = 0.5) +
+    geom_vline(xintercept = 2^hill_MLE, size = 2, alpha = 0.5) +
     geom_text(aes(x = 0, y = 9.8, label = 'Posterior distribution', color = "RED"), hjust = 0, size = 8) +
     geom_text(aes(x = 0, y = 9, label = 'Prior / expectation', color = "BLUE"), hjust = 0, size = 8) +
     scale_x_continuous("Hill coefficient", limits = c(0, max(2^hillDF$hill))) + scale_y_continuous("Density", expand = c(0,0)) +
@@ -2329,7 +2329,7 @@ customPlots <- function(run_rxn, flux_fit, chemostatInfo){
                     legend.text = element_text(size = 40, face = "bold"), axis.text = element_text(color = "black", size = 30), axis.text.x = element_blank(),
                     axis.ticks.y = element_line(size = 3, color = "black"), axis.ticks.x = element_blank(), axis.ticks.length = unit(0.6, "lines"))
   
-  ggplot() + geom_hline(y = 0, size = 3) + geom_vline(x = 0, size = 3) +
+  ggplot() + geom_hline(yintercept = 0, size = 3) + geom_vline(xintercept = 0, size = 3) +
     geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
     geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +
     ci_theme + scale_color_manual("Method", guide = "none", values= c("FBA" = "firebrick1", "PAR" = "darkblue")) +
@@ -2351,7 +2351,7 @@ customPlots <- function(run_rxn, flux_fit, chemostatInfo){
     bound_polygon %>% filter(BOUND == "UB") %>% group_by(condition) %>% arrange(desc(DR)) %>% mutate(plotOrder = 1:n())  
   ) %>% ungroup() %>% arrange(condition, BOUND, plotOrder)
   
-  ggplot() + geom_hline(y = 0, size = 3) + geom_vline(x = 0, size = 3) +
+  ggplot() + geom_hline(yintercept = 0, size = 3) + geom_vline(xintercept = 0, size = 3) +
     geom_polygon(data = bound_polygon, aes(x = condName, y = FLUX, group = condition), size = 2.6, alpha = 0.5, fill = "mediumpurple2", width = 10) +
     geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
     geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +
@@ -2382,7 +2382,7 @@ customPlots <- function(run_rxn, flux_fit, chemostatInfo){
     geom_point(data = multiple_species_plot_data$all_changes, aes(x = condition, y = RA, col = factor(variable)), size = 10) +
     geom_text(data = multiple_species_plot_data$variable_labels, aes(x = x, y = y, col = variable, label = label), hjust = 0) +
     geom_blank(data = multiple_species_plot_data$all_changes, aes(y = RA*1.05)) + 
-    geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3) +
+    geom_vline(xintercept = 0, size = 3) + geom_hline(yintercept = 0, size = 3) +
     facet_grid(Pane ~ ., scale = "free_y") +
     scale_color_manual(guide = "none", labels = variable_colors$variable, values = variable_colors$color) +
     ci_theme + scale_size_identity() +
@@ -2525,8 +2525,9 @@ reactionProperties <-  function(){
     colnames(comp_partials) <- names(elast_partials)
     
     for(j in 1:ncol(comp_partials)){
-      comp_partials[,j] <- with(all_components ,eval(elast_partials[[j]]))
+      comp_partials[,j] <- with(all_components, eval(elast_partials[[j]]))
     }
+    
     
     # partial F / partial S * [S]/F
     as.matrix(comp_partials * all_species/flux_fit$fitted)
@@ -2549,6 +2550,26 @@ reactionProperties <-  function(){
   elasticity_summary$condition <- factor(elasticity_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% elasticity_summary$condition])
   
   output_plots$elasticity_summary <- elasticity_summary
+  
+  ####
+  
+  
+  measured_partials <- run_rxn$occupancyEq$kinetic_form_partials[names(run_rxn$occupancyEq$kinetic_form_partials) %in% c(run_rxn$kineticPars$modelName[run_rxn$kineticPars$measured & !is.na(run_rxn$kineticPars$measured)], colnames(run_rxn$enzymes))]
+  
+  comp_partials <- matrix(NA, nrow = n_c, ncol = length(measured_partials))
+  colnames(comp_partials) <- names(measured_partials)
+  
+  for(j in 1:ncol(comp_partials)){
+    comp_partials[,j] <- with(all_components, eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
+  }
+  
+  # calculate the fitted standard deviation after first finding the by-condition residual covariance matrix
+  
+  flux_SD <- rep(NA, n_c)
+  for(i in 1:n_c){
+    sampleCov <- run_rxn$specCorr * t(t(run_rxn$specSD[i,])) %*% run_rxn$specSD[i,]
+    flux_SD[i] <- sqrt(t(comp_partials[i,]) %*% sampleCov %*% t(t(comp_partials[i,])))
+  }
   
   
   ### Physiological leverage: absolute partial correlation weighted by across-condition SD
@@ -2873,7 +2894,8 @@ param_compare <- function(){
                        axis.line = element_line(color = "black", size = 1), legend.title=element_blank(), panel.margin = unit(1.5, "lines")
                        )
   
-  output_plots[["univariateHist"]] <- ggplot() + geom_vline(data = quantiles, aes(xintercept = xval), color = "blue", size = 2) + geom_vline(data = MLEbarplot, aes(xintercept = xval), color = "red", size = 2) +
+  output_plots[["univariateHist"]] <- ggplot() + geom_vline(data = quantiles, aes(xintercept = xval), color = "blue", size = 2) +
+    geom_vline(data = MLEbarplot, aes(xintercept = xval), color = "red", size = 2) +
     geom_bar(data = par_comp_like, aes(x = xval), col = "black", binwidth = 0.5) + 
     geom_blank(data = bound_expand, aes(x = value)) +
     geom_blank(data = par_comp_like, aes(x = xval, y=1.05*..count..), stat="bin", binwidth = 0.5) +
@@ -4382,7 +4404,7 @@ allostery_affinity <- function(){
   ggplot(alanine_conc, aes(x = condition, y = alanine * 1000, group = limitation)) + geom_path(size = 4, alpha = 1, col = "RED",) + geom_point(size = 10, col = "RED") +
     barplot_theme + scale_color_identity(guide = "none") + scale_size_identity() + expand_limits(y = 0) + geom_blank(aes(y = alanine*1000*1.05)) +
     scale_y_continuous("Alanine Concentration (mM)", breaks = c(0, 25, 50, 75, 100, 125), expand = c(0,0)) + scale_x_discrete("Conditions") +
-    geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3)
+    geom_vline(xintercept = 0, size = 3) + geom_hline(yintercept = 0, size = 3)
   
   ggsave("Figures/alanineConcentration.pdf", height = 10, width = 10)
   
@@ -4400,7 +4422,7 @@ allostery_affinity <- function(){
   ggplot(phepyr_conc, aes(x = condition, y = phenylpyruvate * 1000, group = limitation)) + geom_path(size = 4, alpha = 1, col = "RED",) + geom_point(size = 10, col = "RED") +
     barplot_theme + scale_color_identity(guide = "none") + scale_size_identity() + expand_limits(y = 0) + geom_blank(aes(y = phenylpyruvate*1000*1.05)) +
     scale_y_continuous("Phenylpyruvate Concentration (mM)", breaks = c(0, 0.25, 0.5, 0.75, 1), expand = c(0,0)) + scale_x_discrete("Conditions") +
-    geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3)
+    geom_vline(xintercept = 0, size = 3) + geom_hline(yintercept = 0, size = 3)
   
   ggsave("Figures/phenylpyruvateConcentration.pdf", height = 10, width = 10)
   
@@ -4418,7 +4440,7 @@ allostery_affinity <- function(){
   ggplot(citrate_conc, aes(x = condition, y = citrate, group = limitation)) + geom_path(size = 4, alpha = 1, col = "RED",) + geom_point(size = 10, col = "RED") +
     barplot_theme + scale_color_identity(guide = "none") + scale_size_identity() + expand_limits(y = 0) + geom_blank(aes(y = citrate)) +
     scale_y_continuous("Citrate Concentration (a.u.)", breaks = c(0, 0.5, 1, 1.5, 2), expand = c(0,0)) + scale_x_discrete("Conditions") +
-    geom_vline(x = 0, size = 3) + geom_hline(y = 0, size = 3)
+    geom_vline(xintercept = 0, size = 3) + geom_hline(yintercept = 0, size = 3)
   
   ggsave("Figures/citrateConcentration.pdf", height = 10, width = 10)
   

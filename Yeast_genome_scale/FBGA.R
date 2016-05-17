@@ -279,7 +279,7 @@ all_reactionInfo <- reactionInfo
 
 #load("tmp.Rdata")
 
-save(list = c("all_reactionInfo", "param_set_list", "parSetInfo", "rxnList_form", "param_run_info", "metSVD", "tab_boer", "boer_ra"), file = "flux_cache/modelComparison.Rdata")
+#save(list = c("all_reactionInfo", "param_set_list", "parSetInfo", "rxnList_form", "param_run_info", "metSVD", "tab_boer", "boer_ra"), file = "flux_cache/modelComparison.Rdata")
 
 load("flux_cache/modelComparison.Rdata")
 
@@ -371,7 +371,7 @@ custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-r
                          "r_0962-rm", "r_0962-rm-t_0276-inh-noncomp", # Citrate -| Pyk
                          "r_0962-rm-pairwise-t_0276-inh-noncomp+t_0290-act-mm", # citrate + FBP regulating Pyk
                          "r_0959-rm", "r_0959-rm-t_0457-inh-noncomp", # PhePyr -| PDC
-                         "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-comp_rmCond","r_0816-rm", "r_0816-rm-t_0461-inh-comp"# Ala -| OTCase
+                         "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond","r_0816-rm", "r_0816-rm-t_0461-inh-uncomp"# Ala -| OTCase
                          ) 
 
 #custom_plotted_rxns <- c(custom_plotted_rxns, reactionInfo$rMech[reactionInfo$modification %in% c("", "rmCond")])
@@ -584,7 +584,7 @@ if(!all(valid_rxns %in% fitReactionNames$reaction)){
 rxn_regulation <- regulation_lit_support(valid_rxns, all_reactionInfo)
 literature_support <- rxn_regulation[['prob_reg']]
 
-#### Dirty summaries of literature support (can skip this section) ####
+#### Misc summaries of literature support (can skip this section) ####
 
 # total citations
 rxn_regulation[["prob_reg"]] %>% ungroup() %>% dplyr::summarize(sce = sum(sce), other = sum(other)) # all citations
