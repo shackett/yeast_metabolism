@@ -261,23 +261,16 @@ reactionInfo <- data.frame(rMech = names(rxnList_form), reaction = sapply(names(
 
 reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parSetInfo$rx == x])}) # the maximum likelihood over all corresponding parameter sets
 
-# save(list = ls(), file = "tmp.Rdata")
-
 ### Model comparison between more complex models with additional regulators or alterative reaction forms relative to reversible-MM using LRT and AICc ###
-
-#tmp <- reactionInfo %>% filter(reaction == "r_0005")
-#rxnList_form <- rxnList_form[names(rxnList_form) %in% tmp$rMech]
-#reaction_signif <- modelComparison(tmp, rxnList_form)
-
 
 reaction_signif <- modelComparison(reactionInfo, rxnList_form)
 
-reactionInfo <- reactionInfo %>% dplyr::select(-form) %>%
-  left_join(reaction_signif %>% dplyr::select(-signifCode), by = c("reaction", "rMech"))
+reactionInfo <- reactionInfo %>%
+  dplyr::select(-form) %>%
+  left_join(reaction_signif %>%
+              dplyr::select(-signifCode), by = c("reaction", "rMech"))
 
 all_reactionInfo <- reactionInfo
-
-#load("tmp.Rdata")
 
 #save(list = c("all_reactionInfo", "param_set_list", "parSetInfo", "rxnList_form", "param_run_info", "metSVD", "tab_boer", "boer_ra"), file = "flux_cache/modelComparison.Rdata")
 
@@ -341,13 +334,16 @@ pathwaySet <- data.frame(pathway = names(pathwaySet), members = unname(pathwaySe
 
 # For a subset of reactions
 
-top_non_lit <- all_reactionInfo %>% filter(modelType == "non-literature supported met regulator") %>%
+top_non_lit <- all_reactionInfo %>%
+  filter(modelType == "non-literature supported met regulator") %>%
   mutate(type = ifelse(grepl('act', rMech), "act", "inh")) %>%
   group_by(reaction, ncond, type) %>% filter(Qvalue == min(Qvalue))
 
-reactionInfo <- all_reactionInfo %>% filter(modelType %in% c("rMM", "irreversible", "hypo met regulator") |
-                                              (modelType != "non-literature supported met regulator" & Qvalue < 0.1) |
-                                              rMech %in% top_non_lit$rMech)
+reactionInfo <- all_reactionInfo %>%
+  filter(!grepl('inh-noncomp|inh-comp', modification)) %>%
+  filter(modelType %in% c("rMM") |
+           (modelType != "non-literature supported met regulator" & Qvalue < 0.1) |
+           rMech %in% top_non_lit$rMech)
 
 load("companionFiles/PTcomparison_list.Rdata") # by-gene comparisons of protein and transcript abundance
 
