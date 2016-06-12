@@ -265,14 +265,30 @@ reactionInfo$ML <- sapply(reactionInfo$rMech, function(x){max(parSetInfo$ML[parS
 
 reaction_signif <- modelComparison(reactionInfo, rxnList_form)
 
-reactionInfo <- reactionInfo %>%
+all_reactionInfo <- reactionInfo %>%
   dplyr::select(-form) %>%
   left_join(reaction_signif %>%
               dplyr::select(-signifCode), by = c("reaction", "rMech"))
 
-all_reactionInfo <- reactionInfo
+# remove some reaction forms that we don't want in the final analysis
+all_reactionInfo <- all_reactionInfo %>%
+  filter(!grepl('inh-noncomp|inh-comp', modification)) %>%
+  filter(!modelType %in% c("hypo met regulator", "hypo met cooperativity", "irreversible"))
 
-#save(list = c("all_reactionInfo", "param_set_list", "parSetInfo", "rxnList_form", "param_run_info", "metSVD", "tab_boer", "boer_ra"), file = "flux_cache/modelComparison.Rdata")
+# add the top non-literature activator and inhibitor of each reaction
+top_non_lit <- all_reactionInfo %>%
+  filter(modelType == "non-literature supported met regulator") %>%
+  mutate(type = ifelse(grepl('act', rMech), "act", "inh")) %>%
+  group_by(reaction, ncond, type) %>%
+  filter(Qvalue == min(Qvalue)) %>%
+  filter(Qvalue < 0.1)
+
+reactionInfo <- all_reactionInfo %>%
+  filter(modelType %in% c("rMM") |
+           (modelType != "non-literature supported met regulator" & Qvalue < 0.1) |
+           rMech %in% top_non_lit$rMech)
+
+#save(list = c("reactionInfo", "all_reactionInfo", "param_set_list", "parSetInfo", "rxnList_form", "param_run_info", "metSVD", "tab_boer"), file = "flux_cache/modelComparison.Rdata")
 
 load("flux_cache/modelComparison.Rdata")
 
@@ -331,19 +347,6 @@ pathwaySet <- data.frame(pathway = names(pathwaySet), members = unname(pathwaySe
 
 
 #### Generate reaction plots and summaries ####
-
-# For a subset of reactions
-
-top_non_lit <- all_reactionInfo %>%
-  filter(modelType == "non-literature supported met regulator") %>%
-  mutate(type = ifelse(grepl('act', rMech), "act", "inh")) %>%
-  group_by(reaction, ncond, type) %>% filter(Qvalue == min(Qvalue))
-
-reactionInfo <- all_reactionInfo %>%
-  filter(!grepl('inh-noncomp|inh-comp', modification)) %>%
-  filter(modelType %in% c("rMM") |
-           (modelType != "non-literature supported met regulator" & Qvalue < 0.1) |
-           rMech %in% top_non_lit$rMech)
 
 # load("companionFiles/PTcomparison_list.Rdata") # by-gene comparisons of protein and transcript abundance
 
@@ -526,7 +529,7 @@ save(pathwaySet, rxToPW, pathway_plot_list, rxn_plot_list, reactionInfo, file = 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, MLdata, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
 save(ELdata, file = "flux_cache/elasticityData.Rdata")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
@@ -567,7 +570,8 @@ if(!all(valid_rxns %in% fitReactionNames$reaction)){
 
 #### How literature support affect significance ####
 
-rxn_regulation <- regulation_lit_support(valid_rxns, all_reactionInfo)
+rxn_regulation1 <- regulation_lit_support(valid_rxns, all_reactionInfo)
+rxn_regulation2 <- regulation_lit_support(valid_rxns, reactionInfo)
 literature_support <- rxn_regulation[['prob_reg']]
 
 #### Misc summaries of literature support (can skip this section) ####
@@ -581,53 +585,36 @@ table(literature_support$reaction) %>% length() # # reactions with some BRENDA s
 set.seed(1234)
 chisq.test(rxn_regulation[['GS_contingency']], simulate.p.value = T, B = 1e7)
 
-# What fraction of gold-standard, BRENDA and all metabolites improve fit (p < 0.01)
-
-met_type_fit_improvement <- all_reactionInfo %>% tbl_df() %>% filter(modelType == "non-literature supported met regulator" | (rMech %in% literature_support$rMech)) %>%
-  mutate(modelType = ifelse(rMech %in% literature_support$rMech[literature_support$is_GS], "gold-standard", modelType)) %>% group_by(reaction) %>%
-  filter(ncond == min(ncond)) %>% ungroup() %>% mutate(tID = substr(modification, 1, 6), reg_type = substr(modification, 8, 10))
-
-# 
-
-library(qvalue)
-
-FDR_category_improve <- met_type_fit_improvement %>% filter(reaction %in% GS_reactions) %>% select(modelType, Pvalue) 
-FDR_category_improve$Qvalue <- qvalue(FDR_category_improve$Pvalue)$q
-
-tmp <- table(FDR_category_improve$modelType, FDR_category_improve$Qvalue < 0.1)
-#tmp <- table(FDR_category_improve$modelType, FDR_category_improve$Pvalue < 0.01)
-
-chisq.test(tmp[-1,])
-tmp[2,] <- tmp[2,] + tmp[3,]
-chisq.test(tmp[-3,])
-
-# only interested in gold-standard reactions for now
+# What fraction of gold-standard, BRENDA and all metabolites improve fit
 
 GS_reactions <- unique(literature_support$reaction[literature_support$is_GS])
 
-sig_counts <- met_type_fit_improvement %>% filter(reaction %in% GS_reactions) %>% mutate(is_sig = ifelse(Pvalue < 0.01, T, F)) %>%
-  group_by(tID, reg_type, is_sig, modelType) %>% dplyr::summarize(N = n())
+met_type_fit_improvement <- all_reactionInfo %>% tbl_df() %>%
+  filter(modelType == "non-literature supported met regulator" | (rMech %in% literature_support$rMech)) %>%
+  mutate(modelType = ifelse(rMech %in% literature_support$rMech[literature_support$is_GS], "gold-standard", modelType)) %>%
+  group_by(reaction) %>%
+  filter(ncond == min(ncond)) %>% ungroup() %>%
+  mutate(tID = substr(modification, 1, 6), reg_type = substr(modification, 8, 10)) %>%
+  filter(reaction %in% GS_reactions)
 
-# fraction of hypothesis improving fit (p < 0.01)
+library(qvalue)
 
-sig_counts %>% group_by(modelType) %>% dplyr::summarize(nSig = sum(N[is_sig]), nTotal = sum(N), sigFrac = nSig/nTotal)
-
-# Bonferonni-correction on a per-reaction basis doesn't do much
-
-bonf_sig <- met_type_fit_improvement %>% filter(reaction %in% GS_reactions) %>%
-  filter(modelType != "non-literature supported met regulator") %>%
-  group_by(reaction) %>% mutate(Nhyp = n()) %>% mutate(Pvalue_bonf = Pvalue * Nhyp) %>%
-  filter(Pvalue_bonf < 0.01) %>% group_by(modelType) %>% dplyr::summarize(n())
+met_type_fit_improvement$Qvalue_combined <- qvalue(met_type_fit_improvement$Pvalue)$q
   
-bonf_sig <- met_type_fit_improvement %>% filter(reaction %in% GS_reactions) %>%
-  group_by(reaction) %>% mutate(Nhyp = n()) %>% mutate(Pvalue_bonf = Pvalue * Nhyp) %>%
-  filter(Pvalue_bonf < 0.01) %>% group_by(modelType) %>% dplyr::summarize(n())
+FDR_category_improve <- met_type_fit_improvement %>%
+  mutate(is_sig = Qvalue < 0.1) %>%
+  count(modelType, is_sig) %>%
+  spread(key = is_sig, value = n) %>%
+  mutate(frac = `TRUE` / (`TRUE` + `FALSE`))
+  
+matrix_FDR_category_improve <- as.matrix(FDR_category_improve %>% ungroup %>% select(`FALSE`, `TRUE`))
 
-literature_support %>% filter(reaction %in% GS_reactions) %>% ungroup() %>% dplyr::summarize(n())
+comparision_matrix_FDR_category_improve <- rbind(matrix_FDR_category_improve[1,], colSums(matrix_FDR_category_improve[-1,]))
+chisq.test(comparision_matrix_FDR_category_improve, simulate.p.value = T, B = 1e7)
 
-# is literature support related to the frequency of positive hits (weak signal)
-rxn_regulation[['Lit_support_improve_fit']]
-rxn_regulation[['Lit_support_improve_fit_noGS']]
+# numbers "sig" per reaciton
+
+sum(FDR_category_improve$`TRUE`)/length(GS_reactions)
 
 # p(model | literature)
 summary(rxn_regulation[['fitted_model']])
@@ -651,7 +638,9 @@ rMech_support <- rMech_support %>% left_join(rMech_mode, by = "rMech") %>%
 
 #### Look at the best supported reaction mechanisms for each reaction ####
 
-optimal_reaction_form <- rMech_support %>% group_by(reaction) %>% filter(ncond == min(ncond)) %>%
+optimal_reaction_form <- rMech_support %>%
+  group_by(reaction) %>%
+  filter(ncond == min(ncond)) %>%
   filter(if(spearman[type == "unregulated"] > 0.9){
     type == "unregulated"
     }else{
@@ -682,12 +671,12 @@ GS_regulation <- GS_regulation %>% left_join(literature_support %>% dplyr::selec
 GS_regulation <- GS_regulation %>% left_join(optimal_reaction_form %>% dplyr::select(reaction, rMech, reg_type = type, ncond, spearman), by = "reaction")
 
 GS_regulation_support <- GS_regulation %>% rowwise() %>% mutate(optimal = grepl(paste(tID, modtype, sep = "-"), rMech)) %>%
-  mutate(support = ifelse(optimal, "strongest support", ""),
-         support = ifelse(!is.na(is_sig) & is_sig & !optimal, "supported", support),
-         support = ifelse(spearman < 0.6, "no tested model is adequate", support),
-         support = ifelse(support == "" & reg_type == "unregulated", "no physiological regulation", support),
-         support = ifelse(is.na(is_sig), "not measured", support),
-         support = ifelse(support == "", "alternative regulation supported", support))
+  mutate(support = ifelse(optimal, "Strongest support", ""),
+         support = ifelse(!is.na(is_sig) & is_sig & !optimal, "Supported", support),
+         support = ifelse(spearman < 0.6, "No tested model is adequate", support),
+         support = ifelse(support == "" & reg_type == "unregulated", "No regulation identified", support),
+         support = ifelse(is.na(is_sig), "Not measured", support),
+         support = ifelse(support == "", "Alternative regulation", support))
 
 GS_regulation_support <- GS_regulation_support %>% left_join(
   reactionInfo %>% filter(modelType == "hypo met regulator") %>% dplyr::select(hypo_rMech = rMech, reaction, ncond) %>%
@@ -699,11 +688,6 @@ Hypo_met_candidates %>% group_by(rMech) %>% arrange(desc(`97.5%`)) %>%
 by = c("tID", "hypo_rMech"))
 
 # Summary of gold-standard regulation significance
-
-write.table(GS_regulation_support %>% dplyr::select(reaction_name, regulator, type, support, reference, rank) %>% ungroup() %>% arrange(tolower(reaction_name), regulator),
-            file = "Figures/GStable.tsv", quote = F, col.names = T, row.names = F, sep = "\t")
-
-# if using xtable
 
 library(xtable)
 print(xtable(GS_regulation_support %>% dplyr::select(reaction_name, regulator, type, support, rank) %>% ungroup() %>% arrange(tolower(reaction_name), regulator)),
@@ -722,9 +706,6 @@ append_GS <- data.frame(reaction_name = 'ornithine transcarbamylase', reaction =
 GS_regulation_support <- rbind(GS_regulation_support, append_GS)
 
 
-
-
-
 #### Group reaction mechanisms into similarly behaving groups and filter low-confidence mechanisms ####
 # save this for later once well-fit reactions are identified
 
@@ -735,27 +716,26 @@ reg_groups <- group_regulation(rMech_support, rxnList_form, GS_regulation_suppor
 #adequate_fit_optimal_rxn_form <- optimal_reaction_form$rMech[optimal_reaction_form$spearman > 0.6]
 adequate_fit_optimal_rxn_form <- optimal_reaction_form$rMech[optimal_reaction_form$pearson > 0.6]
   
-adequate_rxn_form_data <- optimal_reaction_form %>% filter(rMech %in% adequate_fit_optimal_rxn_form) %>% left_join(fitReactionNames, by = "reaction")
-
-regulation_summary_table <- adequate_rxn_form_data %>% left_join(
-  data.frame(ID = names(reg_groups$regulation), reg_string = unname(reg_groups$regulation)) %>%
-    separate(ID, into = c("reaction", "ncond"), sep = "-") %>%
-    mutate(ncond = as.numeric(ncond)), by = c("reaction", "ncond")) %>%
-  left_join(reactionInfo %>% dplyr::select(rMech, modelType, Name), by = "rMech")
+adequate_rxn_form_data <- optimal_reaction_form %>%
+  filter(rMech %in% adequate_fit_optimal_rxn_form) %>%
+  left_join(fitReactionNames, by = "reaction")
 
 total_tested_regulators <- all_reactionInfo %>% tbl_df() %>% filter(modelType == "regulator") %>% dplyr::select(reaction, modification) %>%
   tidyr::separate(modification, into = c("tID", "class", "subclass"), sep = "-") %>%
   dplyr::select(-subclass) %>% unique() %>% group_by(reaction) %>%
   dplyr::summarize(N_reg_tested = n())
 
-write.table(
-regulation_summary_table %>% mutate(reg_string = ifelse(type == "unregulated", "", reg_string)) %>% ungroup() %>%
+regulation_summary_table <- adequate_rxn_form_data %>%
+  left_join(reg_groups$regulation, by = c("reaction", "ncond")) %>%
+  left_join(reactionInfo %>% dplyr::select(rMech, modelType, Name), by = "rMech") %>%
   left_join(total_tested_regulators, by = "reaction") %>%
-  dplyr::select(rMech, `Reaction Name` = reaction.name, Genes = genes, `Best Supported Regulation` = Name,
-                Correlation = spearman, `Regulation Type` = type, `All Supported Regulation` = reg_string,
+  dplyr::select(`Reaction Name` = reaction.name, Abbreviation = abbrev, `Best Supported Regulation` = Name,
+                Correlation = pearson, `Other Supported Regulation` = all_regulators,
                 `\\# Regulators Tested` = N_reg_tested) %>%
-  ungroup() %>% arrange(tolower(`Reaction Name`)),
-file = "Figures/all_reaction_table.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
+  mutate(Correlation = round(Correlation, 2)) %>%
+  arrange(`Reaction Name`)
+
+write.table(regulation_summary_table, file = "Figures/all_reaction_table.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
 
 #### Summarize all "best regulators" ####
 
@@ -771,32 +751,6 @@ sig_regulators <- sig_regulators %>% separate(regulators, into = c("tID", "modty
   left_join(ranked_regulators, by = c("reaction", "tID", "modtype"))
 
 write.table(sig_regulators %>% arrange(desc(is_GS), desc(sce), desc(other)), file = "Figures/significant_regulation.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
-
-
-    
-all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")    
-
-regulation_summary_table %>% filter(`Regulation Type` != "unregulated") 
-
-all_affinities <- read.delim("flux_cache/metaboliteAffinities.tsv")
-all_regulation <- all_affinities %>% tbl_df() %>% filter(speciesType == "regulator")
-
-all_regulation_unfold <- apply(all_regulation, 1, function(x){
-  x <- unlist(x)
-  cbind(expand.grid(tID = strsplit(x['tID'], split = '/')[[1]], reaction = strsplit(x['reactions'], split = '/')[[1]], stringsAsFactors = F),
-        t(x[c('EC', 'isYeast', 'modtype', 'nQual')]))
-})
-all_regulation <- do.call("rbind", all_regulation_unfold) %>% tbl_df() %>%
-  mutate(nQual = as.numeric(nQual),
-         isYeast = gsub(' ', '', isYeast), isYeast = as.logical(isYeast),
-         isYeast = ifelse(isYeast, "sce", "other"))
-
-all_regulation <- all_regulation %>% group_by(EC, reaction, tID, isYeast, modtype) %>% dplyr::summarize(nQual = sum(nQual)) %>%
-  spread(key = isYeast, value = nQual, fill = 0)
-
-all_regulation %>% filter(reaction %in% sig_regulators$reaction) %>% group_by(reaction) %>% arrange(desc(sce), desc(other)) %>% View()
-
-brenda_citations <- read.delim('./flux_cache/brendamat.tsv')
 
 
 #### Summary based on spearman correlation for MM and most significant regulator (if applicable) #####

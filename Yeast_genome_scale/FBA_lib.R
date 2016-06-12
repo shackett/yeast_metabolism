@@ -3409,7 +3409,7 @@ filter_rMech_by_prior <- function(relevant_rxns, reactionInfo, literature_suppor
     }
     
   })
-  regulators <- do.call("rbind", regulators) %>% tbl_df()
+  regulators <- regulators %>% bind_rows %>% tbl_df()
   
   regulators <- regulators %>% mutate(tID_type = paste(SubstrateID, Type, sep = "-"),
            common_type = paste(commonName, ifelse(Type == "act", "+", "-"))) %>%
@@ -3982,8 +3982,6 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
     
     for(a_cond_subset in unique(sort(reaction_regulators$ncond))){ # allow full and reduced sets of conditions to be evalutated
       
-      #warning(paste0(a_rxn, "-", a_cond_subset))
-      
       # All metabolite trends for the relevent reaction
       relevant_regulators <- reaction_regulators %>% filter(ncond == a_cond_subset)
       
@@ -3999,11 +3997,10 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
       regulator_info <- relevant_regulators %>% dplyr::select(SubstrateID, Type) %>% unique() %>% mutate(tID_type = paste(SubstrateID, Type, sep = "-"))
       
       if(nrow(regulator_info) == 1){
-        reaction_graphs$regulation[[paste(a_rxn, a_cond_subset, sep = "-")]] <- paste(relevant_regulators$commonName[1], ifelse(relevant_regulators$Type[1] == "inh", "-", "+"))
         next
       }
       
-      # flip inhibitors, so that anticorrelated activators and inhibitors are grouped
+      # flip inhibitors, so that anticorrelated activators and inhibitors can be grouped
       reg_RA <- relevant_regulators %>% left_join(regulator_info, by = c("SubstrateID", "Type")) %>%
         dplyr::select(tID_type, Type, condition, RA) %>%
         unique() %>% mutate(RA = ifelse(Type == "inh", -1*RA, RA)) %>%
@@ -4185,8 +4182,6 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
       
       # All regulation that improves simpler models
       
-      l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight, initemp = 100, coolexp = 0.995, niter = 5000)
-      reg_connection_graph$layout <- l
       reg_connection_graph$main = reaction_name
       
       reaction_graphs$complete[[paste(a_rxn, a_cond_subset, sep = "-")]] <- reg_connection_graph
@@ -4231,7 +4226,6 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
       
       if(nrow(reduced_regulators) == 0){
         # all regulation is less favorable than rMM
-        reaction_graphs$regulation[[paste(a_rxn, a_cond_subset, sep = "-")]] <- ""
        next
       }
       
@@ -4262,9 +4256,6 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
       
       # Best supported regulation
       
-      l <- layout.kamada.kawai(reg_connection_graph, weights = E(reg_connection_graph)$weight, initemp = 100, coolexp = 0.995, niter = 5000)
-      reg_connection_graph$layout <- l
-     
       reaction_graphs$reduced[[paste(a_rxn, a_cond_subset, sep = "-")]] <- reg_connection_graph
       
       if(print_plots){
@@ -4367,6 +4358,8 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
         group_by(cluster) %>% arrange(desc(AIC)) %>% mutate(clusterID = paste0("C", cluster)) %>%
         left_join(vertex_match %>% dplyr::select(tID_type, common_type), by = "tID_type")
       
+      simple_regulators <- paste(sort(gsub('([-+])$', '\\(\\1\\)', unique(cluster_members$common_type))), collapse = ", ")
+      
       cluster_members <- cluster_members %>% group_by(clusterID) %>% dplyr::summarize(print = paste(common_type, collapse = " / "), N = n()) %>%
         mutate(print = ifelse(N != 1, sub('$', ')', sub('^', '(', print)), print))
       
@@ -4376,10 +4369,14 @@ group_regulation <- function(rMech_support, rxnList_form, GS_regulation_support,
       }
       cluster_printout <- ifelse(grepl('AND', cluster_printout), sub('$', ']', sub('^', '[', cluster_printout)), cluster_printout)
       
-      reaction_graphs$regulation[[paste(a_rxn, a_cond_subset, sep = "-")]] <- paste(cluster_printout, collapse = " OR ")
+      reaction_graphs$regulation[[paste(a_rxn, a_cond_subset, sep = "-")]] <- data.frame(reaction = a_rxn, ncond = a_cond_subset,
+                                                                                         grouped_regulators = paste(cluster_printout, collapse = " OR "),
+                                                                                         all_regulators = simple_regulators)
       
     }
   }
+  reaction_graphs$regulation <- reaction_graphs$regulation %>% bind_rows
+  
   return(reaction_graphs)
 }
 
