@@ -2352,12 +2352,12 @@ customPlots <- function(run_rxn, flux_fit, chemostatInfo){
   ) %>% ungroup() %>% arrange(condition, BOUND, plotOrder)
   
   ggplot() + geom_hline(yintercept = 0, size = 3) + geom_vline(xintercept = 0, size = 3) +
-    geom_polygon(data = bound_polygon, aes(x = condName, y = FLUX, group = condition), size = 2.6, alpha = 0.5, fill = "mediumpurple2", width = 10) +
+    geom_polygon(data = bound_polygon, aes(x = condName, y = FLUX, group = condition), size = 2.6, alpha = 0.5, fill = "mediumpurple2") +
     geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
     geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "FBA"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +
     geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 4, alpha = 1) +
     geom_text(data = corr_label, aes(x = x, y = y, label = label), size = 8, parse = T) +
-    geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 2.6, alpha = 1, width = 10) +
+    geom_path(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, col = factor(METHOD), group = condition), size = 2.6, alpha = 1) +
     geom_point(data = flux_plot_data$flux_plot_comp %>% filter(METHOD == "PAR"), aes(x = condName, y = FLUX, col = factor(METHOD)), size = 10, alpha = 1) +
     ci_theme + scale_color_manual("Method", guide = "none", values= c("FBA" = "firebrick1", "PAR" = "darkblue")) +
     scale_y_continuous("Relative Flux", limits = c(flux_range[1],flux_range[2]*1.05), expand = c(0,0)) + scale_x_discrete("Conditions") +
@@ -2482,9 +2482,12 @@ reactionProperties <-  function(){
   all_species <- data.frame(2^met_abund, 2^enzyme_abund)
   all_species <- all_species[,chmatch(names(elast_partials), colnames(all_species))]
   
-  # calculate sensitivities #  partial F / partial S
   kinetically_differing_isoenzymes <- any(names(run_rxn$occupancyEq[["l_occupancyExpression"]]) %in% rownames(run_rxn$rxnSummary$enzymeComplexes))
-  mcmc_elasticity <- sapply(1:nrow(dist_pars), function(x){
+  
+  # calculate sensitivities #  partial F / partial S
+  # calculate elasticities # partial F / partial S * F / S
+  
+  mcmc_sensitivities <- parallel::mclapply(1:nrow(dist_pars), function(x){
     
     pars <- dist_pars[x,]
     dist_par_stack <- rep(1, n_c) %*% t(2^(pars))
@@ -2527,107 +2530,122 @@ reactionProperties <-  function(){
     for(j in 1:ncol(comp_partials)){
       comp_partials[,j] <- with(all_components, eval(elast_partials[[j]]))
     }
-    
-    
     # partial F / partial S * [S]/F
-    as.matrix(comp_partials * all_species/flux_fit$fitted)
-      
-  }, simplify = "array")
+    elasticities <- as.matrix(comp_partials * all_species/flux_fit$fitted)
+    
+    rownames(comp_partials) <- rownames(elasticities) <- rownames(measured_mets)
+    
+    comp_partials <- comp_partials %>%
+      as.data.frame %>%
+      mutate(condition = rownames(.)) %>%
+      gather(key = specie, value = Sensitivity, -condition)
+
+    elasticities <- elasticities %>%
+      as.data.frame %>%
+      mutate(condition = rownames(.)) %>%
+      gather(key = specie, value = Elasticity, -condition)
+    
+    comp_partials %>%
+      left_join(elasticities, by = c("specie", "condition")) %>%
+      mutate(markovSample = x)
+    
+  }, mc.cores = 4) %>% bind_rows
   
-  flux_names <- names(elast_partials)
-  flux_names[flux_names %in% run_rxn$kineticPars$rel_spec] <- run_rxn$kineticPars$formatted[chmatch(flux_names[flux_names %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
-  
-  dimnames(mcmc_elasticity) <- list(condition = rownames(measured_mets), specie = flux_names, markovSample = c(1:nrow(dist_pars)))
-  
-  output$EL_summary <- melt(mcmc_elasticity, value.name = "Elasticity") # Save full distributions of elasticitiies for MCA
+  output$EL_summary <- mcmc_sensitivities # Save full distributions of elasticitiies for MCA
   
   ### Plot elasticity of log-abundances ###
   
-  flux_elasticity_melt <- data.table(melt(mcmc_elasticity))
+  flux_elasticity_melt <- data.table(mcmc_sensitivities)
   
-  elasticity_summary <- flux_elasticity_melt[,list(LB = boxplot.stats(value)$stats[1], LH = boxplot.stats(value)$stats[2], median = boxplot.stats(value)$stats[3],
-                                                   UH = boxplot.stats(value)$stats[4], UB = boxplot.stats(value)$stats[5]), by = c("specie", "condition")]
+  elasticity_summary <- flux_elasticity_melt[,list(LB = boxplot.stats(Elasticity)$stats[1], LH = boxplot.stats(Elasticity)$stats[2], median = boxplot.stats(Elasticity)$stats[3],
+                                                   UH = boxplot.stats(Elasticity)$stats[4], UB = boxplot.stats(Elasticity)$stats[5]), by = c("specie", "condition")]
   elasticity_summary$condition <- factor(elasticity_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% elasticity_summary$condition])
   
   output_plots$elasticity_summary <- elasticity_summary
   
-  ####
+  ### Metabolic leverage: summarizing species concentrations and their variability
   
+  all_exp_species <- data.frame(enzyme_abund,
+                                measured_mets[, colnames(measured_mets) %in% run_rxn$kineticPars$rel_spec[!is.na(run_rxn$kineticPars$measured) & run_rxn$kineticPars$measured], drop = F]) %>%
+    mutate(condition = rownames(.)) %>%
+    gather(key = specie, value = log2_conc, -condition)
   
-  measured_partials <- run_rxn$occupancyEq$kinetic_form_partials[names(run_rxn$occupancyEq$kinetic_form_partials) %in% c(run_rxn$kineticPars$modelName[run_rxn$kineticPars$measured & !is.na(run_rxn$kineticPars$measured)], colnames(run_rxn$enzymes))]
+  all_exp_species <- all_exp_species %>% mutate(conditions = "ALL") %>%
+    bind_rows(all_exp_species %>% filter(grepl('^[PCN]', condition)) %>% mutate(conditions = "Natural"))
   
-  comp_partials <- matrix(NA, nrow = n_c, ncol = length(measured_partials))
-  colnames(comp_partials) <- names(measured_partials)
+  species_var <- all_exp_species %>%
+    mutate(conc = 2^log2_conc) %>%
+    group_by(specie, conditions) %>%
+    summarize(linear_var = var(conc), log_sd = sd(log2_conc))
   
-  for(j in 1:ncol(comp_partials)){
-    comp_partials[,j] <- with(all_components, eval(run_rxn$occupancyEq$kinetic_form_partials[[j]]))
-  }
-  
-  # calculate the fitted standard deviation after first finding the by-condition residual covariance matrix
-  
-  flux_SD <- rep(NA, n_c)
-  for(i in 1:n_c){
-    sampleCov <- run_rxn$specCorr * t(t(run_rxn$specSD[i,])) %*% run_rxn$specSD[i,]
-    flux_SD[i] <- sqrt(t(comp_partials[i,]) %*% sampleCov %*% t(t(comp_partials[i,])))
-  }
-  
-  
-  ### Physiological leverage: absolute partial correlation weighted by across-condition SD
-  
-  all_exp_species <- data.frame(enzyme_abund, measured_mets[, colnames(measured_mets) %in% run_rxn$kineticPars$rel_spec[run_rxn$kineticPars$formatted %in% flux_names], drop = F])
-  colnames(all_exp_species)[colnames(all_exp_species) %in% run_rxn$kineticPars$rel_spec] <- run_rxn$kineticPars$formatted[chmatch(colnames(all_exp_species)[colnames(all_exp_species) %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
-  
-  all_exp_species <- all_exp_species[,chmatch(colnames(mcmc_elasticity), colnames(all_exp_species))]
-  
-  # Calculate the physiological SD from total Variance - within Condition Variance
-  
-  #condSD <- run_rxn$specSD
-  #colnames(condSD)[colnames(condSD) %in% run_rxn$kineticPars$rel_spec] <- run_rxn$kineticPars$formatted[chmatch(colnames(condSD)[colnames(condSD) %in% run_rxn$kineticPars$rel_spec], run_rxn$kineticPars$rel_spec)]
-  #WICSS <- apply(condSD^2, 2, sum)
-  #OCSS <- apply((all_exp_species - rep(1,nrow(all_exp_species)) %*% t(apply(all_exp_species, 2, mean)))^2, 2, sum)
-  
-  # weighting by sd of log abundances is similar to weighting by IQR (with better stability)
-  # Across all conditions
-  aSDweightedElasticity <- abs(mcmc_elasticity) * array(rep(1, n_c) %*% t(apply(all_exp_species, 2, sd)), dim = dim(mcmc_elasticity)) 
-  # Across natural conditions
-  nSDweightedElasticity <- abs(mcmc_elasticity[grep('^[PCN]', rownames(mcmc_elasticity)),,]) *
-    array(rep(1, length(grep('^[PCN]', rownames(mcmc_elasticity)))) %*% t(apply(all_exp_species[grep('^[PCN]', rownames(mcmc_elasticity)),], 2, sd)), dim = c(length(grep('^[PCN]', rownames(mcmc_elasticity))), dim(mcmc_elasticity)[2:3])) 
-  
-  we_melt <- rbind(tbl_df(melt(aSDweightedElasticity)) %>% dplyr::mutate(conditions = "ALL"),
-                   tbl_df(melt(nSDweightedElasticity)) %>% dplyr::mutate(conditions = "NATURAL"))
-  
-  we_melt <- we_melt %>% group_by(condition, markovSample, conditions) %>% dplyr::mutate(total_we = sum(value)) %>% filter(total_we != 0) %>%
-    dplyr::mutate(physiological_leverage = value/total_we)
-  
-  we_summary <- we_melt %>% group_by(specie, condition, conditions) %>% dplyr::summarize(LB = boxplot.stats(physiological_leverage)[['stats']][1], LH = boxplot.stats(physiological_leverage)[['stats']][2], median = boxplot.stats(physiological_leverage)[['stats']][3],
-                                                                                  UH = boxplot.stats(physiological_leverage)[['stats']][4], UB = boxplot.stats(physiological_leverage)[['stats']][5])
-  we_summary <- we_summary %>% ungroup() %>% mutate(Limitation = factor(substr(condition, 1, 1), levels = c("P", "C", "N", "L", "U")),
-                                                    DR = factor(sub('[A-Z]', '', condition)),
-                                                    condition = factor(condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% condition]))
-  
-  output_plots$we_summary <- we_summary
-  
-  ### Summarize physiological leverage to look for general trends over reactions ###
+  # two approaches
+  # weighting elasticity by variation in log space (abs(elasticity) * sd(spec))
+  # weighted sensitivies by physiological variability of species in linear spaace (sensitivity^2 * Var(spec))
+  ws_melt <- mcmc_sensitivities %>% left_join(species_var, by = "specie") %>%
+    group_by(specie, conditions, markovSample) %>%
+    summarize(weighted_elasticities = median(abs(Elasticity)) * log_sd[1],
+      weighted_sensitivities = mean(Sensitivity)^2 * linear_var[1]) %>%
+    gather(key = "measure", value = "metabolicLeverage", -c(specie:markovSample))
+    
+  ws_melt <- ws_melt %>% 
+    group_by(conditions, measure, markovSample) %>%
+    mutate(metabolicLeverage = metabolicLeverage / sum(metabolicLeverage)) %>%
+    ungroup %>%
+    filter(metabolicLeverage != 0)
   
   # leverage implied by the most likely parameter set
-  ML_MLE <- we_melt %>% filter(markovSample == which.max(par_likelihood$likelihood)) %>% ungroup() %>% dplyr::select(condition, specie, conditions, MLE = physiological_leverage)
+  ML_MAP <- ws_melt %>%
+    filter(markovSample == which.max(par_likelihood$likelihood)) %>%
+    ungroup() %>%
+    dplyr::select(specie, conditions, measure, MAP = metabolicLeverage)
+  
   # distribution of leverage over posterior credibility interval
-  ML_summary <- we_melt %>% group_by(specie, condition, conditions) %>% dplyr::summarize("0.025" = quantile(physiological_leverage, probs = 0.025), "0.5" = quantile(physiological_leverage, probs = 0.5), 
-                              "0.975" = quantile(physiological_leverage, probs = 0.975)) %>% ungroup()
+  ML_summary <- ws_melt %>%
+    group_by(specie, conditions, measure) %>%
+    dplyr::summarize("0.025" = quantile(metabolicLeverage, probs = 0.025),
+                     "0.5" = quantile(metabolicLeverage, probs = 0.5),
+                     "0.975" = quantile(metabolicLeverage, probs = 0.975)) %>% ungroup()
   
-  ML_summary <- ML_summary %>% left_join(ML_MLE, by = c("specie", "condition", "conditions"))
+  ML_summary <- ML_summary %>%
+    left_join(ML_MAP, by = c("specie", "conditions", "measure")) %>%
+    mutate(MAP = ifelse(is.na(MAP), 0, MAP))
   
-  ML_summary$Type <- NA
+  # annotate the type of reaction species
+  
+  rxn_species <- run_rxn$kineticPars %>%
+    select(name = formatted, modelName) %>%
+    left_join(
+    run_rxn$rxnSummary$rxnFormData %>%
+    mutate(spec_class = ifelse(Type %in% c("act", "inh"), Type, Subtype)) %>%
+    select(modelName = SubstrateID, Type = spec_class), by = "modelName") %>%
+    filter(!is.na(Type))
+  
+  # if a specie is a substrate/reactant and also a regulator, only consider it as a substrate/product for the purposes of ML
+  # there is only one elasticity value so its role in the two capacities cannot easily be distinguished
+  
+  rxn_species <- rxn_species %>% group_by(modelName) %>%
+    mutate(Type_f = factor(Type, levels = c("substrate", "product", "act", "inh"))) %>%
+    arrange(Type_f) %>%
+    slice(1) %>%
+    ungroup %>%
+    select(-Type_f)
+  
+  # add specie information to ML summaries
+  
+  ML_summary <- ML_summary %>% left_join(rxn_species, by = c("specie" = "modelName"))
+  ML_summary$name[ML_summary$specie %in% colnames(enzyme_abund)] <- ML_summary$specie[ML_summary$specie %in% colnames(enzyme_abund)]
   ML_summary$Type[ML_summary$specie %in% colnames(enzyme_abund)] <- "enzyme"
   
-  ML_summary$Type[is.na(ML_summary$Type)] <- run_rxn$rxnSummary$rxnFormData$Subtype[chmatch(run_rxn$kineticPars$rel_spec[chmatch(as.character(ML_summary$specie[is.na(ML_summary$Type)]), run_rxn$kineticPars$formatted)], run_rxn$rxnSummary$rxnFormData$SubstrateID)]
-  ML_summary$reaction = arxn
+  if(any(is.na(ML_summary$Type))){
+   stop("some species are missing a type") 
+  }
   
-  ML_summary$condition <- factor(ML_summary$condition, levels = chemostatInfo$ChemostatCond[chemostatInfo$ChemostatCond %in% ML_summary$condition])
+  ML_summary$rMech = arxn
   
   output$ML_summary = ML_summary
   
   output$plots <- output_plots
+  
   return(output)
   
 }
@@ -2652,16 +2670,6 @@ reactionPropertiesPlots <- function(reaction_plots){
   output_plots$"Flux Elasticity" <- ggplot(reaction_plots$elasticity_summary, aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = "cornsilk1", color = "brown1")) + facet_wrap(~ specie, scales = "free_y", ncol = 2) + 
     geom_boxplot(stat = "identity") + boxplot_theme + scale_fill_identity() + scale_color_identity() + expand_limits(y=0) +
     scale_x_discrete("Experimental Condition") + scale_y_continuous(name = expression("Elasticity: "~ frac(rho~"F", rho~S)~frac("[S]","F")))
-  
-  output_plots$"Metabolic Leverage (all)" <- ggplot(reaction_plots$we_summary %>% filter(conditions == "ALL"), aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
-    geom_boxplot(stat = "identity") + expand_limits(y=c(0,1)) + boxplot_theme +
-    scale_y_continuous("Metabolic Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
-    scale_fill_discrete() + facet_wrap(~ specie, ncol = 2)
-  
-  output_plots$"Metabolic Leverage (natural)" <- ggplot(reaction_plots$we_summary  %>% filter(conditions == "NATURAL"), aes(x = condition, ymin = LB, lower = LH, middle = median, upper = UH, ymax = UB, fill = factor(specie))) + 
-    geom_boxplot(stat = "identity") + expand_limits(y=c(0,1)) + boxplot_theme +
-    scale_y_continuous("Metabolic Leverage", labels = percent_format(), expand = c(0,0)) + scale_x_discrete("Experimental Condition") +
-    scale_fill_discrete() + facet_wrap(~ specie, ncol = 2)
   
   
   return(output_plots)

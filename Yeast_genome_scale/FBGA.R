@@ -345,7 +345,7 @@ reactionInfo <- all_reactionInfo %>%
            (modelType != "non-literature supported met regulator" & Qvalue < 0.1) |
            rMech %in% top_non_lit$rMech)
 
-load("companionFiles/PTcomparison_list.Rdata") # by-gene comparisons of protein and transcript abundance
+# load("companionFiles/PTcomparison_list.Rdata") # by-gene comparisons of protein and transcript abundance
 
 shiny_flux_data <- list()
 rxn_fits <- NULL
@@ -359,14 +359,14 @@ Hypo_met_candidates <- NULL
 t_start = proc.time()[3]
 
 # flag a few reactions where additional plots are created
-custom_plotted_rxns <- c("r_1054-im-forward", "r_1054-rm","r_0962-rm", "r_0962-rm-t_0290-act-mm",
+custom_plotted_rxns <- c("r_1054-rm","r_0962-rm", "r_0962-rm-t_0290-act-mm",
                          "r_0514-im-forward", "r_0514-rm", "r_0916-im-forward", "r_0916-rm", "r_0208-im-forward", "r_0208-rm",
                          "r_0915-rm", "r_0915-rm-t_0234-inh-uncomp", # PRPP Amidotransferase
                          "r_0468-rm", "r_0468-rm-t_0495-inh-uncomp", # G5K
                          "r_0309-rm", "r_0309-rm-t_0652-act-mm", #CBS
-                         "r_0962-rm", "r_0962-rm-t_0276-inh-noncomp", # Citrate -| Pyk
-                         "r_0962-rm-pairwise-t_0276-inh-noncomp+t_0290-act-mm", # citrate + FBP regulating Pyk
-                         "r_0959-rm", "r_0959-rm-t_0457-inh-noncomp", # PhePyr -| PDC
+                         "r_0962-rm", "r_0962-rm-t_0276-inh-uncomp", # Citrate -| Pyk
+                         "r_0962-rm-pairwise-t_0276-inh-uncomp+t_0290-act-mm", # citrate + FBP regulating Pyk
+                         "r_0959-rm", "r_0959-rm-t_0457-inh-uncomp", # PhePyr -| PDC
                          "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond","r_0816-rm", "r_0816-rm-t_0461-inh-uncomp"# Ala -| OTCase
                          ) 
 
@@ -375,10 +375,8 @@ custom_plotted_rxns <- unique(custom_plotted_rxns)
 
 if(!(all(custom_plotted_rxns %in% reactionInfo$rMech))){stop("Some reaction mechanisms that you want to plot were not located")}
 
-#arxn <- c("r_0214-rm")
-#for(arxn in rxn_subset){
-for(arxn in custom_plotted_rxns){
-#for(arxn in reactionInfo$rMech){
+#for(arxn in custom_plotted_rxns){
+for(arxn in reactionInfo$rMech){
   
   par_likelihood <- NULL
   par_markov_chain <- NULL
@@ -452,11 +450,8 @@ for(arxn in custom_plotted_rxns){
   ELdata[[arxn]] <- reaction_properties$EL_summary
   
   reaction_plots <- reaction_properties$plots
-  shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, reactionPropertiesPlots(reaction_plots))
-  
-  trans_res <- transcriptional_responsiveness()
-  if("Plots" %in% names(trans_res)){ shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices, trans_res$Plots) }
-  if("TR" %in% names(trans_res)){ TRdata <- rbind(TRdata, trans_res$TR) }
+  shiny_flux_data[[arxn]]$plotChoices <- append(shiny_flux_data[[arxn]]$plotChoices,
+                                                reactionPropertiesPlots(reaction_plots))
   
   if(arxn %in% custom_plotted_rxns){
     
@@ -531,7 +526,7 @@ save(pathwaySet, rxToPW, pathway_plot_list, rxn_plot_list, reactionInfo, file = 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, TRdata, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
+save(rxn_fit_params, rxn_fits, reactionInfo, MLdata, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
 save(ELdata, file = "flux_cache/elasticityData.Rdata")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
@@ -540,8 +535,6 @@ save(ELdata, file = "flux_cache/elasticityData.Rdata")
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
 
 ##### Systems level comparison of optimized and external parameter values #####
-
-#load("tmp/paramCI.Rdata")
 
 load("flux_cache/modelComparison.Rdata")
 load("flux_cache/paramCI.Rdata")
@@ -554,9 +547,6 @@ if(sum(!(reactionInfo$rMech %in% rxn_fits$rxn)) != 0){
   reactionInfo <- reactionInfo %>% dplyr::filter(rMech %in% rxn_fits$rxn)
   }
 
-#reactionInfo %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman = parSpearman), by = "rMech") %>%
-#  filter(modelType == "rMM") %>% group_by(reaction) %>% filter(n() > 1) %>% View()
-
 ### Determine which reactions to follow-up on based upon either
 ### Either all substrates are measured, or only relatively unimportant species are missing
 
@@ -567,7 +557,7 @@ RMMrxns <- reactionInfo %>% filter(modelType == "rMM", ncond == max(ncond)) %>% 
 reaction_validity <- filter_reactions(reactionInfo, rxn_fits, rxnList_form)
 valid_rxns <- reaction_validity$reaction[reaction_validity$include]
 
-# load manually annotated abbreviation of reaction name and pathway
+# load manually annotated abbreviation of reaction name and pathway (for display purposes)
 
 fitReactionNames <- read.delim('companionFiles/fitReactionNames.txt')
 
