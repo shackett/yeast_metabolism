@@ -570,8 +570,7 @@ if(!all(valid_rxns %in% fitReactionNames$reaction)){
 
 #### How literature support affect significance ####
 
-rxn_regulation1 <- regulation_lit_support(valid_rxns, all_reactionInfo)
-rxn_regulation2 <- regulation_lit_support(valid_rxns, reactionInfo)
+rxn_regulation <- regulation_lit_support(valid_rxns, all_reactionInfo)
 literature_support <- rxn_regulation[['prob_reg']]
 
 #### Misc summaries of literature support (can skip this section) ####
@@ -678,31 +677,26 @@ GS_regulation_support <- GS_regulation %>% rowwise() %>% mutate(optimal = grepl(
          support = ifelse(is.na(is_sig), "Not measured", support),
          support = ifelse(support == "", "Alternative regulation", support))
 
-GS_regulation_support <- GS_regulation_support %>% left_join(
-  reactionInfo %>% filter(modelType == "hypo met regulator") %>% dplyr::select(hypo_rMech = rMech, reaction, ncond) %>%
-    mutate(type = ifelse(grepl('act', hypo_rMech), "activator", "inhibitor")), by = c("reaction", "type", "ncond"))
-
-GS_regulation_support <- GS_regulation_support %>% left_join(
-Hypo_met_candidates %>% group_by(rMech) %>% arrange(desc(`97.5%`)) %>%
-  mutate(rank = 1:n()) %>% dplyr::select(hypo_rMech = rMech, tID = SpeciesType, hypo_corr = `97.5%`, rank),
-by = c("tID", "hypo_rMech"))
-
 # Summary of gold-standard regulation significance
 
 library(xtable)
-print(xtable(GS_regulation_support %>% dplyr::select(reaction_name, regulator, type, support, rank) %>% ungroup() %>% arrange(tolower(reaction_name), regulator)),
+print(xtable(GS_regulation_support %>% dplyr::select(reaction_name, regulator, type, support) %>% ungroup() %>% arrange(tolower(reaction_name), regulator)),
              include.rownames = F)
 
-### Include validated regulation ###
+### Include (in)validated regulation ###
 
-optimal_reaction_form <- rbind(optimal_reaction_form %>% filter(reaction != "r_0816"),
-                               rMech_support %>% filter(rMech == "r_0816-rm-t_0461-inh-comp_rmCond")
-) %>% ungroup() %>% arrange(reaction)
+optimal_reaction_form <- rbind(optimal_reaction_form %>% filter(!(reaction %in% c("r_0466", "r_0816"))),
+                               rMech_support %>% filter(rMech %in% c("r_0816-rm-t_0461-inh-uncomp_rmCond", "r_0466-rm-pairwise-t_0617-inh-uncomp+t_0234-inh-uncomp"))) %>%
+  ungroup() %>% arrange(reaction)
 
 append_GS <- data.frame(reaction_name = 'ornithine transcarbamylase', reaction = 'r_0816', regulator = 'alanine',
         tID = 't_0461', type = 'inhibitor', reference = NA, modtype = 'inh', is_sig = T, rMech = 'r_0816-rm-t_0461-inh-comp_rmCond',
-        reg_type = NA, ncond = 20, spearman = NA, optimal = NA, support = NA, hypo_rMech = NA, hypo_corr = NA, rank = NA)
-        
+        reg_type = NA, ncond = 20, spearman = NA, optimal = NA, support = NA)
+GS_regulation_support <- rbind(GS_regulation_support, append_GS)
+
+append_GS <- data.frame(reaction_name = 'glucose 6-phosphate dehydrogenase', reaction = 'r_0466', regulator = c("phosphoenolpyruvate", "AMP"),
+        tID = c("t_0617", "t_0234"), type = 'inhibitor', reference = NA, modtype = 'inh', is_sig = F, rMech = "r_0466-rm-pairwise-t_0617-inh-uncomp+t_0234-inh-uncomp",
+        reg_type = NA, ncond = 25, spearman = NA, optimal = NA, support = NA)
 GS_regulation_support <- rbind(GS_regulation_support, append_GS)
 
 
@@ -713,7 +707,6 @@ reg_groups <- group_regulation(rMech_support, rxnList_form, GS_regulation_suppor
 
 #### Look at well fit reactions ####
 
-#adequate_fit_optimal_rxn_form <- optimal_reaction_form$rMech[optimal_reaction_form$spearman > 0.6]
 adequate_fit_optimal_rxn_form <- optimal_reaction_form$rMech[optimal_reaction_form$pearson > 0.6]
   
 adequate_rxn_form_data <- optimal_reaction_form %>%
@@ -770,27 +763,6 @@ addRMM <- reactionInfo %>% filter(modelType == "rMM" & reaction %in% allReg) %>%
 all_rxn_fits <- rbind(bestModel, addedReg, addRMM)
 all_rxn_fits <- all_rxn_fits %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, pearson = parPearson), by = "rMech")
 
-select_pearson_MMandReg <- all_rxn_fits %>% mutate(modelType = factor(modelType, levels = c("rMM", "regulator", "cooperativity", "2+ regulators"))) %>% 
-  group_by(reaction) %>% mutate(max_pearson = max(pearson)) %>% ungroup() %>% arrange(max_pearson, modelType) %>%
-  mutate(pearson = ifelse(pearson < 0, 0, pearson))
-
-select_pearson_MMandReg <- select_pearson_MMandReg %>% mutate(rMech = factor(rMech, levels = select_pearson_MMandReg$rMech))
-
-barplot_theme_nox <- theme(text = element_text(size = 25), title = element_text(size = 25), 
-                       panel.background = element_rect(fill = "gray92"), legend.position = "top", 
-                       axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black", size = 1),
-                       axis.text = element_text(color = "black"), axis.text.x = element_blank(),
-                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
-                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
-                       )
-
-ggplot(select_pearson_MMandReg, aes(x = rMech, y = pearson, fill = modelType)) + geom_bar(stat = "identity", color = "BLACK", width = 0.85) +
-  barplot_theme_nox + scale_y_continuous(name = "Pearson correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
-  scale_x_discrete(name = "Reactions", expand = c(0,0)) + scale_fill_manual("", values = c("skyblue2", "orangered1", "green", "yellow"), breaks = c("rMM", "regulator", "cooperativity", "2+ regulators"),
-                                                                            label = c("generalized Michaelis-Menten", "+ metabolite regulator", "with cooperativity", "+ second regulator")) +
-  ggtitle('Correlation between measured and predicted flux') + expand_limits(y = c(0,1))
-ggsave("Figures/MM_with_reg_pearson.pdf", height = 8, width = 12)
-
 # Replot using a stacked barplot
 
 regulation_cum_improvement <- all_rxn_fits %>% dplyr::select(-rMech) %>% spread(modelType, pearson) %>% 
@@ -824,80 +796,6 @@ ggplot(regulation_cum_improvement, aes(x = reaction, y = pearson, fill = modelTy
                     label = c("generalized Michaelis-Menten", "+ metabolite regulator", "with cooperativity", "+ second regulator"))
 ggsave("Figures/Pearson_stack.pdf", height = 9, width = 14)
 
-# Same plot using R-squared
-
-regulation_cum_improvement <- all_rxn_fits %>% dplyr::select(-rMech) %>%
-  mutate(pearson = ifelse(pearson < 0, 0, pearson),
-         Rsquared = pearson^2) %>% select(-pearson) %>%
-  spread(modelType, Rsquared) %>% 
-  mutate(regulator = ifelse(regulator < rMM, rMM, regulator)) %>%
-  mutate(cooperativity = ifelse(cooperativity < regulator, regulator, cooperativity)) %>%
-  mutate(`2+ regulators` = ifelse(`2+ regulators` < regulator, regulator, `2+ regulators`)) %>%
-  mutate(cum_regulator = regulator - rMM,
-         cum_cooperativity = cooperativity - regulator,
-         `cum_2+ regulators` = `2+ regulators` - regulator)
-
-regulation_cum_improvement <- regulation_cum_improvement %>% gather(modelType, Rsquared, -reaction) %>% filter(!is.na(Rsquared)) %>%
-  filter(modelType %in% c("rMM", "cum_regulator", "cum_cooperativity", "cum_2+ regulators")) %>% mutate(modelType = factor(modelType, levels = c("rMM", "cum_regulator", "cum_cooperativity", "cum_2+ regulators"))) %>%
-  left_join(fitReactionNames %>% dplyr::select(reaction, abbrev), by = "reaction")
-
-# filter reactions that are never positively correlated
-no_pos <- regulation_cum_improvement %>% group_by(reaction) %>% dplyr::summarize(no_pos = n() == sum(Rsquared <= 0))
-regulation_cum_improvement <- regulation_cum_improvement %>% filter(!(reaction %in% no_pos$reaction[no_pos$no_pos]))
-
-rMM_order <- regulation_cum_improvement %>% filter(modelType == "rMM") %>% arrange(Rsquared)
-
-regulation_cum_improvement <- regulation_cum_improvement %>% mutate(reaction = factor(reaction, levels = rMM_order$reaction))
-
-barplot_theme_withx <- barplot_theme_nox + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 16))
-
-ggplot(regulation_cum_improvement, aes(x = reaction, y = Rsquared, fill = modelType)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
-  ggtitle('R-squared between measured and predicted flux') +
-  barplot_theme_withx + scale_y_continuous(name = "Squared pearson correlation", expand = c(0,0), breaks = c(0,0.2,0.4, 0.6, 0.8,1), limits = c(0,1)) +
-  scale_x_discrete(name = "Reactions", expand = c(0,0), breaks = regulation_cum_improvement$reaction, labels = regulation_cum_improvement$abbrev) +
-  scale_fill_manual("", values = c("skyblue2", "gold1", "mediumorchid2", "orangered1"), breaks = c("rMM", "cum_regulator", "cum_cooperativity", "cum_2+ regulators"),
-                    label = c("generalized Michaelis-Menten", "+ metabolite regulator", "with cooperativity", "+ second regulator"))
-ggsave("Figures/squaredPearson_stack.pdf", height = 9, width = 14)
-
-
-
-
-#### Comparison of reversible michaelis-menten and irreversible kinetics #####
-
-spearman_reversibility <- reactionInfo %>% filter(modelType %in% c("rMM", "irreversible")) %>% group_by(reaction) %>%
-  filter(ncond == min(ncond)) %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, spearman = parSpearman), by = "rMech") %>%
-  dplyr::select(reaction, modelType, spearman, Qvalue) %>% filter(!is.na(spearman))
-
-spearman_reversibility <- spearman_reversibility %>% group_by(reaction, modelType) %>% filter(spearman == max(spearman)) %>%
-  group_by(reaction) %>% dplyr::mutate(maxSpear = max(spearman)) %>% ungroup() %>% dplyr::arrange(maxSpear) %>%
-  dplyr::mutate(reaction = factor(reaction, levels = unique(reaction))) %>%
-  dplyr::filter(maxSpear >= 0)
-
-spearman_reversibility <- spearman_reversibility %>% group_by(reaction) %>% mutate(revMax = ifelse(modelType[spearman == maxSpear][1] == "rMM", T, F))
-  
-# Determine improvement due to reversibility
-rev_improvement <- spearman_reversibility %>% dplyr::filter(modelType == "irreversible") %>% rowwise() %>% dplyr::mutate(spearDiff = maxSpear - max(c(0, spearman))) %>% 
-  dplyr::filter(spearDiff != 0) %>% dplyr::select(reaction, modelType, spearman, spearDiff)
-rev_fits <- spearman_reversibility %>% dplyr::filter(modelType == "rMM") %>% dplyr::select(reaction, modelType, spearman)
-
-stacked_spearman_rev <- rbind(
-  rev_improvement %>% dplyr::select(-spearDiff), # lower correlation due to irreversibility
-  rev_fits %>% dplyr::filter(reaction %in% rev_improvement$reaction) %>% dplyr::mutate(spearman = rev_improvement$spearDiff[rev_improvement$reaction == reaction]), # improved correlation due to reversibility
-  rev_fits %>% dplyr::filter(!(reaction %in% rev_improvement$reaction)) %>% dplyr::mutate(modelType = "irreversible") # rev == irrev
-)
-
-stacked_spearman_rev <- stacked_spearman_rev %>% dplyr::filter(spearman >= 0)%>% dplyr::group_by(reaction) %>% dplyr::mutate(maxSpear = sum(spearman)) %>% 
-  ungroup() %>% dplyr::arrange(maxSpear) %>%
-  mutate(reaction = as.character(reaction)) %>% mutate(reaction = factor(reaction, levels = unique(reaction)))
-stacked_spearman_rev$reaction = factor(stacked_spearman_rev$reaction, levels = unique(stacked_spearman_rev$reaction))
-
-ggplot(stacked_spearman_rev, aes(x = reaction, y = spearman, fill = modelType)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
-  ggtitle('Correlation between measured and predicted flux') +
-  barplot_theme_withx + scale_y_continuous(name = "Spearman correlation", expand = c(0,0), breaks = c(0,0.25,0.5,0.75,1), limits = c(0,1)) +
-  scale_x_discrete(name = "Reactions", expand = c(0,0), breaks = fitReactionNames$reaction, labels = fitReactionNames$abbrev) +
-  scale_fill_manual("", values = c("rMM" = "skyblue2", "irreversible" = "moccasin"), label = c("Irreversible Michaelis-Menten", "+ Reversibility"))
-
-ggsave("Figures/spearman_stack_rev.pdf", height = 9, width = 14)
 
 ##### Replotting a few reactions for figures #####
 
@@ -905,30 +803,34 @@ if("param_set_list" %in% ls()){
 allostery_affinity()  
 }
 
+
 #### Split ML of well-fit reactions into enzyme and allosteric control ####
 
-ML_rxn_summary <- MLdata
+ML_rxn_summary <- MLdata %>%
+  filter(measure == "weighted_sensitivities",
+         conditions == "Natural") %>%
+  left_join(reactionInfo %>% select(rMech, reaction), by = "rMech")
 ML_rxn_summary$Type[grepl("r_0302", ML_rxn_summary$reaction) & ML_rxn_summary$specie == "isocitrate"] <- "product" # aconitase is split into two reactions without a meaasured cis-aconitate so isocitrate acts like a product in the first rxn
 
 # all reactions
 # either "all" or "supported"
-#rxn_subset <- "supported"
-rxn_subset <- "all"
+rxn_subset <- "supported"
 
 if(rxn_subset == "all"){
   
   adequate_fit_optimal_rxn_form[substr(adequate_fit_optimal_rxn_form, 1, 6) == "r_0962"] <- "r_0962-rm-pairwise-t_0276-inh-noncomp+t_0290-act-mm"
-  ML_rxn_summary <- ML_rxn_summary %>% filter(conditions == "NATURAL") %>% filter(reaction %in% adequate_fit_optimal_rxn_form)
+  ML_rxn_summary <- ML_rxn_summary %>% filter(rMech %in% adequate_fit_optimal_rxn_form)
   adequate_rxn_form_data <- rMech_support %>% filter(rMech %in% adequate_fit_optimal_rxn_form) %>% left_join(fitReactionNames, by = "reaction")
   
 }else if(rxn_subset == "supported"){
   
   # verified regulation + significant rMM
   adequate_fit_optimal_rxn_form <- read.table("companionFiles/supported_rMechs.txt", header = T)$rMech
-  if(!all(adequate_fit_optimal_rxn_form %in% ML_rxn_summary$reaction)){
+  if(!all(adequate_fit_optimal_rxn_form %in% ML_rxn_summary$rMech)){
     stop("some rMechs in supported_rMechs.txt are not defined")
   }
-  ML_rxn_summary <- ML_rxn_summary %>% filter(conditions == "NATURAL") %>% filter(reaction %in% adequate_fit_optimal_rxn_form)
+  ML_rxn_summary <- ML_rxn_summary %>%
+    filter(rMech %in% adequate_fit_optimal_rxn_form)
   adequate_rxn_form_data <- rMech_support %>% filter(rMech %in% adequate_fit_optimal_rxn_form) %>% left_join(fitReactionNames, by = "reaction")
   
 }else{
@@ -948,14 +850,20 @@ ML_rxn_summary <- rbind(
 )
 
 # Use metabolic leverage associated with parameter MLE
-ML_rxn_summary <- ML_rxn_summary %>% mutate(Type = ifelse(Type %in% c("substrate", "product", "enzyme"), Type, "regulator")) %>%
-  dplyr::select(rMech = reaction, specie, Type, condition, ML = MLE) %>% group_by(rMech, Type, condition) %>%
-  dplyr::summarize(ML = sum(ML)) %>% group_by(rMech, Type) %>% dplyr::summarize(ML = median(ML)) %>%
+ML_rxn_summary <- ML_rxn_summary %>%
+  mutate(Type = ifelse(Type %in% c("substrate", "product", "enzyme"), Type, "regulator")) %>%
+  dplyr::select(rMech, specie, Type, ML = MAP) %>%
+  group_by(rMech, Type) %>%
+  dplyr::summarize(ML = sum(ML)) %>%
   group_by(rMech) %>% dplyr::mutate(ML = ML / sum(ML))
 
 reaction_info_with_reversibility <- adequate_rxn_form_data %>% dplyr::select(reaction, rMech, reaction.name, genes) %>%
   left_join(fitReactionNames %>% dplyr::select(reaction, abbrev), by = "reaction") %>%
-  left_join(reversibleRx %>% mutate(reversibility = ifelse(modelBound == "reversible", T, F)) %>%
+  left_join(reversibleRx %>%
+              mutate(reversibility = ifelse(modelBound == "reversible", T, F),
+              thermo_irr = ifelse(CCdG + 1.96*CCdGsd < -5, T, F),
+              reversibility = ifelse(reversibility == TRUE, "Kinetically Reversible", "Kinetically Irreversible"),
+              reversibility = ifelse(reversibility == "Kinetically Irreversible" & thermo_irr == T, "Thermodynamically Irreversible", reversibility)) %>%
               dplyr::select(reaction = rx, reversibility), by = "reaction")
 
 ML_rxn_tall <- ML_rxn_summary %>% left_join(reaction_info_with_reversibility, by = "rMech") %>%
@@ -966,18 +874,9 @@ ML_rxn_summary <- tbl_df(dcast(ML_rxn_summary, rMech ~ Type, value.var = "ML", f
 ML_rxn_summary <- ML_rxn_summary %>% left_join(reaction_info_with_reversibility, by = "rMech") %>%
   arrange(substrate + product)
 
-ML_rxn_tall <- ML_rxn_tall %>% ungroup() %>% 
-  mutate(rMech = factor(rMech, levels = rev(ML_rxn_summary$rMech))) %>% arrange(rMech)
-
-ML_rxn_tall <- ML_rxn_tall %>% mutate(reversibility = ifelse(reversibility == TRUE, "Kinetically Reversible", "Kinetically Irreversible"))
-                                      
-# further annotate reversibility based on thermodynamics
-thermo_irr <- reversibleRx %>% dplyr::select(reaction = rx, cc_dGr = CCdG, cc_dGrSD = CCdGsd) %>%
-  mutate(thermo_irr = ifelse(cc_dGr + 1.96*cc_dGrSD < -5, T, F)) %>% select(reaction, thermo_irr)
-
-ML_rxn_tall <- ML_rxn_tall %>% left_join(thermo_irr, by = "reaction") %>%
-  mutate(reversibility = ifelse(reversibility == "Kinetically Irreversible" & thermo_irr == T, "Thermodynamically Irreversible", reversibility)) %>%
-  mutate(reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible", "Thermodynamically Irreversible")))
+ML_rxn_tall <- ML_rxn_tall %>%
+  ungroup %>% mutate(rMech = factor(rMech, levels = rev(ML_rxn_summary$rMech))) %>%
+  arrange(rMech)
 
 TypeColors <- c("chartreuse3", "chartreuse", "deepskyblue", "orangered1")
   names(TypeColors) <- levels(ML_rxn_tall$Type)
@@ -991,7 +890,7 @@ barplot_facet_theme <- theme(text = element_text(size = 20, face = "plain"), tit
                        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
 )
 
-ggplot(ML_rxn_tall, aes(x = rMech, y = ML, fill = Type, order = Type)) + geom_bar(stat = "identity", width = 0.85, color = "BLACK") +
+ggplot(ML_rxn_tall %>% arrange(Type), aes(x = rMech, y = ML, fill = Type)) + geom_bar(stat = "identity", width = 0.85, color = "BLACK") +
   barplot_facet_theme + scale_y_continuous(expression('Metabolic Leverage: ' ~ frac("|"~epsilon[i]~"|"~sigma[i], sum("|"~epsilon[j]~"|"~sigma[j], "j = 1" , n))), expand = c(0,0)) +
   scale_fill_manual(values = TypeColors) + facet_grid(~ reversibility, scales = "free_x", space = "free_x") +
   scale_x_discrete("Reactions", breaks = ML_rxn_tall$rMech, labels = ML_rxn_tall$abbrev)
@@ -1020,7 +919,6 @@ color_index <- mapply(function(x,y){
   which.min(abs(color_key$Table$enzyme - x) + abs(color_key$Table$allostery - y))
 }, x = ML_rxn_summary$enzyme, y = ML_rxn_summary$regulator)
 
-#ML_rxn_summary <- ML_rxn_summary %>% mutate(rMech = reaction) %>% dplyr::select(-rID, -reaction, -genes) %>% left_join(adequate_rxn_form_data, by = "rMech")
 ML_rxn_summary <- ML_rxn_summary %>% mutate(rMech = reaction) %>% dplyr::select(-reaction, -genes) %>% left_join(adequate_rxn_form_data, by = "rMech")
 
 
@@ -1038,7 +936,7 @@ ML_rxn_ternaryPoints_1 <- ML_rxn_summary_1 %>%  mutate(x = (1/2)*(2*regulator + 
 
 ML_rxn_ternaryPoints_1 <- ML_rxn_ternaryPoints_1 %>% left_join(ML_rxn_tall %>% select(reaction, Dir = reversibility) %>% unique(), by = c("rMech" = "reaction"))
 
-summary(lm(ML_rxn_summary_1, formula = rxn_metabolite ~ reversibility))
+anova(lm(ML_rxn_summary_1, formula = regulator ~ reversibility))
 
 color_key$Figure_BW + 
   geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(Dir == "Kinetically Reversible"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
@@ -1056,26 +954,16 @@ color_key$Figure_BW +
 ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey_thermIrrev.pdf"), height = 9.1, width = 10.7)
 
 
-# Irreversible
-#color_key$Figure_BW + 
-#  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == FALSE), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
-#  geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(reversibility == FALSE), aes(x = x, y = y, fill = color), size = 8, shape = 21)
-#  ggsave("Figures/MLcolorKey_FOR.pdf", height = 9.1, width = 10.7)
-
 ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints_1 %>% filter(regulator != 0)
 
 color_key$Figure_Color + 
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE") +
-  geom_text(data = ML_rxn_ternaryPoints_labels, aes(x = x + 0.05, y = y + 0.05, label = abbrev.x), color = "WHITE")
+  ggrepel::geom_label_repel(data = ML_rxn_ternaryPoints_labels, aes(x = x, y = y, label = abbrev.x), color = "BLACK", segment.size = 0)
 ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey.pdf"), height = 9.1, width = 10.7)
 
-control_layout <- ML_rxn_summary_1 %>% dplyr::select(reaction, reaction.name, abbrev, rxn_metabolite, enzyme, regulator, color)
-
-write.table(control_layout, "flux_cache/control_layout.tsv", col.names = T, row.names = F, quote = F, sep = "\t")
-
-
-
+#control_layout <- ML_rxn_summary_1 %>% dplyr::select(reaction, reaction.name, abbrev, rxn_metabolite, enzyme, regulator, color)
+#write.table(control_layout, "flux_cache/control_layout.tsv", col.names = T, row.names = F, quote = F, sep = "\t")
 
 ######### Compare Km values found through optimization to those from literature ################
 
