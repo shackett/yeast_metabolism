@@ -2417,6 +2417,7 @@ reactionProperties <-  function(){
   met_abund <- run_rxn$rxnSummary$rxnMet
   met_abund[is.na(met_abund)] <- 0
   enzyme_abund <- run_rxn$enzymes
+  spec_log_sd <- run_rxn$specSD
   
   mle_pars <- par_markov_chain[which.max(par_likelihood$likelihood),]
   
@@ -2573,18 +2574,32 @@ reactionProperties <-  function(){
   all_exp_species <- all_exp_species %>% mutate(conditions = "ALL") %>%
     bind_rows(all_exp_species %>% filter(grepl('^[PCN]', condition)) %>% mutate(conditions = "Natural"))
   
+  # calculate the technical variation of species in linear space
+  exp_spec_techVar <- all_exp_species %>% left_join(gather(as.data.frame(spec_log_sd, drop = F) %>%
+                                         mutate(condition = rownames(.)), key = specie, value = log2_sd, -condition),
+                                by = c("specie", "condition")) %>%
+    group_by(specie, conditions) %>%
+    summarize(technical_linear_var = (2^mean(log2_conc)*log(2))^2 * mean(log2_sd^2))
+  
   species_var <- all_exp_species %>%
     mutate(conc = 2^log2_conc) %>%
     group_by(specie, conditions) %>%
-    summarize(linear_var = var(conc), log_sd = sd(log2_conc))
-  
+    summarize(linear_var = var(conc), log_sd = sd(log2_conc)) %>%
+    # subtract technical variance from total variance to yield environmental variance
+    left_join(exp_spec_techVar, by = c("specie", "conditions")) %>%
+    mutate(technical_linear_var = ifelse(is.na(technical_linear_var), 0, technical_linear_var),
+           environmental_linear_var = linear_var - technical_linear_var,
+           environmental_linear_var = ifelse(environmental_linear_var < 0, 0, environmental_linear_var))
+
   # two approaches
   # weighting elasticity by variation in log space (abs(elasticity) * sd(spec))
   # weighted sensitivies by physiological variability of species in linear spaace (sensitivity^2 * Var(spec))
+  # also consider using environmental variation of species (subtracting technical variance) and weighting sensitivities
   ws_melt <- mcmc_sensitivities %>% left_join(species_var, by = "specie") %>%
     group_by(specie, conditions, markovSample) %>%
     summarize(weighted_elasticities = median(abs(Elasticity)) * log_sd[1],
-      weighted_sensitivities = mean(Sensitivity)^2 * linear_var[1]) %>%
+      weighted_sensitivities = mean(Sensitivity)^2 * linear_var[1],
+      weighted_sensitivities_technical_correction = mean(Sensitivity)^2 * technical_linear_var[1]) %>%
     gather(key = "measure", value = "metabolicLeverage", -c(specie:markovSample))
     
   ws_melt <- ws_melt %>% 
