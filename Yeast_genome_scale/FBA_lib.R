@@ -2566,6 +2566,8 @@ reactionProperties <-  function(){
   
   ### Metabolic leverage: summarizing species concentrations and their variability
   
+  # Summarize the abundances of all species 
+  
   all_exp_species <- data.frame(enzyme_abund,
                                 measured_mets[, colnames(measured_mets) %in% run_rxn$kineticPars$rel_spec[!is.na(run_rxn$kineticPars$measured) & run_rxn$kineticPars$measured], drop = F]) %>%
     mutate(condition = rownames(.)) %>%
@@ -2574,6 +2576,16 @@ reactionProperties <-  function(){
   all_exp_species <- all_exp_species %>% mutate(conditions = "ALL") %>%
     bind_rows(all_exp_species %>% filter(grepl('^[PCN]', condition)) %>% mutate(conditions = "Natural"))
   
+  # Generate point summaries of central tendencies
+  species_var <- all_exp_species %>%
+    mutate(conc = 2^log2_conc) %>%
+    group_by(specie, conditions) %>%
+    summarize(arith_mean_conc = mean(conc),
+              geo_mean_conc = 2^mean(log2_conc),
+              log_sd = sd(log2_conc),
+              arith_var = var(conc),
+              geo_var = (geo_mean_conc * log(2))^2 * var(log2_conc))
+  
   # calculate the technical variation of species in linear space
   exp_spec_techVar <- all_exp_species %>% left_join(gather(as.data.frame(spec_log_sd, drop = F) %>%
                                          mutate(condition = rownames(.)), key = specie, value = log2_sd, -condition),
@@ -2581,49 +2593,115 @@ reactionProperties <-  function(){
     group_by(specie, conditions) %>%
     summarize(technical_linear_var = (2^mean(log2_conc)*log(2))^2 * mean(log2_sd^2))
   
-  species_var <- all_exp_species %>%
-    mutate(conc = 2^log2_conc) %>%
-    group_by(specie, conditions) %>%
-    summarize(linear_var = var(conc), log_sd = sd(log2_conc)) %>%
-    # subtract technical variance from total variance to yield environmental variance
+  species_var <- species_var %>%
     left_join(exp_spec_techVar, by = c("specie", "conditions")) %>%
     mutate(technical_linear_var = ifelse(is.na(technical_linear_var), 0, technical_linear_var),
-           environmental_linear_var = linear_var - technical_linear_var,
-           environmental_linear_var = ifelse(environmental_linear_var < 0, 0, environmental_linear_var))
-
-  # two approaches
-  # weighting elasticity by variation in log space (abs(elasticity) * sd(spec))
-  # weighted sensitivies by physiological variability of species in linear spaace (sensitivity^2 * Var(spec))
-  # also consider using environmental variation of species (subtracting technical variance) and weighting sensitivities
-  ws_melt <- mcmc_sensitivities %>% left_join(species_var, by = "specie") %>%
-    group_by(specie, conditions, markovSample) %>%
-    summarize(weighted_elasticities = median(abs(Elasticity)) * log_sd[1],
-      weighted_sensitivities = mean(Sensitivity)^2 * linear_var[1],
-      weighted_sensitivities_technical_correction = mean(Sensitivity)^2 * environmental_linear_var[1]) %>%
-    gather(key = "measure", value = "metabolicLeverage", -c(specie:markovSample))
+           arith_environmental_var = arith_var - technical_linear_var,
+           arith_environmental_var = ifelse(arith_environmental_var < 0, 0, arith_environmental_var),
+           geo_environmental_var = geo_var - technical_linear_var,
+           geo_environmental_var = ifelse(geo_environmental_var < 0, 0, geo_environmental_var))
+  
+  ## summarize responsiveness: sensitivity and elasticity of reaction equation
+  
+  # reform MAP estimate of parameters (i.e. find linear parameters based on non-linear parameters and concentrations
+  
+  pars <- dist_pars[which.max(par_likelihood$likelihood),]
+  dist_par_stack <- rep(1, n_c) %*% t(2^(pars))
+  
+  occupancy_vals <- data.frame(met_abund, dist_par_stack)
+  
+  #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+  #occupany of enzymes * relative abundance of enzymes
+  
+  if(!(kinetically_differing_isoenzymes)){
+    predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+    enzyme_activity <- (predOcc %*% t(rep(1, ncol(enzyme_abund))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+  }else{
+    occEqtn_complex_match <- data.frame(complex = colnames(enzyme_abund), occEqtn = NA)
+    occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
+    occEqtn_complex_match$occEqtn[is.na(occEqtn_complex_match$occEqtn)] <- "other"
     
-  ws_melt <- ws_melt %>% 
-    group_by(conditions, measure, markovSample) %>%
+    enzyme_activity <- NULL
+    for(isoenzyme in names(run_rxn$occupancyEq[["l_occupancyExpression"]])){
+      predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]][[isoenzyme]], occupancy_vals)
+      enzyme_activity <- cbind(enzyme_activity, predOcc %*% t(rep(1, sum(occEqtn_complex_match$occEqtn == isoenzyme)))*2^enzyme_abund[,colnames(enzyme_abund) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]])
+    }
+  }
+  
+  # Calculate Vmax as during standard fitting
+  
+  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
+  
+  ## Find sensitivity and elasticity of mean parameter sets
+  
+  species_var_sensitivity_data <- species_var %>%
+    select(specie, conditions, arith_mean_conc, geo_mean_conc) %>%
+    gather(key = "mean_method", value = "mean", -specie, -conditions) %>%
+    spread(key = "specie", value = "mean")
+  
+  dist_par_stack <- rep(1, nrow(species_var_sensitivity_data)) %*% t(2^(pars))
+  nnlsCoef <- t(t(rep(1, nrow(species_var_sensitivity_data))))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+  
+  missing_mets <- setdiff(colnames(met_abund), species_var$specie)
+  if(length(missing_mets) != 0){
+    met_filler <- t(t(rep(1, nrow(species_var_sensitivity_data)))) %*% rep(1,length(missing_mets)); colnames(met_filler) <- missing_mets
+    all_components <- cbind(species_var_sensitivity_data, dist_par_stack, nnlsCoef, met_filler) 
+    
+  }else{
+    all_components <- cbind(species_var_sensitivity_data, dist_par_stack, nnlsCoef) 
+  }
+  
+  comp_partials <- matrix(NA, nrow = nrow(species_var_sensitivity_data), ncol = length(names(elast_partials)))
+  colnames(comp_partials) <- names(elast_partials)
+    
+  for(j in 1:ncol(comp_partials)){
+    comp_partials[,j] <- with(all_components, eval(elast_partials[[j]]))
+  }
+  
+  # form reaction equation using MAP estimates and calculate sensitivity and elasticity at each mean
+  
+  # we want sensitivity at a mean concentrations for one measure
+  sensitivity_summary <- cbind(species_var_sensitivity_data %>% select(conditions, mean_method), comp_partials) %>%
+    mutate(sensitivity_method = ifelse(mean_method == "arith_mean_conc", "arith_sensitivity", "geo_sensitivity")) %>%
+    select(-mean_method) %>%
+    gather(key = "specie", value = "sensitivity", -conditions, -sensitivity_method) %>%
+    spread(key = "sensitivity_method", value = "sensitivity")
+  
+  # pull out MAP elasticity
+  
+  MAP_elasticities <- mcmc_sensitivities %>%
+    filter(markovSample == which.max(par_likelihood$likelihood))
+  
+  MAP_elasticities <- MAP_elasticities %>% mutate(conditions = "ALL") %>%
+    bind_rows(MAP_elasticities %>% filter(grepl('^[PCN]', condition)) %>% mutate(conditions = "Natural"))
+  
+  MAP_elasticities <- MAP_elasticities %>%
+    group_by(specie, conditions) %>%
+    summarize(median_elasticity = median(abs(Elasticity)))
+  
+  species_var <- species_var %>%
+    left_join(sensitivity_summary, by = c("conditions", "specie")) %>%
+    left_join(MAP_elasticities, by = c("conditions", "specie"))
+  
+  # three alternative approaches
+  # 1) weighting elasticity by variation in log space (abs(elasticity) * sd(spec))
+  # 2) weighted sensitivies by physiological variability of species in linear spaace (sensitivity^2 * Var(spec))
+  # 3) also consider using environmental variation of species (subtracting technical variance) and weighting sensitivities
+  
+  ML_summary <- species_var %>%
+    group_by(specie, conditions) %>%
+    summarize(weighted_elasticities = median_elasticity * log_sd,
+              weighted_sensitivities_geo = geo_sensitivity^2 * geo_var,
+              weighted_sensitivities_geo_technical_correction = geo_sensitivity^2 * geo_environmental_var,
+              weighted_sensitivities_arith = arith_sensitivity^2 * arith_var,
+              weighted_sensitivities_arith_technical_correction = arith_sensitivity^2 * arith_environmental_var) %>%
+    gather(key = "measure", value = "metabolicLeverage", -c(specie, conditions))
+  
+  ML_summary <- ML_summary %>%
+    group_by(conditions, measure) %>%
     mutate(metabolicLeverage = metabolicLeverage / sum(metabolicLeverage)) %>%
     ungroup %>%
     filter(metabolicLeverage != 0)
-  
-  # leverage implied by the most likely parameter set
-  ML_MAP <- ws_melt %>%
-    filter(markovSample == which.max(par_likelihood$likelihood)) %>%
-    ungroup() %>%
-    dplyr::select(specie, conditions, measure, MAP = metabolicLeverage)
-  
-  # distribution of leverage over posterior credibility interval
-  ML_summary <- ws_melt %>%
-    group_by(specie, conditions, measure) %>%
-    dplyr::summarize("0.025" = quantile(metabolicLeverage, probs = 0.025),
-                     "0.5" = quantile(metabolicLeverage, probs = 0.5),
-                     "0.975" = quantile(metabolicLeverage, probs = 0.975)) %>% ungroup()
-  
-  ML_summary <- ML_summary %>%
-    left_join(ML_MAP, by = c("specie", "conditions", "measure")) %>%
-    mutate(MAP = ifelse(is.na(MAP), 0, MAP))
   
   # annotate the type of reaction species
   
