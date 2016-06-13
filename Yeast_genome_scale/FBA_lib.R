@@ -2599,7 +2599,7 @@ reactionProperties <-  function(){
     group_by(specie, conditions, markovSample) %>%
     summarize(weighted_elasticities = median(abs(Elasticity)) * log_sd[1],
       weighted_sensitivities = mean(Sensitivity)^2 * linear_var[1],
-      weighted_sensitivities_technical_correction = mean(Sensitivity)^2 * technical_linear_var[1]) %>%
+      weighted_sensitivities_technical_correction = mean(Sensitivity)^2 * environmental_linear_var[1]) %>%
     gather(key = "measure", value = "metabolicLeverage", -c(specie:markovSample))
     
   ws_melt <- ws_melt %>% 

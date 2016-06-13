@@ -363,7 +363,7 @@ t_start = proc.time()[3]
 
 # flag a few reactions where additional plots are created
 custom_plotted_rxns <- c("r_1054-rm","r_0962-rm", "r_0962-rm-t_0290-act-mm",
-                         "r_0514-im-forward", "r_0514-rm", "r_0916-im-forward", "r_0916-rm", "r_0208-im-forward", "r_0208-rm",
+                         "r_0514-rm", "r_0916-rm", "r_0208-rm",
                          "r_0915-rm", "r_0915-rm-t_0234-inh-uncomp", # PRPP Amidotransferase
                          "r_0468-rm", "r_0468-rm-t_0495-inh-uncomp", # G5K
                          "r_0309-rm", "r_0309-rm-t_0652-act-mm", #CBS
@@ -373,9 +373,7 @@ custom_plotted_rxns <- c("r_1054-rm","r_0962-rm", "r_0962-rm-t_0290-act-mm",
                          "r_0816-rm_rmCond", "r_0816-rm-t_0461-inh-uncomp_rmCond","r_0816-rm", "r_0816-rm-t_0461-inh-uncomp"# Ala -| OTCase
                          ) 
 
-#custom_plotted_rxns <- c(custom_plotted_rxns, reactionInfo$rMech[reactionInfo$modification %in% c("", "rmCond")])
 custom_plotted_rxns <- unique(custom_plotted_rxns)
-
 if(!(all(custom_plotted_rxns %in% reactionInfo$rMech))){stop("Some reaction mechanisms that you want to plot were not located")}
 
 #for(arxn in custom_plotted_rxns){
@@ -786,6 +784,13 @@ rMM_order <- regulation_cum_improvement %>% filter(modelType == "rMM") %>% arran
 
 regulation_cum_improvement <- regulation_cum_improvement %>% mutate(reaction = factor(reaction, levels = rMM_order$reaction))
 
+barplot_theme_nox <- theme(text = element_text(size = 25), title = element_text(size = 25), 
+                       panel.background = element_rect(fill = "gray92"), legend.position = "top", 
+                       axis.ticks.x = element_blank(), axis.ticks.y = element_line(color = "black", size = 1),
+                       axis.text = element_text(color = "black"), axis.text.x = element_blank(),
+                       panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), panel.grid.major.y = element_line(size = 1),
+                       axis.line = element_line(color = "black", size = 1), legend.title=element_blank()
+                       )
 barplot_theme_withx <- barplot_theme_nox + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 16))
 
 ggplot(regulation_cum_improvement, aes(x = reaction, y = pearson, fill = modelType)) + geom_bar(stat = "identity", color = "black", width = 0.8) +
@@ -799,9 +804,9 @@ ggsave("Figures/Pearson_stack.pdf", height = 9, width = 14)
 
 ##### Replotting a few reactions for figures #####
 
-if("param_set_list" %in% ls()){
-allostery_affinity()  
-}
+#if("param_set_list" %in% ls()){
+#allostery_affinity()  
+#}
 
 
 #### Split ML of well-fit reactions into enzyme and allosteric control ####
@@ -814,11 +819,11 @@ ML_rxn_summary$Type[grepl("r_0302", ML_rxn_summary$reaction) & ML_rxn_summary$sp
 
 # all reactions
 # either "all" or "supported"
-rxn_subset <- "supported"
+rxn_subset <- "all"
 
 if(rxn_subset == "all"){
   
-  adequate_fit_optimal_rxn_form[substr(adequate_fit_optimal_rxn_form, 1, 6) == "r_0962"] <- "r_0962-rm-pairwise-t_0276-inh-noncomp+t_0290-act-mm"
+  adequate_fit_optimal_rxn_form[substr(adequate_fit_optimal_rxn_form, 1, 6) == "r_0962"] <- "r_0962-rm-pairwise-t_0276-inh-uncomp+t_0290-act-mm"
   ML_rxn_summary <- ML_rxn_summary %>% filter(rMech %in% adequate_fit_optimal_rxn_form)
   adequate_rxn_form_data <- rMech_support %>% filter(rMech %in% adequate_fit_optimal_rxn_form) %>% left_join(fitReactionNames, by = "reaction")
   
@@ -905,7 +910,11 @@ pie_theme <- theme(text = element_text(size = 20, face = "plain"), title = eleme
 
 ML_component_summary <- ML_rxn_tall %>% group_by(reversibility, Type) %>% dplyr::summarize(ML = sum(ML)) %>% group_by(reversibility) %>% mutate(ML = ML/sum(ML))
 
-ggplot(ML_component_summary, aes(x = factor(1), y = ML, fill = Type)) + geom_bar(stat = "identity", width = 1) + coord_polar(theta = "y") +
+ggplot(ML_component_summary %>%
+         ungroup %>%
+         mutate(reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible", "Thermodynamically Irreversible"))) %>%
+         arrange(reversibility), 
+                                       aes(x = factor(1), y = ML, fill = Type)) + geom_bar(stat = "identity", width = 1) + coord_polar(theta = "y") +
   facet_wrap(~ reversibility) + scale_fill_manual(values = TypeColors) + pie_theme +
   scale_x_discrete("") + scale_y_continuous("")
 ggsave(paste0("Figures/", rxn_subset, "-metabolicLeveragePie.pdf"), height = 5, width = 7)
@@ -954,12 +963,12 @@ color_key$Figure_BW +
 ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey_thermIrrev.pdf"), height = 9.1, width = 10.7)
 
 
-ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints_1 %>% filter(regulator != 0)
+ML_rxn_ternaryPoints_labels <- ML_rxn_ternaryPoints_1 %>% filter(regulator != 0 | enzyme > 0.33)
 
 color_key$Figure_Color + 
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 7, shape = 21, fill = "BLACK") +
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE") +
-  ggrepel::geom_label_repel(data = ML_rxn_ternaryPoints_labels, aes(x = x, y = y, label = abbrev.x), color = "BLACK", segment.size = 0)
+  ggrepel::geom_label_repel(data = ML_rxn_ternaryPoints_labels, aes(x = x, y = y, label = abbrev.x), color = "BLACK", segment.size = 0, label.padding = unit(0.15, "lines"))
 ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey.pdf"), height = 9.1, width = 10.7)
 
 #control_layout <- ML_rxn_summary_1 %>% dplyr::select(reaction, reaction.name, abbrev, rxn_metabolite, enzyme, regulator, color)
