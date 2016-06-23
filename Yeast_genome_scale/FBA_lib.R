@@ -2580,7 +2580,7 @@ reactionProperties <-  function(){
   species_var <- all_exp_species %>%
     mutate(conc = 2^log2_conc) %>%
     group_by(specie, conditions) %>%
-    summarize(arith_mean_conc = mean(conc),
+    dplyr::summarize(arith_mean_conc = mean(conc),
               geo_mean_conc = 2^mean(log2_conc),
               log_sd = sd(log2_conc),
               arith_var = var(conc),
@@ -2591,7 +2591,7 @@ reactionProperties <-  function(){
                                          mutate(condition = rownames(.)), key = specie, value = log2_sd, -condition),
                                 by = c("specie", "condition")) %>%
     group_by(specie, conditions) %>%
-    summarize(technical_linear_var = (2^mean(log2_conc)*log(2))^2 * mean(log2_sd^2))
+    dplyr::summarize(technical_linear_var = (2^mean(log2_conc)*log(2))^2 * mean(log2_sd^2))
   
   species_var <- species_var %>%
     left_join(exp_spec_techVar, by = c("specie", "conditions")) %>%
@@ -2603,85 +2603,93 @@ reactionProperties <-  function(){
   
   ## summarize responsiveness: sensitivity and elasticity of reaction equation
   
-  # reform MAP estimate of parameters (i.e. find linear parameters based on non-linear parameters and concentrations
+  # calculate mean sensitivies for each markov sample estimate; using arithmetic and geometric means and considering all conditions and only natural conditions
   
-  pars <- dist_pars[which.max(par_likelihood$likelihood),]
-  dist_par_stack <- rep(1, n_c) %*% t(2^(pars))
-  
-  occupancy_vals <- data.frame(met_abund, dist_par_stack)
-  
-  #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-  #occupany of enzymes * relative abundance of enzymes
-  
-  if(!(kinetically_differing_isoenzymes)){
-    predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
-    enzyme_activity <- (predOcc %*% t(rep(1, ncol(enzyme_abund))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
-  }else{
-    occEqtn_complex_match <- data.frame(complex = colnames(enzyme_abund), occEqtn = NA)
-    occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
-    occEqtn_complex_match$occEqtn[is.na(occEqtn_complex_match$occEqtn)] <- "other"
+  markov_sensitivities <- parallel::mclapply(1:nrow(dist_pars), function(x){
     
-    enzyme_activity <- NULL
-    for(isoenzyme in names(run_rxn$occupancyEq[["l_occupancyExpression"]])){
-      predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]][[isoenzyme]], occupancy_vals)
-      enzyme_activity <- cbind(enzyme_activity, predOcc %*% t(rep(1, sum(occEqtn_complex_match$occEqtn == isoenzyme)))*2^enzyme_abund[,colnames(enzyme_abund) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]])
+    pars <- dist_pars[x,]
+    dist_par_stack <- rep(1, n_c) %*% t(2^(pars))
+    
+    occupancy_vals <- data.frame(met_abund, dist_par_stack)
+    
+    #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+    #occupany of enzymes * relative abundance of enzymes
+    
+    if(!(kinetically_differing_isoenzymes)){
+      predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]], occupancy_vals) #predict occupancy as a function of metabolites and kinetic constants based upon the occupancy equation
+      enzyme_activity <- (predOcc %*% t(rep(1, ncol(enzyme_abund))))*2^enzyme_abund #occupany of enzymes * relative abundance of enzymes
+    }else{
+      occEqtn_complex_match <- data.frame(complex = colnames(enzyme_abund), occEqtn = NA)
+      occEqtn_complex_match$occEqtn[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])] <- occEqtn_complex_match$complex[occEqtn_complex_match$complex %in% names(run_rxn$occupancyEq[["l_occupancyExpression"]])]
+      occEqtn_complex_match$occEqtn[is.na(occEqtn_complex_match$occEqtn)] <- "other"
+      
+      enzyme_activity <- NULL
+      for(isoenzyme in names(run_rxn$occupancyEq[["l_occupancyExpression"]])){
+        predOcc <- eval(run_rxn$occupancyEq[["l_occupancyExpression"]][[isoenzyme]], occupancy_vals)
+        enzyme_activity <- cbind(enzyme_activity, predOcc %*% t(rep(1, sum(occEqtn_complex_match$occEqtn == isoenzyme)))*2^enzyme_abund[,colnames(enzyme_abund) %in% occEqtn_complex_match$complex[occEqtn_complex_match$occEqtn == isoenzyme]])
+      }
     }
-  }
-  
-  # Calculate Vmax as during standard fitting
-  
-  flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
-  
-  ## Find sensitivity and elasticity of mean parameter sets
-  
-  species_var_sensitivity_data <- species_var %>%
-    select(specie, conditions, arith_mean_conc, geo_mean_conc) %>%
-    gather(key = "mean_method", value = "mean", -specie, -conditions) %>%
-    spread(key = "specie", value = "mean")
-  
-  dist_par_stack <- rep(1, nrow(species_var_sensitivity_data)) %*% t(2^(pars))
-  nnlsCoef <- t(t(rep(1, nrow(species_var_sensitivity_data))))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
-  
-  missing_mets <- setdiff(colnames(met_abund), species_var$specie)
-  if(length(missing_mets) != 0){
-    met_filler <- t(t(rep(1, nrow(species_var_sensitivity_data)))) %*% rep(1,length(missing_mets)); colnames(met_filler) <- missing_mets
-    all_components <- cbind(species_var_sensitivity_data, dist_par_stack, nnlsCoef, met_filler) 
     
-  }else{
-    all_components <- cbind(species_var_sensitivity_data, dist_par_stack, nnlsCoef) 
-  }
-  
-  comp_partials <- matrix(NA, nrow = nrow(species_var_sensitivity_data), ncol = length(names(elast_partials)))
-  colnames(comp_partials) <- names(elast_partials)
+    # Calculate Vmax as during standard fitting
     
-  for(j in 1:ncol(comp_partials)){
-    comp_partials[,j] <- with(all_components, eval(elast_partials[[j]]))
-  }
+    flux_fit <- nnls(enzyme_activity, (flux$FVAmax + flux$FVAmin)/2)
+    
+    ## Find sensitivity and elasticity of mean parameter sets
+    
+    species_var_sensitivity_data <- species_var %>%
+      select(specie, conditions, arith_mean_conc, geo_mean_conc) %>%
+      gather(key = "mean_method", value = "mean", -specie, -conditions) %>%
+      spread(key = "specie", value = "mean")
+    
+    dist_par_stack <- rep(1, nrow(species_var_sensitivity_data)) %*% t(2^(pars))
+    nnlsCoef <- t(t(rep(1, nrow(species_var_sensitivity_data))))  %*% flux_fit$x; colnames(nnlsCoef) <- run_rxn$all_species$formulaName[run_rxn$all_species$SpeciesType == "Enzyme"]
+    
+    missing_mets <- setdiff(colnames(met_abund), species_var$specie)
+    if(length(missing_mets) != 0){
+      met_filler <- t(t(rep(1, nrow(species_var_sensitivity_data)))) %*% rep(1,length(missing_mets)); colnames(met_filler) <- missing_mets
+      all_components <- cbind(species_var_sensitivity_data, dist_par_stack, nnlsCoef, met_filler) 
+      
+    }else{
+      all_components <- cbind(species_var_sensitivity_data, dist_par_stack, nnlsCoef) 
+    }
+    
+    comp_partials <- matrix(NA, nrow = nrow(species_var_sensitivity_data), ncol = length(names(elast_partials)))
+    colnames(comp_partials) <- names(elast_partials)
+    
+    for(j in 1:ncol(comp_partials)){
+      comp_partials[,j] <- with(all_components, eval(elast_partials[[j]]))
+    }
+    
+    cbind(markovSample = x, species_var_sensitivity_data %>% select(conditions, mean_method), comp_partials)
+    
+  }, mc.cores = 4) %>% bind_rows
   
   # form reaction equation using MAP estimates and calculate sensitivity and elasticity at each mean
   
   # we want sensitivity at a mean concentrations for one measure
-  sensitivity_summary <- cbind(species_var_sensitivity_data %>% select(conditions, mean_method), comp_partials) %>%
+  
+  mean_sensitivities <- markov_sensitivities %>%
     mutate(sensitivity_method = ifelse(mean_method == "arith_mean_conc", "arith_sensitivity", "geo_sensitivity")) %>%
     select(-mean_method) %>%
-    gather(key = "specie", value = "sensitivity", -conditions, -sensitivity_method) %>%
+    gather(key = "specie", value = "sensitivity", -markovSample, -conditions, -sensitivity_method) %>%
     spread(key = "sensitivity_method", value = "sensitivity")
   
-  # pull out MAP elasticity
+  # add the likelihood of each parameter set
   
-  MAP_elasticities <- mcmc_sensitivities %>%
-    filter(markovSample == which.max(par_likelihood$likelihood))
+  mean_sensitivities <- mean_sensitivities %>% left_join(
+    data.frame(logLik = par_likelihood$likelihood) %>% mutate(markovSample = 1:n()),
+    by = "markovSample")
   
-  MAP_elasticities <- MAP_elasticities %>% mutate(conditions = "ALL") %>%
-    bind_rows(MAP_elasticities %>% filter(grepl('^[PCN]', condition)) %>% mutate(conditions = "Natural"))
+  # pull out elasticities from ELdata so that we can take the median of subsets of the data
   
-  MAP_elasticities <- MAP_elasticities %>%
-    group_by(specie, conditions) %>%
-    summarize(median_elasticity = median(abs(Elasticity)))
+  median_elasticities <- mcmc_sensitivities %>% mutate(conditions = "ALL") %>%
+    bind_rows(mcmc_sensitivities %>% filter(grepl('^[PCN]', condition)) %>% mutate(conditions = "Natural")) %>%
+    group_by(markovSample, specie, conditions) %>%
+    dplyr::summarize(median_elasticity = median(abs(Elasticity)))
   
-  species_var <- species_var %>%
-    left_join(sensitivity_summary, by = c("conditions", "specie")) %>%
-    left_join(MAP_elasticities, by = c("conditions", "specie"))
+  species_var <- species_var %>% left_join(
+    mean_sensitivities %>% left_join(median_elasticities, by = c("markovSample", "conditions", "specie")),
+    by = c("conditions", "specie"))
   
   # three alternative approaches
   # 1) weighting elasticity by variation in log space (abs(elasticity) * sd(spec))
@@ -2689,19 +2697,21 @@ reactionProperties <-  function(){
   # 3) also consider using environmental variation of species (subtracting technical variance) and weighting sensitivities
   
   ML_summary <- species_var %>%
-    group_by(specie, conditions) %>%
-    summarize(weighted_elasticities = median_elasticity * log_sd,
-              weighted_sensitivities_geo = geo_sensitivity^2 * geo_var,
-              weighted_sensitivities_geo_technical_correction = geo_sensitivity^2 * geo_environmental_var,
-              weighted_sensitivities_arith = arith_sensitivity^2 * arith_var,
-              weighted_sensitivities_arith_technical_correction = arith_sensitivity^2 * arith_environmental_var) %>%
-    gather(key = "measure", value = "metabolicLeverage", -c(specie, conditions))
+    group_by(markovSample, specie, conditions) %>%
+    dplyr::summarize(logLik = logLik[1],
+                     weighted_elasticities = median_elasticity * log_sd,
+                     weighted_sensitivities_geo = geo_sensitivity^2 * geo_var,
+                     weighted_sensitivities_geo_technical_correction = geo_sensitivity^2 * geo_environmental_var,
+                     weighted_sensitivities_arith = arith_sensitivity^2 * arith_var,
+                     weighted_sensitivities_arith_technical_correction = arith_sensitivity^2 * arith_environmental_var) %>%
+    gather(key = "measure", value = "metabolicLeverage", -c(markovSample, specie, conditions, logLik))
   
   ML_summary <- ML_summary %>%
-    group_by(conditions, measure) %>%
+    group_by(markovSample, conditions, measure) %>%
     mutate(metabolicLeverage = metabolicLeverage / sum(metabolicLeverage)) %>%
-    ungroup %>%
-    filter(metabolicLeverage != 0)
+    group_by(specie, conditions, measure) %>%
+    filter(!all(metabolicLeverage == 0)) %>%
+    ungroup
   
   # annotate the type of reaction species
   

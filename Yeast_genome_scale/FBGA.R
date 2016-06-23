@@ -281,7 +281,7 @@ top_non_lit <- all_reactionInfo %>%
   filter(Qvalue < 0.1)
 
 reactionInfo <- all_reactionInfo %>%
-  filter(modelType %in% c("rMM") |
+  filter(modelType %in% c("rMM", "regulator") |
            (modelType != "non-literature supported met regulator" & Qvalue < 0.1) |
            rMech %in% top_non_lit$rMech)
 
@@ -353,7 +353,6 @@ rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
 MLdata <- NULL # Save summary of metabolic leverage
 ELdata <- list() # Save full distribution of elasticities
-TRdata <- NULL # Save summary transcriptional resposiveness
 Hypo_met_candidates <- NULL
 
 t_start = proc.time()[3]
@@ -524,8 +523,9 @@ save(pathwaySet, rxToPW, pathway_plot_list, rxn_plot_list, reactionInfo, file = 
 
 #### Save parameter estimates for further global analyses ####
 
-save(rxn_fit_params, rxn_fits, MLdata, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
-save(ELdata, file = "flux_cache/elasticityData.Rdata")
+save(rxn_fit_params, rxn_fits, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
+saveRDS(ELdata, file = "flux_cache/elasticityData.Rds")
+saveRDS(MLdata, file = "flux_cache/elasticityData.Rds")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
 ###################### * Summarize Reaction Behavior ##########################
@@ -740,6 +740,20 @@ sig_regulators <- sig_regulators %>% separate(regulators, into = c("tID", "modty
 
 write.table(sig_regulators %>% arrange(desc(is_GS), desc(sce), desc(other)), file = "Figures/significant_regulation.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
 
+#### Table with all regulators ####
+
+all_tested_regulators <- literature_support %>%
+  ungroup %>%
+  select(rMech, reaction, tID, modtype, sce, other) %>%
+  left_join(fitReactionNames %>% select(reaction, reaction.name), by = "reaction") %>%
+  left_join(tab_boer %>% select(SpeciesType, SpeciesName), by = c("tID" = "SpeciesType")) %>%
+  left_join(rMech_support %>% ungroup %>% select(rMech, AICc, AIC_prob), by = "rMech") %>%
+  select(Reaction = reaction.name, Regulator = SpeciesName, RegType = modtype, sce, other, AICc, AICprob = AIC_prob) %>%
+  arrange(Reaction, Regulator, RegType)
+
+write.table(all_tested_regulators, file = "Figures/all_tested_regulators.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
+
+
 
 #### Summary based on spearman correlation for MM and most significant regulator (if applicable) #####
 
@@ -809,7 +823,7 @@ ggsave("Figures/Pearson_stack.pdf", height = 9, width = 14)
 #### Split ML of well-fit reactions into enzyme and allosteric control ####
 
 ML_rxn_summary <- MLdata %>%
-  filter(measure == "weighted_sensitivities",
+  filter(measure == "weighted_sensitivities_arith",
          conditions == "Natural") %>%
   left_join(reactionInfo %>% select(rMech, reaction), by = "rMech")
 ML_rxn_summary$Type[grepl("r_0302", ML_rxn_summary$reaction) & ML_rxn_summary$specie == "isocitrate"] <- "product" # aconitase is split into two reactions without a meaasured cis-aconitate so isocitrate acts like a product in the first rxn
@@ -854,7 +868,7 @@ ML_rxn_summary <- rbind(
 # Use metabolic leverage associated with parameter MLE
 ML_rxn_summary <- ML_rxn_summary %>%
   mutate(Type = ifelse(Type %in% c("substrate", "product", "enzyme"), Type, "regulator")) %>%
-  dplyr::select(rMech, specie, Type, ML = MAP) %>%
+  dplyr::select(rMech, specie, Type, ML = metabolicLeverage) %>%
   group_by(rMech, Type) %>%
   dplyr::summarize(ML = sum(ML)) %>%
   group_by(rMech) %>% dplyr::mutate(ML = ML / sum(ML))
@@ -877,8 +891,10 @@ ML_rxn_summary <- ML_rxn_summary %>% left_join(reaction_info_with_reversibility,
   arrange(substrate + product)
 
 ML_rxn_tall <- ML_rxn_tall %>%
-  ungroup %>% mutate(rMech = factor(rMech, levels = rev(ML_rxn_summary$rMech))) %>%
-  arrange(rMech)
+  ungroup %>%
+  mutate(rMech = factor(rMech, levels = rev(ML_rxn_summary$rMech))) %>%
+  mutate(reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible", "Thermodynamically Irreversible"))) %>%
+  arrange(Type)
 
 TypeColors <- c("chartreuse3", "chartreuse", "deepskyblue", "orangered1")
   names(TypeColors) <- levels(ML_rxn_tall$Type)
@@ -911,7 +927,7 @@ ggplot(ML_component_summary %>%
          ungroup %>%
          mutate(reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible", "Thermodynamically Irreversible"))) %>%
          arrange(reversibility), 
-                                       aes(x = factor(1), y = ML, fill = Type)) + geom_bar(stat = "identity", width = 1) + coord_polar(theta = "y") +
+                                       aes(x = factor(1), y = ML, fill = Type)) + geom_bar(stat = "identity", width = 1, color = "black", size = 0.5) + coord_polar(theta = "y") +
   facet_wrap(~ reversibility) + scale_fill_manual(values = TypeColors) + pie_theme +
   scale_x_discrete("") + scale_y_continuous("")
 ggsave(paste0("Figures/", rxn_subset, "-metabolicLeveragePie.pdf"), height = 5, width = 7)
@@ -1071,6 +1087,21 @@ brendaAgree$parCaptureInterval %>% table() %>% as.data.frame() %>% summarize(Fre
 
 occupancy_comparison <- affinity_comparisons %>% filter(measured) %>% dplyr::select(-formulaName, -measured, -absoluteQuant, -(EC:isYeast), -(nQuant:speciesType))
 
+#
+
+#constrained_conc <- occupancy_comparison %>%
+#  ungroup %>%
+#  select(rxn, commonName, Subtype, parLB = parLB, parUB = parUB, medianAbund) %>%
+#  filter(Subtype == "substrate") %>%
+#  mutate(occLB = 2^medianAbund / (2^medianAbund + parUB),
+#         occUB = 2^medianAbund / (2^medianAbund + parLB),
+#         parLB = log2(parLB),
+ #        parUB = log2(parUB),
+#         posterior_range = parUB - parLB,
+#         occ_range = occUB - occLB) %>% arrange(desc(posterior_range))
+
+
+
 # use concentrations of species across all conditions rather than just median
 
 rxn_met_pairs <- occupancy_comparison %>% dplyr::select(rxnForm, modelName)
@@ -1113,6 +1144,26 @@ ggplot() + geom_violin(data = occupancy_comparison, aes(x = Subtype, y = log10oc
   boxplot_theme_label_rotate
 ggsave("Figures/speciesOccupancy.pdf", width = 8, height = 8)
 
+####
+
+load("~/Desktop/Rabinowitz/FBA_SRH/Yeast_genome_scale/flux_cache/elasticityData.Rdata")
+
+ELdata <- lapply(affinity_comparisons$rxnForm, function(x){ELdata[[x]] %>% mutate(rMech = x)}) %>%
+  bind_rows %>% tbl_df
+
+rMech_elasticities <- ELdata %>%
+  group_by(rMech, specie, markovSample) %>%
+  dplyr::summarize(medElasticity = median(Elasticity))
+
+rMech_elasticities <- rMech_elasticities %>%
+  group_by(rMech, specie) %>%
+  dplyr::summarize(LB = quantile(medElasticity, 0.025),
+                   UB = quantile(medElasticity, 0.975)) %>%
+  inner_join(affinity_comparisons %>% filter(measured) %>% select(rMech = rxnForm, specie = modelName, commonName, Subtype), by = c("rMech", "specie")) %>%
+  mutate(elasticity_range = UB - LB)
+
+    
+  
 #Iexp <- 2^(rnorm(100, 0, 1))
 #Ivals <- 2^seq(-5,5,by = 0.01)
 
