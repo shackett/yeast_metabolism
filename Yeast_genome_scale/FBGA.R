@@ -351,7 +351,7 @@ shiny_flux_data <- list()
 rxn_fits <- NULL
 rxn_fit_params <- list()
 fraction_flux_deviation <- NULL
-MLdata <- NULL # Save summary of metabolic leverage
+MLdata <- list() # Save summary of metabolic leverage
 ELdata <- list() # Save full distribution of elasticities
 Hypo_met_candidates <- NULL
 
@@ -443,7 +443,7 @@ for(arxn in reactionInfo$rMech){
   
   reaction_properties <- reactionProperties() # Evaluate elasticities for each markov sample.  Join metabolite variation with elasticites
   
-  MLdata <- rbind(MLdata, reaction_properties$ML_summary)
+  MLdata[[arxn]] <- reaction_properties$ML_summary
   ELdata[[arxn]] <- reaction_properties$EL_summary
   
   reaction_plots <- reaction_properties$plots
@@ -487,6 +487,8 @@ for(arxn in reactionInfo$rMech){
     cat(paste('\n',round((which(reactionInfo$rMech == arxn) / length(reactionInfo$rMech))*100, 2), "% complete - ", round((proc.time()[3] - t_start)/60, 0), " minutes elapsed", sep = ""))
   }
   
+  gc()
+  
 }; cat("\nDone!")
 
 #for(a_name in names(shiny_flux_data)){
@@ -504,7 +506,7 @@ for(rxn in unique(reactionInfo$reaction)){
 }
 
 # Summarize consistency of reaction forms for all reactions in a pathway
-pathway_plot_list <- list()
+pathway_plot_list <- list()  
 for(pw in pathwaySet$display){
   # iterate through pathways and plot pathway-level figures
   pathway_plot_list[[pw]] <- pathwayPlots(pw)
@@ -524,7 +526,13 @@ save(pathwaySet, rxToPW, pathway_plot_list, rxn_plot_list, reactionInfo, file = 
 #### Save parameter estimates for further global analyses ####
 
 save(rxn_fit_params, rxn_fits, fraction_flux_deviation, Hypo_met_candidates, file = "flux_cache/paramCI.Rdata")
+
+ELdata <- lapply(1:length(ELdata), function(x){
+  ELdata[[x]] %>% mutate(rMech = names(ELdata)[x])
+}) %>% bind_rows %>% tbl_df
 saveRDS(ELdata, file = "flux_cache/elasticityData.Rds")
+
+MLdata <- MLdata %>% bind_rows
 saveRDS(MLdata, file = "flux_cache/elasticityData.Rds")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
