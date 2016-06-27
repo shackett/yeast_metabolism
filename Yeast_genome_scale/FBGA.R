@@ -533,7 +533,7 @@ ELdata <- lapply(1:length(ELdata), function(x){
 saveRDS(ELdata, file = "flux_cache/elasticityData.Rds")
 
 MLdata <- MLdata %>% bind_rows
-saveRDS(MLdata, file = "flux_cache/elasticityData.Rds")
+saveRDS(MLdata, file = "flux_cache/MLdata.Rds")
 
 ##@##@##@###@###@##@##@##@###@###@##@##@##@###@###@###@###@###@###@###@###@###@
 ###################### * Summarize Reaction Behavior ##########################
@@ -552,6 +552,10 @@ reversibleRx <- read.table("companionFiles/reversibleRx.tsv", header = T)
 if(sum(!(reactionInfo$rMech %in% rxn_fits$rxn)) != 0){
   reactionInfo <- reactionInfo %>% dplyr::filter(rMech %in% rxn_fits$rxn)
   }
+
+# exclude regulation that does not improve fit
+reactionInfo <- reactionInfo %>%
+  filter(modelType == "rMM" | Qvalue < 0.1)
 
 ### Determine which reactions to follow-up on based upon either
 ### Either all substrates are measured, or only relatively unimportant species are missing
@@ -621,6 +625,44 @@ sum(FDR_category_improve$`TRUE`)/length(GS_reactions)
 # p(model | literature)
 summary(rxn_regulation[['fitted_model']])
 
+# look at the overall effect of this prior
+
+# all tested regulation
+all_reactionInfo %>%
+  filter(reaction %in% valid_rxns) %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup %>%
+  mutate(modelType = ifelse(rMech %in% literature_support$rMech[literature_support$is_GS], "gold-standard", modelType)) %>%
+  count(modelType)
+
+# improves fit
+all_reactionInfo %>%
+  filter(reaction %in% valid_rxns) %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup %>%
+  filter(modelType %in% c("regulator", "non-literature supported met regulator")) %>%
+  mutate(modelType = ifelse(rMech %in% literature_support$rMech[literature_support$is_GS], "gold-standard", modelType)) %>%
+  mutate(is_sig = Qvalue < 0.1) %>%
+  count(is_sig, modelType)
+
+# top overall
+all_reactionInfo %>%
+  filter(reaction %in% valid_rxns) %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup %>%
+  filter(is.na(Qvalue) | Qvalue < 0.1) %>% 
+  filter(modelType %in% c("rMM", "regulator", "non-literature supported met regulator")) %>%
+  mutate(modelType = ifelse(rMech %in% literature_support$rMech[literature_support$is_GS], "gold-standard", modelType)) %>%
+  group_by(reaction) %>% filter(ML == max(ML)) %>% slice(1) %>%
+  count(modelType)
+
+# excluding non-literature  
+all_reactionInfo %>%
+  filter(reaction %in% valid_rxns) %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>% ungroup %>%
+  filter(is.na(Qvalue) | Qvalue < 0.1) %>% 
+  filter(modelType %in% c("rMM", "regulator")) %>%
+  mutate(modelType = ifelse(rMech %in% literature_support$rMech[literature_support$is_GS], "gold-standard", modelType)) %>%
+  group_by(reaction) %>% filter(ML == max(ML)) %>% slice(1) %>%
+  count(modelType)
+  
 #### Use priors to reevaluate tested regulation ####
 # We first determined which mechanisms meaningfully improve simple mechanisms
 # Now, for each reaction use empirical priors to prioritize models and filter those models which are very unlikely
@@ -635,6 +677,22 @@ rMech_mode <- mode_of_regulation(rMech_support, rxnList_form)
 
 rMech_support <- rMech_support %>% left_join(rMech_mode, by = "rMech") %>%
   left_join(rxn_fits %>% dplyr::select(rMech = rxn, pearson = parPearson, spearman = parSpearman), by = "rMech")
+
+# compare best predicted regulation with AIC
+
+top_candidates <- all_reactionInfo %>%
+  filter(reaction %in% valid_rxns) %>%
+  group_by(reaction) %>% filter(ncond == min(ncond)) %>%
+  filter(modelType %in% c("rMM", "regulator")) %>%
+  mutate(nreg = sum(modelType != "rMM")) %>%
+  filter(is.na(Qvalue) | Qvalue < 0.1) %>% 
+  mutate(modelType = ifelse(rMech %in% literature_support$rMech[literature_support$is_GS], "gold-standard", modelType)) %>%
+  left_join(rMech_support %>% ungroup %>% select(rMech, AICc, pearson), by = "rMech") %>%
+  mutate(less_than_10 = ifelse(nreg <= 10, T, F))
+
+top_candidate_ML <- top_candidates %>% group_by(reaction) %>% filter(ML == max(ML))
+top_candidate_AIC <- top_candidates %>% group_by(reaction) %>% filter(AICc == min(AICc)) %>% count(modelType)
+
 
 #rMech_support %>% group_by(type) %>% dplyr::summarize(AIC_prob = sum(AIC_prob))
 
@@ -830,6 +888,8 @@ ggsave("Figures/Pearson_stack.pdf", height = 9, width = 14)
 
 #### Split ML of well-fit reactions into enzyme and allosteric control ####
 
+MLdata <- readRDS("flux_cache/MLdata.Rds")
+
 ML_rxn_summary <- MLdata %>%
   filter(measure == "weighted_sensitivities_arith",
          conditions == "Natural") %>%
@@ -838,7 +898,7 @@ ML_rxn_summary$Type[grepl("r_0302", ML_rxn_summary$reaction) & ML_rxn_summary$sp
 
 # all reactions
 # either "all" or "supported"
-rxn_subset <- "all"
+rxn_subset <- "supported"
 
 if(rxn_subset == "all"){
   
@@ -873,13 +933,29 @@ ML_rxn_summary <- rbind(
   ML_rxn_summary %>% filter(!(reaction %in% reverse_rxns))
 )
 
-# Use metabolic leverage associated with parameter MLE
+# Use metabolic leverage associated with parameter MAP estimate
 ML_rxn_summary <- ML_rxn_summary %>%
   mutate(Type = ifelse(Type %in% c("substrate", "product", "enzyme"), Type, "regulator")) %>%
-  dplyr::select(rMech, specie, Type, ML = metabolicLeverage) %>%
-  group_by(rMech, Type) %>%
-  dplyr::summarize(ML = sum(ML)) %>%
-  group_by(rMech) %>% dplyr::mutate(ML = ML / sum(ML))
+  dplyr::select(reaction, rMech, specie, name, Type, ML = metabolicLeverage, markovSample, logLik)
+  
+# summary table of individual species
+
+round3 = function(x){round(x, 3)}
+
+ML_uncertainty <- ML_rxn_summary %>% group_by(reaction, rMech, name, Type) %>%
+  summarize(MAP = ML[which.max(logLik)],
+            LB = quantile(ML, 0.025),
+            UB = quantile(ML, 0.975),
+            IQR = quantile(ML, 0.75) - quantile(ML, 0.25)) %>%
+  mutate_each(funs(round3), c(MAP, LB, UB, IQR)) %>%
+  left_join(fitReactionNames %>% dplyr::select(reaction, reaction.name, abbrev), by = "reaction") %>%
+  ungroup %>%
+  dplyr::select(reaction = reaction.name, abbrev, specie = name, type = Type, MAP:IQR) %>%
+  mutate(type = factor(type, levels = c("substrate", "product", "enzyme", "regulator"))) %>%
+  arrange(reaction, type)
+write.table(ML_uncertainty, file = "Figures/MLsummary.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
+
+# summarize the reversibility of individual reactions
 
 reaction_info_with_reversibility <- adequate_rxn_form_data %>% dplyr::select(reaction, rMech, reaction.name, genes) %>%
   left_join(fitReactionNames %>% dplyr::select(reaction, abbrev), by = "reaction") %>%
@@ -890,17 +966,28 @@ reaction_info_with_reversibility <- adequate_rxn_form_data %>% dplyr::select(rea
               reversibility = ifelse(reversibility == "Kinetically Irreversible" & thermo_irr == T, "Thermodynamically Irreversible", reversibility)) %>%
               dplyr::select(reaction = rx, reversibility), by = "reaction")
 
-ML_rxn_tall <- ML_rxn_summary %>% left_join(reaction_info_with_reversibility, by = "rMech") %>%
+# summarize each class in each markov sample
+ML_rxn_summary <- ML_rxn_summary %>%
+  group_by(rMech, Type, markovSample, logLik) %>%
+  summarize(ML = sum(ML))
+
+# looking at MAP estimate
+  
+MAP_ML_rxn_summary <- ML_rxn_summary %>% ungroup %>% group_by(rMech) %>% filter(logLik == max(logLik)) %>%
+  dplyr::select(rMech, Type, ML)
+
+ML_rxn_tall <- MAP_ML_rxn_summary %>% left_join(reaction_info_with_reversibility, by = "rMech") %>%
+  ungroup %>%
   mutate(Type = factor(Type, levels = c("substrate", "product", "enzyme", "regulator")))
 
-ML_rxn_summary <- tbl_df(dcast(ML_rxn_summary, rMech ~ Type, value.var = "ML", fill = 0)) # each rxn with associated enzyme, regulator and metabolic control fraction
+MAP_ML_rxn_summary <- tbl_df(dcast(MAP_ML_rxn_summary, rMech ~ Type, value.var = "ML", fill = 0)) # each rxn with associated enzyme, regulator and metabolic control fraction
 
-ML_rxn_summary <- ML_rxn_summary %>% left_join(reaction_info_with_reversibility, by = "rMech") %>%
+MAP_ML_rxn_summary <- MAP_ML_rxn_summary %>% left_join(reaction_info_with_reversibility, by = "rMech") %>%
   arrange(substrate + product)
 
 ML_rxn_tall <- ML_rxn_tall %>%
   ungroup %>%
-  mutate(rMech = factor(rMech, levels = rev(ML_rxn_summary$rMech))) %>%
+  mutate(rMech = factor(rMech, levels = rev(MAP_ML_rxn_summary$rMech))) %>%
   mutate(reversibility = factor(reversibility, levels = c("Kinetically Reversible", "Kinetically Irreversible", "Thermodynamically Irreversible"))) %>%
   arrange(Type)
 
@@ -947,9 +1034,9 @@ color_key <- color_ternary(100)
 
 color_index <- mapply(function(x,y){
   which.min(abs(color_key$Table$enzyme - x) + abs(color_key$Table$allostery - y))
-}, x = ML_rxn_summary$enzyme, y = ML_rxn_summary$regulator)
+}, x = MAP_ML_rxn_summary$enzyme, y = MAP_ML_rxn_summary$regulator)
 
-ML_rxn_summary <- ML_rxn_summary %>% mutate(rMech = reaction) %>% dplyr::select(-reaction, -genes) %>% left_join(adequate_rxn_form_data, by = "rMech")
+MAP_ML_rxn_summary <- MAP_ML_rxn_summary %>% mutate(rMech = reaction) %>% dplyr::select(-reaction, -genes) %>% left_join(adequate_rxn_form_data, by = "rMech")
 
 
 # Look at two alternative ways of describing the 3 components forming the ternary space
@@ -958,15 +1045,15 @@ ML_rxn_summary <- ML_rxn_summary %>% mutate(rMech = reaction) %>% dplyr::select(
 
 # substrates & products, enzymes, regulators
 
-ML_rxn_summary_1 <- ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(color_index) %>% dplyr::select(color)) %>%
+MAP_ML_rxn_summary_1 <- MAP_ML_rxn_summary %>% cbind(color_key$Table %>% dplyr::slice(color_index) %>% dplyr::select(color)) %>%
   mutate(rxn_metabolite = substrate + product)
 
-ML_rxn_ternaryPoints_1 <- ML_rxn_summary_1 %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
+ML_rxn_ternaryPoints_1 <- MAP_ML_rxn_summary_1 %>%  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
                                               y = sqrt(3)/2 * enzyme*(regulator + enzyme + rxn_metabolite))
 
 ML_rxn_ternaryPoints_1 <- ML_rxn_ternaryPoints_1 %>% left_join(ML_rxn_tall %>% select(reaction, Dir = reversibility) %>% unique(), by = c("rMech" = "reaction"))
 
-anova(lm(ML_rxn_summary_1, formula = regulator ~ reversibility))
+anova(lm(MAP_ML_rxn_summary_1, formula = regulator ~ reversibility))
 
 color_key$Figure_BW + 
   geom_point(data = ML_rxn_ternaryPoints_1 %>% dplyr::filter(Dir == "Kinetically Reversible"), aes(x = x, y = y), size = 9, shape = 21, fill = "BLACK") +
@@ -991,6 +1078,54 @@ color_key$Figure_Color +
   geom_point(data = ML_rxn_ternaryPoints_1, aes(x = x, y = y), size = 6, shape = 21, fill = "WHITE") +
   ggrepel::geom_label_repel(data = ML_rxn_ternaryPoints_labels, aes(x = x, y = y, label = abbrev.x), color = "BLACK", segment.size = 0, label.padding = unit(0.15, "lines"))
 ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey.pdf"), height = 9.1, width = 10.7)
+
+### Visualize uncertainty by plotting a subset of random markov samples 
+
+n_random_points <- 100
+set.seed(1234)
+random_markov_samples <- sample(1:max(ML_rxn_summary$markovSample), n_random_points)
+
+Posterior_ML_rxn_summary <- ML_rxn_summary %>% filter(markovSample %in% random_markov_samples)
+
+Posterior_ML_rxn_summary <- tbl_df(dcast(Posterior_ML_rxn_summary, rMech + markovSample ~ Type, value.var = "ML", fill = 0)) # each rxn with associated enzyme, regulator and metabolic control fraction
+
+Posterior_ML_rxn_summary <- Posterior_ML_rxn_summary %>% left_join(reaction_info_with_reversibility, by = "rMech")
+
+color_index <- mapply(function(x,y){
+  which.min(abs(color_key$Table$enzyme - x) + abs(color_key$Table$allostery - y))
+}, x = Posterior_ML_rxn_summary$enzyme, y = Posterior_ML_rxn_summary$regulator)
+
+Posterior_ML_rxn_summary <- Posterior_ML_rxn_summary %>% mutate(rMech = reaction) %>% dplyr::select(-reaction, -genes)
+
+# Look at two alternative ways of describing the 3 components forming the ternary space
+# substrates & products, enzymes, regulators
+# substrates, enzymes, regulators & products
+
+# substrates & products, enzymes, regulators
+
+Posterior_ML_rxn_summary <- Posterior_ML_rxn_summary %>%
+  cbind(color_key$Table %>% dplyr::slice(color_index) %>% dplyr::select(color)) %>%
+  mutate(rxn_metabolite = substrate + product) %>%
+  mutate(x = (1/2)*(2*regulator + enzyme) / (regulator + enzyme + rxn_metabolite),
+         y = sqrt(3)/2 * enzyme*(regulator + enzyme + rxn_metabolite))
+
+reversibility_order = c("Kinetically Reversible", "Kinetically Irreversible", "Thermodynamically Irreversible")
+
+ML_uncertainty_plots <- list()
+for(a_reversibility in reversibility_order){
+
+color_key$Figure_BW + 
+  geom_point(data = Posterior_ML_rxn_summary %>% dplyr::filter(reversibility == a_reversibility), aes(x = x, y = y, fill = color), size = 4, shape = 21)
+
+ggsave(paste0("Figures/", rxn_subset, "-", a_reversibility, "-uncertainty.pdf"), height = 9.1, width = 10.7)
+}
+
+
+
+
+
+
+
 
 #control_layout <- ML_rxn_summary_1 %>% dplyr::select(reaction, reaction.name, abbrev, rxn_metabolite, enzyme, regulator, color)
 #write.table(control_layout, "flux_cache/control_layout.tsv", col.names = T, row.names = F, quote = F, sep = "\t")
