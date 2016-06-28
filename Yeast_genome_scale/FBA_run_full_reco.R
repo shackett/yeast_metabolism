@@ -309,19 +309,19 @@ compartment <- sapply(reactions, function(x){rxnFile$Compartment[rxnFile$Reactio
 ## extract the metabolite ID corresponding to the extracellular introduction of nutrients ##
 boundary_met <- treatment_par[[1]]$nutrients %>% filter(type == "uptake") %>% 
   select(SpeciesName = specie) %>% tbl_df() %>% left_join(corrFile)
-if(nrow(boundary_met) != nrow(treatment_par[[1]]$nutrients %>% filter(type == "uptake"))){stop("A valid match was not found for all absorbed metabolites")}
+if(any(is.na(boundary_met$SpeciesID))){stop("A valid match was not found for all absorbed metabolites")}
 
 
 ## extract the IDs of excreted metabolites ##
 excreted_met <- treatment_par[[1]]$nutrients %>% filter(type == "excretion") %>% 
   select(SpeciesName = specie) %>% tbl_df() %>% left_join(corrFile)
-if(nrow(excreted_met) != nrow(treatment_par[[1]]$nutrients %>% filter(type == "excretion"))){stop("A valid match was not found for all excreted metabolites")}
+if(any(is.na(excreted_met$SpeciesID))){stop("A valid match was not found for all excreted metabolites")}
 
 
 ## extract the metabolite ID corresponding to cytosolic metabolites being assimilated into biomass ##
 sinks <- unique(c(comp_by_cond$compositionFile$AltName[comp_by_cond$compositionFile$FluxType == "Boundary"], colnames(comp_by_cond$biomassExtensionE)[-1]))
 comp_met <- data.frame(SpeciesName = sinks) %>% tbl_df() %>% left_join(corrFile)
-if(nrow(comp_met) != length(sinks)){stop("A valid match was not found for all sinks")}
+if(any(is.na(comp_met$SpeciesID))){stop("A valid match was not found for all sinks")}
 
 
 ## freely exchanging metabolites through extracellular compartment ##
@@ -780,7 +780,6 @@ if(QPorLP == "QP"){
       solvedModel <- gurobi(qpModel, alt_parms) #solve with dual simplex
     }
     
-    
     ### Optional flux checks ###
     
     #z <- maxFlux() # which reactions can carry flux (slow)
@@ -831,7 +830,6 @@ if(QPorLP == "QP"){
     experimental_precision[experimental_precision == 1] <- NA
     residualFlux$sd <- 1/sqrt(experimental_precision * flux_elevation_factor^2)
     residualFlux[,resid_st := (experimental - net_flux)/sd,]
-    
     
     growth_rate$L1[treatment] <- sum(solvedModel$x*qpModel$obj)
     growth_rate$L2[treatment] <- sum(t(solvedModel$x) %*% qpModel$Q %*% t(t(solvedModel$x)))
@@ -1079,9 +1077,12 @@ write.output(std_flux_rxnName_withL1, "flux_cache/fluxCarriedHM.tsv")
 
 rawFlux <- fluxMat
 rownames(rawFlux) <- rxNames$reactionID
-#rawFlux <- rawFlux[grep('bookkeeping', rownames(rawFlux), invert = T),]
-
 write.table(rawFlux, file = "flux_cache/fluxCarriedSimple.tsv", quote = F, sep = "\t", col.names = TRUE, row.names = T) # all reactions with non-zero flux in some condition
+
+#tmp <- read.delim("flux_cache/fluxCarriedSimple.tsv")
+#shared <- sort(intersect(rownames(tmp), rownames(rawFlux)))
+#sort(diag(cor(t(tmp[shared,]), t(rawFlux[shared,]))))
+
 
 
 npc <- 5
@@ -1111,11 +1112,9 @@ smooth_flux_Fstat$valid_flux <- smooth_flux_Fstat$Fstat < 0.0001
 
 std_flux_all <- fluxMat_per_cellVol / (t(t(apply(fluxMat_per_cellVol, 1, sd)*ifelse((apply(fluxMat_per_cellVol, 1, function(x){median(x[x != 0])}) >= 0), 1, -1))) %*% rep(1, n_c))
 
+# quick plot looking at smooth reactions and non-smooth reactions
 heatmap.2(std_flux_all[smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
 heatmap.2(std_flux_all[!smooth_flux_Fstat$valid_flux,], Colv = FALSE, trace = "none", col = greenred(100), dendrogram = "none", colsep = c(5,10,15,20), denscol = "white")
-
-write.output(std_flux_rxnName_withL1[smooth_flux_Fstat$valid_flux[grep('boundary|composition', rownames(std_flux_rxnName), invert = T)],], "flux_cache/fluxCarriedHMsmooth.tsv")
-
 
 
 #### Summarize data for further analysis ####
@@ -1150,6 +1149,21 @@ ggplot(byrxSummary, aes(x = departure, y = weighted_departure, color = plot_colo
   scale_color_identity() + scale_x_continuous("median[maximum flux - minimum flux / sup|max, min|]") + scale_y_continuous("median[maximum flux - minimum flux / sup|max, min|] - weighted by flux magnitude") +
   ggtitle("Flux variability at solution, scaled by magnitude")
 
+# check reactions that are not sufficiently constrained through FVA yet smoothly vary across conditions in their QP estimate
+unconstrained_rxns <- byrxSummary$asID[!(byrxSummary$asID %in% constrained_rxns)]
+smooth_rxns <- flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux]
+#smooth_and_unconstrained_rxns <- intersect(unconstrained_rxns, smooth_rxns)
+#flux_summary$IDs[flux_summary$IDs$reactionID %in% smooth_and_unconstrained_rxns,]
+# These reactions are all degenerate as the model currently stands
+
+smooth_constrained_names <- flux_summary$IDs[flux_summary$IDs$reactionID %in% smooth_rxns & !(flux_summary$IDs$reactionID %in% unconstrained_rxns),]
+smooth_constrained_names <- smooth_constrained_names[grep('boundary|composition', smooth_constrained_names$Name, invert = T),]
+smooth_constrained_names$combined_name <- apply(smooth_constrained_names, 1, function(x){ifelse(x[1] == x[2], x[1], paste(x, collapse = '_'))})  
+
+# Final data.frame of well-behaving reactions
+write.output(std_flux_rxnName_withL1[rownames(std_flux_rxnName_withL1) %in% smooth_constrained_names$combined_name,], "flux_cache/fluxCarriedHMsmooth.tsv")
+
+# Save well-constrained reactions
 
 fva_summary_df <- fva_summary_df[rownames(fva_summary_df) %in% intersect(constrained_rxns, flux_summary$IDs$reactionID[smooth_flux_Fstat$valid_flux]),,]
 flux_summary$fva_summary_df = fva_summary_df
@@ -1194,9 +1208,6 @@ for(i in 1:nrow(invalid_flux)){
   
   }
 
-
-
-#plot(sort(compaFluxes$magfluxDeparture[!compaFluxes$fluxCap])[1:3500])
 
 # save flux summaries and pipe into FBGA.R #
 flux_summary$total_flux_cast <- total_flux_cast

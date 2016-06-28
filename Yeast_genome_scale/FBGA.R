@@ -707,6 +707,23 @@ optimal_reaction_form <- rMech_support %>%
       AIC_prob == max(AIC_prob)
       })
 
+# distance between top and second best regulation
+
+AIC_primary_secondary_diffs <- rMech_support %>%
+  group_by(reaction) %>%
+  filter(ncond == min(ncond)) %>%
+  filter(spearman[type == "unregulated"] < 0.9) %>%
+  group_by(reaction) %>%
+  arrange(AICc) %>%
+  slice(1:2) %>%
+  group_by(reaction) %>%
+  filter(n() == 2) %>%
+  left_join(reactionInfo %>% select(rMech, modelType), by = "rMech") %>%
+  filter(!any(modelType == "rMM")) %>%
+  summarize(AIC_diff = AICc[2] - AICc[1])
+
+median(AIC_primary_secondary_diffs$AIC_diff)
+
 # use cached optimal reaction forms if desired (and inputs have not changed)
 # to deal with a couple of reactions that fluctuate due to non-determinism
 #overwrite_with_cache <- T
@@ -813,8 +830,10 @@ all_tested_regulators <- literature_support %>%
   select(rMech, reaction, tID, modtype, sce, other) %>%
   left_join(fitReactionNames %>% select(reaction, reaction.name), by = "reaction") %>%
   left_join(tab_boer %>% select(SpeciesType, SpeciesName), by = c("tID" = "SpeciesType")) %>%
+  left_join(rxn_fits %>% select(rMech = rxn, pearson_corr = parPearson) %>% mutate(pearson_corr = round(pearson_corr, 2)), by = "rMech") %>%
   left_join(rMech_support %>% ungroup %>% select(rMech, AICc, AIC_prob), by = "rMech") %>%
-  select(Reaction = reaction.name, Regulator = SpeciesName, RegType = modtype, sce, other, AICc, AICprob = AIC_prob) %>%
+  select(Reaction = reaction.name, Regulator = SpeciesName, RegType = modtype, sce, other, pearson_corr, AICc) %>%
+  mutate(AICc = round(AICc, 1)) %>%
   arrange(Reaction, Regulator, RegType)
 
 write.table(all_tested_regulators, file = "Figures/all_tested_regulators.tsv", row.names = F, col.names = T, quote = F, sep = "\t")
@@ -836,7 +855,9 @@ addRMM <- reactionInfo %>% filter(modelType == "rMM" & reaction %in% allReg) %>%
 # For complex reaction, also include rMM and single regulation
 # For single regulation, include rMM
 all_rxn_fits <- rbind(bestModel, addedReg, addRMM)
-all_rxn_fits <- all_rxn_fits %>% left_join(rxn_fits %>% dplyr::select(rMech = rxn, pearson = parPearson), by = "rMech")
+#all_rxn_fits <- rbind(all_rxn_fits, data.frame(reaction = "r_0962", rMech = "r_0962-rm-pairwise-t_0276-inh-uncomp+t_0290-act-mm", modelType = "2+ regulators"))
+all_rxn_fits <- all_rxn_fits %>% left_join(rxn_fits %>%
+                                             dplyr::select(rMech = rxn, pearson = parPearson), by = "rMech")
 
 # Replot using a stacked barplot
 
@@ -877,7 +898,7 @@ ggplot(regulation_cum_improvement, aes(x = reaction, y = pearson, fill = modelTy
   scale_fill_manual("", values = c("skyblue2", "gold1", "mediumorchid2", "orangered1"), breaks = c("rMM", "cum_regulator", "cum_cooperativity", "cum_2+ regulators"),
                     label = c("generalized Michaelis-Menten", "+ metabolite regulator", "with cooperativity", "+ second regulator"))
 ggsave("Figures/Pearson_stack.pdf", height = 9, width = 14)
-
+#ggsave("Figures/Pearson_squared_stack.pdf", height = 9, width = 14)
 
 ##### Replotting a few reactions for figures #####
 
@@ -1081,7 +1102,7 @@ ggsave(paste0("Figures/", rxn_subset, "-MLcolorKey.pdf"), height = 9.1, width = 
 
 ### Visualize uncertainty by plotting a subset of random markov samples 
 
-n_random_points <- 100
+n_random_points <- 20
 set.seed(1234)
 random_markov_samples <- sample(1:max(ML_rxn_summary$markovSample), n_random_points)
 
